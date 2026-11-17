@@ -37,6 +37,50 @@ authorization, like any other live host (AGENTS.md "Servers").
 
 Ansible reaches the guests with `ProxyJump root@91.199.82.174` (`group_vars/divide_guests.yml`).
 
+## Guest tags
+
+Every guest's Proxmox tags follow one scheme, in this order (the UI shows them in config order,
+`tag-style ordering=config` in `/etc/pve/datacenter.cfg`, which also holds the colours):
+
+1. **Role**, exactly one: `edge`, `origin`, `app`, `game`, `gateway`, `vpn`, `ci`, `dev`, `desktop`,
+   `template`.
+2. **Project**, where the guest belongs to one: `abulxt`, `fracital`, `wisp-baby`, `holyunb`,
+   `krunk`, `blockshooter`, `eaglercraft`, `estro`, `eli-gift`.
+3. **How traffic gets in**, any of: `in-edge` (served through the edge, directly or by way of
+   amph), `in-tunnel` (its own cloudflared tunnel), `in-dnat` (a port forward on divide, "NAT"
+   below).
+4. **How it gets out**, when not plain NAT: `out-mullvad` (may use mull), `out-warp` (the edge's
+   WARP tunnels).
+5. `legacy` for the two stopped Windows desktops that keep a meal address on `vmbr9`.
+
+The software a guest runs is its name and the table above, not a tag.
+
+| Guest                  | Tags                                              |
+| ---------------------- | ------------------------------------------------- |
+| vault (100)            | `app` `eli-gift` `in-tunnel`                      |
+| mull (101)             | `gateway` `in-dnat`                               |
+| eagler (104)           | `game` `eaglercraft` `in-edge` `in-dnat`          |
+| fun (105)              | `desktop` `legacy`                                |
+| chat (106)             | `app` `estro` `in-edge` `in-tunnel` `out-mullvad` |
+| fum (110)              | `desktop` `legacy` `out-mullvad`                  |
+| giftshop (111)         | `app` `eli-gift` `in-tunnel`                      |
+| amph (113)             | `origin` `abulxt` `in-edge` `out-mullvad`         |
+| terp (116)             | `origin` `fracital` `in-edge` `in-dnat`           |
+| guca (117)             | `app` `eli-gift` `in-tunnel`                      |
+| kru (120)              | `origin` `krunk` `in-edge` `in-tunnel` `in-dnat`  |
+| wispdev (122)          | `dev` `wisp-baby`                                 |
+| mac (126)              | `ci`                                              |
+| holy (127)             | `origin` `holyunb` `in-edge`                      |
+| wg (200)               | `vpn` `in-dnat`                                   |
+| edge (201)             | `edge` `in-dnat` `out-warp`                       |
+| blockshooter (202)     | `game` `blockshooter` `in-edge` `in-dnat`         |
+| kn (203)               | `game` `krunk` `in-dnat`                          |
+| runner (204)           | `ci`                                              |
+| templates (9000, 9001) | `template`                                        |
+
+A guest that gains or loses a port forward, a tunnel or an edge route gets its `in-` tags changed
+in the same change (`pct set <id> --tags "a;b"`, `qm set` for VMs).
+
 ## CPU pinning and memory (2026-11-17)
 
 Set by hand on 2026-11-17 (about 05:10 to 05:22 UTC) from the holyWisp session, with the
