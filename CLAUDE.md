@@ -1,0 +1,1 @@
+Read AGENTS.md before doing anything in this repository. It holds the git policy (no commits or pushes without explicit authorization, no AI attribution), the server and secrets rules for a public repository, and the writing rules (no em dashes).

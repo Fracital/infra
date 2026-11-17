@@ -1,0 +1,119 @@
+# Holy Unblocker hosts. Managed by Ansible (edge_relay role, holyunb_enabled, wisp boxes only).
+# README.md "holyunb routes". Host-specific blocks win over the 00-edge-relay catch-all, so these
+# names never reach amph:
+#
+#   client -> Cloudflare (proxied CNAME to {{ wisp_zone }}) -> edge :443
+#     -> keyed relay path /{{ holyunb_wisp_path }}/<key>/: this edge's holyWisp (127.0.0.1:{{ edge_wisp_port }})
+#     -> everything else: http://{{ holyunb_origin_ip }}:{{ holyunb_origin_port }} (holy, website2)
+#
+# No explicit listen addresses: these servers answer on the abstract and wisp.baby addresses,
+# never on Fracital's (those only match servers that list them).
+
+upstream holyunb_origin {
+    server {{ holyunb_origin_ip }}:{{ holyunb_origin_port }};
+    keepalive 32;
+}
+
+# Keepalive to holy needs an empty Connection header except for a WebSocket upgrade.
+map $http_upgrade $holyunb_connection {
+    ~*^websocket$ upgrade;
+    default       "";
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name {{ holyunb_hosts | join(' ') }};
+
+    location /.well-known/acme-challenge/ {
+        content_by_lua_block {
+            auto_ssl_instance:challenge_server()
+        }
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name {{ holyunb_hosts | join(' ') }};
+
+    ssl_certificate_by_lua_block {
+        auto_ssl_instance:ssl_certificate()
+    }
+    ssl_certificate {{ openresty_auto_ssl_dir }}/fallback.crt;
+    ssl_certificate_key {{ openresty_auto_ssl_dir }}/fallback.key;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    client_max_body_size {{ holyunb_client_max_body_size }};
+
+    # Zones with Always Use HTTPS send Let's Encrypt's http-01 check here over :443.
+    location /.well-known/acme-challenge/ {
+        content_by_lua_block {
+            auto_ssl_instance:challenge_server()
+        }
+    }
+
+    location ~ ^/{{ holyunb_wisp_path }}/{{ holyunb_wisp_gate_key }}(/.*)?$ {
+        set $relay_tail $1;
+        if ($relay_tail = "") {
+            set $relay_tail "/";
+        }
+        proxy_pass http://127.0.0.1:{{ edge_wisp_port }}$relay_tail;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $ws_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_buffering off;
+        # An upgraded connection is relayed through one buffer of proxy_buffer_size each way: the
+        # 4-8 KiB default held one WebSocket to about 400 MiB/s at a full core (defaults/main.yml).
+        proxy_buffer_size {{ edge_ws_proxy_buffer }};
+        proxy_buffers 4 {{ edge_ws_proxy_buffer }};
+        proxy_busy_buffers_size {{ edge_ws_proxy_buffer }};
+        proxy_cache off;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        proxy_connect_timeout 10s;
+{% if wispstats_on | bool %}
+        # wisp.baby live stats: a 101 is a relay session starting, the log phase its end (lua/wispstats.lua).
+        header_filter_by_lua_block {
+            require("wispstats").relay_open("holyunb")
+        }
+        log_by_lua_block {
+            require("wispstats").relay_close()
+        }
+{% endif %}
+    }
+
+    # Wrong or missing key: refused here, never relayed to holy.
+    location ~ ^/{{ holyunb_wisp_path }}(/.*)?$ {
+        return 403 "Forbidden";
+    }
+
+    location / {
+        proxy_pass http://holyunb_origin;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header Upgrade $ws_upgrade;
+        proxy_set_header Connection $holyunb_connection;
+        # $remote_addr is the end client (realip already rewrote it for Cloudflare ranges).
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header CF-Connecting-IP $remote_addr;
+        proxy_buffering off;
+        proxy_connect_timeout {{ edge_proxy_connect_timeout }};
+        proxy_next_upstream off;
+        proxy_read_timeout {{ holyunb_proxy_timeout }};
+        proxy_send_timeout {{ holyunb_proxy_timeout }};
+    }
+}

@@ -1,0 +1,409 @@
+/* ============================================================
+   BLOCK DEFENSE -- in-game chrome: HUD top bar, build shop,
+   boss bar and the gamescreen layout hosts. Owned by U3.
+   Builds on base.css design tokens (mc-panel / mc-btn / vars).
+   ============================================================ */
+
+/* ---------------- layout hosts ---------------- */
+
+.gs-root {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    font-family: var(--font-ui);
+}
+
+.gs-field {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    pointer-events: auto;
+    cursor: crosshair;
+}
+
+.gs-hud {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 20;
+    pointer-events: none;
+}
+
+.gs-shop {
+    position: absolute;
+    top: 58px;
+    right: 8px;
+    bottom: 98px;
+    width: 236px;
+    z-index: 20;
+    pointer-events: none;
+}
+
+.gs-upgrade {
+    /* full-stage overlay host: .up-panel positions itself (left/top/max-height)
+       against the stage, so this must span it -- a point anchor collapses the
+       panel to negative max-height and pushes it offscreen */
+    position: absolute;
+    inset: 0;
+    z-index: 25;
+    pointer-events: none;
+}
+
+.gs-ability {
+    position: absolute;
+    left: 50%;
+    bottom: 10px;
+    transform: translateX(-50%);
+    z-index: 22;
+    pointer-events: auto;
+}
+
+.gs-modal-host {
+    position: absolute;
+    inset: 0;
+    z-index: 60;
+    pointer-events: none;
+}
+
+/* ---------------- HUD top bar ---------------- */
+
+.hud-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    height: 52px;
+    padding: 0 12px;
+    pointer-events: none;
+    background: linear-gradient(180deg, rgba(14, 11, 20, 0.96), rgba(14, 11, 20, 0.72) 78%, rgba(14, 11, 20, 0));
+    border-bottom: 2px solid rgba(0, 0, 0, 0.5);
+}
+
+.hud-left, .hud-right { display: flex; align-items: center; gap: 8px; pointer-events: auto; }
+.hud-center { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: none; }
+
+.hud-stat {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 12px 5px 9px;
+    background: rgba(8, 6, 14, 0.72);
+    border: 2px solid #000;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), inset 0 2px 0 rgba(0, 0, 0, 0.5);
+}
+
+.hud-stat-icon { width: 22px; height: 22px; image-rendering: pixelated; }
+.hud-stat-val { font-weight: 800; font-size: 19px; letter-spacing: 0.5px; text-shadow: var(--shadow-px); min-width: 34px; }
+.hud-lives .hud-stat-val { color: #ff8a80; }
+.hud-cash .hud-stat-val { color: var(--c-emerald); }
+
+.hud-pop { animation: hudPop 0.32s ease-out; }
+.hud-pop-bad { animation: hudPopBad 0.4s ease-out; }
+@keyframes hudPop { 0% { transform: scale(1); } 35% { transform: scale(1.12); filter: brightness(1.5); } 100% { transform: scale(1); } }
+@keyframes hudPopBad { 0% { transform: translateX(0); } 20% { transform: translateX(-3px); } 45% { transform: translateX(3px); } 70% { transform: translateX(-2px); } 100% { transform: translateX(0); } }
+
+.hud-round { font-weight: 800; font-size: 17px; letter-spacing: 0.5px; text-shadow: var(--shadow-px); }
+.hud-round-num { color: var(--c-text); }
+.hud-round-of { color: var(--c-text-dim); font-weight: 700; }
+.hud-freeplay {
+    margin-left: 8px;
+    padding: 1px 6px;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 1px;
+    color: #241c04;
+    background: linear-gradient(#f0d05a, #c9a53a);
+    border: 1px solid #000;
+    vertical-align: middle;
+}
+
+.hud-phase { font-size: 11px; font-weight: 800; letter-spacing: 2px; text-transform: uppercase; margin-top: 1px; }
+.hud-phase-idle { color: #7fe08a; }
+.hud-phase-combat { color: var(--c-gold); }
+.hud-phase-won { color: var(--c-emerald); }
+.hud-phase-over { color: var(--c-redstone); }
+
+.hud-start { pointer-events: auto; }
+.hud-start.pulse { animation: hudStartPulse 1.4s ease-in-out infinite; }
+@keyframes hudStartPulse {
+    0%, 100% { filter: brightness(1); box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.35), inset 0 -3px 0 rgba(0, 0, 0, 0.45), 0 3px 0 rgba(0, 0, 0, 0.6); }
+    50% { filter: brightness(1.28); box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.45), inset 0 -3px 0 rgba(0, 0, 0, 0.45), 0 0 12px rgba(120, 230, 110, 0.7), 0 3px 0 rgba(0, 0, 0, 0.6); }
+}
+
+.hud-speed { min-width: 42px; }
+.hud-speed.is-fast { background: linear-gradient(#f0d05a, #c9a53a 45%, #a2842c); color: #241c04; text-shadow: 0 1px 0 rgba(255, 255, 255, 0.35); }
+
+.hud-icon-btn { padding: 5px 8px; display: flex; align-items: center; }
+.hud-btn-icon { width: 18px; height: 18px; image-rendering: pixelated; display: block; }
+
+.hud-fps {
+    font-family: 'Consolas', monospace;
+    font-size: 12px;
+    color: var(--c-text-dim);
+    min-width: 52px;
+    text-align: right;
+    pointer-events: none;
+}
+
+/* ---------------- boss bar ---------------- */
+
+.gs-bossbar {
+    position: absolute;
+    top: 56px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 440px;
+    z-index: 15;
+    pointer-events: none;
+    display: none;
+    text-align: center;
+}
+
+.gs-bossbar.is-live { display: block; animation: fadeIn 0.3s ease-out; }
+
+.gs-bossbar-name {
+    font-weight: 800;
+    font-size: 15px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: #ff9a86;
+    text-shadow: 0 2px 0 rgba(0, 0, 0, 0.9), 0 0 14px rgba(255, 60, 40, 0.5);
+    margin-bottom: 3px;
+}
+
+.gs-bossbar-track {
+    height: 15px;
+    background: #0c0a12;
+    border: 2px solid #000;
+    box-shadow: inset 0 0 0 1px #4a2020;
+    padding: 2px;
+}
+
+.gs-bossbar-fill {
+    height: 100%;
+    width: 100%;
+    background: linear-gradient(90deg, #ff3b30, #c0261e);
+    box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.25);
+    transition: width 0.12s linear;
+}
+
+/* ---------------- build shop ("arsenal") ---------------- */
+
+/* clip box: the collapse slide happens inside it so the panel never paints
+   outside the stage */
+.shop-clip {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+.shop-panel {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    padding: 7px 7px 8px;
+    gap: 7px;
+    pointer-events: auto;
+    transition: transform 0.32s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.32s;
+}
+
+.gs-shop.is-collapsed .shop-panel {
+    transform: translateX(calc(100% + 14px));
+    opacity: 0.4;
+    pointer-events: none;
+}
+
+/* edge handle: rides from the panel's left edge to the stage edge on collapse */
+.shop-toggle {
+    position: absolute;
+    top: 4px;
+    right: calc(100% + 2px);
+    width: 18px;
+    height: 40px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-ui);
+    font-size: 12px;
+    font-weight: 900;
+    color: var(--c-text-dim);
+    background: linear-gradient(#3a3550, #262135);
+    border: 2px solid #000;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 2px 0 rgba(0, 0, 0, 0.5);
+    cursor: pointer;
+    pointer-events: auto;
+    transition: right 0.32s cubic-bezier(0.4, 0, 0.2, 1), color 0.15s, filter 0.1s;
+    z-index: 2;
+}
+
+.shop-toggle:hover { filter: brightness(1.3); color: var(--c-text); }
+
+.gs-shop.is-collapsed .shop-toggle {
+    right: -6px;
+    color: var(--c-gold);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 0 10px rgba(252, 220, 95, 0.25);
+}
+
+.shop-head {
+    text-align: center;
+    padding: 3px 0 5px;
+    border-bottom: 2px solid rgba(0, 0, 0, 0.55);
+    box-shadow: 0 2px 0 rgba(255, 255, 255, 0.06);
+}
+
+.shop-head-txt {
+    font-size: 15px;
+    font-weight: 900;
+    letter-spacing: 4px;
+    color: var(--c-text);
+    text-shadow: 0 2px 0 rgba(0, 0, 0, 0.8), 0 0 14px rgba(124, 189, 86, 0.25);
+}
+
+.shop-body {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-right: 3px;
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+}
+
+/* section rail: colored dot + label + rule, tinted per category via --cat */
+.shop-sec { display: flex; flex-direction: column; gap: 5px; }
+
+.shop-sec-label {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 1.6px;
+    color: var(--cat, var(--c-text-dim));
+    text-shadow: 0 1px 0 rgba(0, 0, 0, 0.8);
+}
+
+.shop-sec-dot {
+    width: 6px;
+    height: 6px;
+    background: var(--cat, #888);
+    box-shadow: 0 0 6px var(--cat, transparent);
+    flex: 0 0 auto;
+}
+
+.shop-sec-rule {
+    flex: 1 1 auto;
+    height: 2px;
+    background: linear-gradient(90deg, var(--cat, #444), transparent);
+    opacity: 0.45;
+}
+
+.shop-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+
+/* tower card: colored spine, big icon, price plate */
+.shop-card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 6px 3px 4px;
+    background: linear-gradient(#282236, #1e1929);
+    border: 2px solid #000;
+    border-left: 3px solid var(--cat, #000);
+    box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.07), inset 0 -2px 0 rgba(0, 0, 0, 0.5);
+    cursor: pointer;
+    font-family: var(--font-ui);
+    transition: filter 0.08s, transform 0.07s;
+}
+
+.shop-card:hover {
+    filter: brightness(1.22);
+    transform: translateY(-1px);
+    box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.2), 0 3px 8px rgba(0, 0, 0, 0.5);
+}
+.shop-card:active { transform: translateY(1px); }
+
+.shop-card.is-placing {
+    animation: shopPlacing 0.9s ease-in-out infinite;
+    box-shadow: inset 0 0 0 2px var(--c-gold), 0 0 12px rgba(252, 220, 95, 0.35);
+}
+
+@keyframes shopPlacing {
+    0%, 100% { filter: brightness(1.05); }
+    50% { filter: brightness(1.35); }
+}
+
+.shop-card-icon { width: 52px; height: 52px; filter: drop-shadow(0 2px 0 rgba(0, 0, 0, 0.45)); }
+.shop-card-icon canvas { width: 52px; height: 52px; image-rendering: pixelated; display: block; }
+
+.shop-card-name {
+    font-size: 10.5px;
+    font-weight: 700;
+    line-height: 1.05;
+    text-align: center;
+    color: var(--c-text);
+    min-height: 22px;
+    display: flex;
+    align-items: center;
+    text-shadow: 0 1px 0 rgba(0, 0, 0, 0.7);
+}
+
+.shop-card-price {
+    width: calc(100% - 2px);
+    text-align: center;
+    font-size: 11.5px;
+    font-weight: 800;
+    color: var(--c-emerald);
+    background: rgba(23, 221, 98, 0.10);
+    box-shadow: inset 0 0 0 1px rgba(23, 221, 98, 0.22);
+    padding: 1px 0;
+    text-shadow: var(--shadow-px);
+}
+
+.shop-card.unaffordable { filter: grayscale(0.7) brightness(0.62); }
+.shop-card.unaffordable .shop-card-price {
+    color: #ff8f7a;
+    background: rgba(255, 59, 48, 0.10);
+    box-shadow: inset 0 0 0 1px rgba(255, 59, 48, 0.25);
+}
+
+/* hero picker: compact 4-across minis; collapses to a status chip when deployed */
+.shop-hero-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
+
+.shop-hero-mini {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
+    padding: 4px 2px 3px;
+    background: linear-gradient(#2e2440, #211a30);
+    border: 2px solid #000;
+    box-shadow: inset 0 0 0 1px rgba(255, 210, 74, 0.28), inset 0 2px 0 rgba(255, 255, 255, 0.08);
+    cursor: pointer;
+    transition: filter 0.08s, transform 0.07s;
+}
+.shop-hero-mini canvas { width: 38px; height: 38px; image-rendering: pixelated; display: block; }
+.shop-hero-mini:hover { filter: brightness(1.25); transform: translateY(-1px); }
+.shop-hero-mini-price { font-size: 9.5px; font-weight: 800; color: var(--c-gold); text-shadow: var(--shadow-px); }
+
+.shop-hero-mini.unaffordable { filter: grayscale(0.7) brightness(0.62); }
+.shop-hero-mini.locked { opacity: 0.35; cursor: not-allowed; filter: grayscale(0.8); }
+
+.shop-hero-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 7px;
+    background: linear-gradient(#2e2440, #211a30);
+    border: 2px solid #000;
+    box-shadow: inset 0 0 0 1px rgba(255, 210, 74, 0.35);
+}
+.shop-hero-status-icon { width: 34px; height: 34px; image-rendering: pixelated; flex: 0 0 auto; }
+.shop-hero-status-name { font-size: 12px; font-weight: 800; color: var(--c-text); text-shadow: var(--shadow-px); }
+.shop-hero-status-lv { font-size: 9.5px; font-weight: 800; letter-spacing: 1px; color: var(--c-gold); }
+
+/* tooltip category sub-line (shop cards use it) */
+.tooltip .tt-sub { color: var(--c-lapis); font-size: 11px; font-weight: 700; margin-bottom: 3px; text-transform: uppercase; letter-spacing: 0.5px; }

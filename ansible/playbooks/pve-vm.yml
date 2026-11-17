@@ -1,0 +1,43 @@
+---
+# The wisp cloud's edge VMs (README.md "The wisp cloud", "Edge VM on Proxmox").
+# On each Proxmox VE host hv-<site> ([wisp_pve], set up by playbooks/pve.yml):
+# the golden Debian 13 template (pve_template, VM 9000) and the box's one edge VM
+# wisp-<site> cloned from it (pve_edge_vm, VM 100), started and answering SSH.
+# Then the edge roles on those VMs (wisp.yml, imported below).
+#
+# One box, from a set-up Proxmox host to a serving edge, in one command (both
+# names in --limit: play 1 runs on hv-<site>, the imported wisp.yml on wisp-<site>):
+#   ansible-playbook playbooks/pve-vm.yml --limit hv-<site>,wisp-<site> --vault-password-file <file>
+# Only the Proxmox side (template + VM): --limit hv-<site>. Every box: no --limit
+# (one Proxmox host at a time, then wisp.yml on all their VMs).
+# Update a box (new template image, or a clean VM), one box per run:
+#   ansible-playbook playbooks/pve-vm.yml --limit hv-<site>,wisp-<site> \
+#     -e pve_edge_vm_rebuild=true -e pve_edge_vm_rebuild_confirm=wisp-<site> --vault-password-file <file>
+# Prerequisites: host_vars/hv-<site>.yml and host_vars/wisp-<site>.yml (keys listed
+# in roles/pve_edge_vm/defaults/main.yml), wisp-<site> in [wisp_edge].
+#
+# A host whose kn-<site> is in [kn_vm] also gets that fixed-size KrunkNative VM
+# (VM 110) and a wisp-<site> that much smaller (README.md "KrunkNative VM next to
+# the edge VM"); rebuild it with -e pve_edge_vm_rebuild_confirm=kn-<site> --limit hv-<site>.
+# kn-<site> gets nothing more from this playbook (KrunkNative's CI configures it).
+#
+# Only VMs built here get wisp.yml from this playbook: wisp-<site> for each
+# hv-<site> in [wisp_pve]. A [wisp_edge] box on another hypervisor (edge, a CT on
+# divide, made by hand) is left out even without --limit; it runs playbooks/wisp.yml.
+
+- name: Template and edge VM on the Proxmox hosts
+  hosts: wisp_pve
+  gather_facts: true
+  # One host at a time: a failing box stops the run before the next is touched.
+  serial: 1
+  roles:
+    - pve_template
+    - pve_edge_vm
+
+- name: The edge roles on the edge VMs
+  ansible.builtin.import_playbook: wisp.yml
+  vars:
+    # "wisp-<site>:...:&wisp_edge": the [wisp_pve] hosts' VMs, and only
+    # those that are [wisp_edge] members.
+    wisp_play_hosts: >-
+      {{ (groups.get('wisp_pve', []) | map('regex_replace', '^hv-', 'wisp-') | list + ['&wisp_edge']) | join(':') }}

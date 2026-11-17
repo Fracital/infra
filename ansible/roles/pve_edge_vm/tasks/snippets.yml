@@ -1,0 +1,43 @@
+---
+# Render the VM's cloud-init snippets to pve_edge_vm_user_snippet_path and
+# pve_edge_vm_network_snippet_path (tasks/main.yml resolves them with pvesm).
+
+- name: Read root's authorized keys on the controller
+  ansible.builtin.set_fact:
+    pve_edge_vm_authorized_keys: >-
+      {{ (query('ansible.builtin.file', *pve_edge_vm_ssh_pubkey_files) | map('trim') | list
+          + pve_edge_vm_ssh_authorized_keys + pve_edge_vm_ssh_authorized_keys_extra) | select | unique | list }}
+
+- name: There is a key to log in with
+  ansible.builtin.assert:
+    that: pve_edge_vm_authorized_keys | length > 0
+    fail_msg: "Set pve_edge_vm_ssh_pubkey_files or pve_edge_vm_ssh_authorized_keys."
+    quiet: true
+
+- name: Snippet directory
+  ansible.builtin.file:
+    path: "{{ pve_edge_vm_user_snippet_path | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# Holds the private host keys: root-only, and no --diff output.
+- name: Render {{ pve_edge_vm_name }}'s cloud-init user-data
+  ansible.builtin.template:
+    src: user-data.yaml.j2
+    dest: "{{ pve_edge_vm_user_snippet_path }}"
+    owner: root
+    group: root
+    mode: "0600"
+  diff: false
+  register: pve_edge_vm_user_snippet
+
+- name: Render {{ pve_edge_vm_name }}'s cloud-init network-config
+  ansible.builtin.template:
+    src: network-config.yaml.j2
+    dest: "{{ pve_edge_vm_network_snippet_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  register: pve_edge_vm_network_snippet

@@ -1,0 +1,417 @@
+From e45c8db57ecc126a2166b250f9d1766fe633fc6d Mon Sep 17 00:00:00 2001
+From: abulxt-local <local@abulxt.invalid>
+Date: Fri, 9 Oct 2026 19:29:34 -0400
+Subject: [PATCH 3/4] wisp: back-pressure stream egress instead of closing the
+ connection on a full write queue
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+submitWrite dropped the WHOLE WebSocket (c.close(): TCP close, no WS close
+frame, no Wisp CLOSE packet, no log line) the moment the per-connection
+pending egress queue would exceed PendingQueueSize (64 MiB default). Stream
+DATA counted toward that cap, so any time an origin delivered faster than
+the client drained — e.g. a browser decrypting several parallel 25 MB
+range downloads (fast.com / speedtest.net) while the relay reads them at
+line rate — the queue filled in milliseconds and every stream on the mux
+died at once. In the browser that surfaces as hyper IncompleteMessage on
+every in-flight response (the body ends at an EOF before Content-Length)
+and MuxTaskEnded on new requests until the transport re-dials.
+
+Captured on the wire with a raw Wisp v1 client, 8 parallel 25 MiB
+downloads from a loopback origin: the relay closed the socket 20–50 ms in
+after 15–39 MB had been delivered, identically with and without the egress size
+cap (0002); with pendingQueueSize raised to 1 GiB the same run
+completed byte-exact. So this is not a frame-size or Wisp flow-control (CONTINUE) issue: Wisp v1 has no server->client
+window, and the only thing stopping the relay from outrunning the client
+was a kill switch.
+
+Fix: stream DATA (queueStreamWrite — TCP/UDP stream reads and twisp pty
+output) now PARKS the calling stream reader on a condition variable while
+the queue is full and resumes when runWriter drains it (or when the
+connection closes). The stream's upstream socket is simply not read
+meanwhile, so ordinary TCP flow control slows the origin. An empty queue
+always admits a frame, so PendingQueueSize can never be smaller than one
+frame and wedge a stream. Protocol control frames (CONTINUE, CLOSE, pong,
+INFO, WS close) are a few bytes each and bypass the gate so they are never
+stuck behind stream data; a last-resort cap 25% above PendingQueueSize —
+reachable only by a control-frame flood toward a client that never reads —
+keeps the old drop behaviour for them. Egress memory per connection is
+bounded by PendingQueueSize + one DATA frame + control traffic.
+
+wisp/backpressure_test.go drives the real submitWrite against a net.Pipe
+peer that does not read: the submit parks with the queue at the cap and the
+connection stays open, every frame arrives in order once the peer drains,
+control frames still queue immediately, and a parked reader wakes on
+close().
+
+Verified end to end through the relay: 8x25 MiB,
+32x25 MiB, 50x1 MiB parallel downloads complete byte-exact at ~1 GB/s on
+loopback, and a client throttled to 20 MB/s holds back-pressure for the
+full 11 s transfer with the queue bounded.
+---
+ wisp/backpressure_test.go | 200 ++++++++++++++++++++++++++++++++++++++
+ wisp/twisp.go             |   2 +-
+ wisp/types.go             |   6 ++
+ wisp/wisp-connection.go   |  57 ++++++++++-
+ wisp/wisp-stream.go       |   4 +-
+ 5 files changed, 264 insertions(+), 5 deletions(-)
+ create mode 100644 wisp/backpressure_test.go
+
+diff --git a/wisp/backpressure_test.go b/wisp/backpressure_test.go
+new file mode 100644
+index 0000000..66cb1a0
+--- /dev/null
++++ b/wisp/backpressure_test.go
+@@ -0,0 +1,200 @@
++package wisp
++
++import (
++	"encoding/binary"
++	"io"
++	"net"
++	"sync"
++	"sync/atomic"
++	"testing"
++	"time"
++)
++
++// Stream egress back-pressure (submitWrite): when the per-connection pending
++// write queue is full because the client is not reading, a stream's read loop
++// must PARK on its next DATA frame — not drop the whole WebSocket — and resume
++// as soon as the writer drains. Before the fix the cap closed the connection,
++// which killed every stream on the mux (no CLOSE packet) the moment a fast
++// origin outran the client, e.g. parallel large downloads.
++
++const bpFrame = 16 * 1024
++
++func newBackpressureConn(t *testing.T, queueBytes int) (*wispConnection, net.Conn) {
++	t.Helper()
++	server, client := net.Pipe()
++	pool := &sync.Pool{New: func() any { b := make([]byte, 15+bpFrame); return &b }}
++	c := &wispConnection{
++		netConn: server,
++		closeCh: make(chan struct{}),
++		config:  &Config{PendingQueueSize: queueBytes, ReadBufPool: pool},
++	}
++	t.Cleanup(func() { c.close(); client.Close() })
++	return c, client
++}
++
++// streamFrame builds a bpFrame-byte frame carrying seq in its first 4 bytes,
++// in a pooled buffer, the way readFromConnection hands frames to the writer.
++func streamFrame(c *wispConnection, seq uint32) ([]byte, *[]byte) {
++	bufp := c.config.ReadBufPool.Get().(*[]byte)
++	frame := (*bufp)[:bpFrame]
++	binary.LittleEndian.PutUint32(frame, seq)
++	return frame, bufp
++}
++
++func waitFor(t *testing.T, what string, cond func() bool) {
++	t.Helper()
++	deadline := time.Now().Add(3 * time.Second)
++	for !cond() {
++		if time.Now().After(deadline) {
++			t.Fatalf("timed out waiting for %s", what)
++		}
++		time.Sleep(2 * time.Millisecond)
++	}
++}
++
++func TestStreamEgressBackpressureParksInsteadOfClosing(t *testing.T) {
++	const queue = 4 * bpFrame // room for 4 queued frames (+1 in the writer)
++	const total = 40
++	c, client := newBackpressureConn(t, queue)
++
++	var submitted atomic.Int32
++	go func() {
++		for seq := uint32(0); seq < total; seq++ {
++			frame, bufp := streamFrame(c, seq)
++			c.queueStreamWrite(frame, bufp) // parks while the queue is full
++			submitted.Add(1)
++		}
++	}()
++
++	// Nobody reads the client side yet: the writer blocks in its first Write
++	// (net.Pipe is synchronous) holding a batch of 1..4 frames, the next 4
++	// frames fill the queue, and the following submit must PARK: the admitted
++	// count settles between 5 and 8 and stays there. The connection must stay
++	// open.
++	waitFor(t, "queue to fill", func() bool { return submitted.Load() >= 5 })
++	time.Sleep(50 * time.Millisecond)
++	settled := submitted.Load()
++	if settled < 5 || settled > 8 {
++		t.Fatalf("submitted %d frames with a full queue, want 5..8 (writer batch + 4 queued)", settled)
++	}
++	time.Sleep(50 * time.Millisecond)
++	if got := submitted.Load(); got != settled {
++		t.Fatalf("submits kept being admitted (%d -> %d) with nobody reading: back-pressure is not holding", settled, got)
++	}
++	if c.isClosed.Load() {
++		t.Fatalf("connection was closed by a full egress queue; stream data must back-pressure instead")
++	}
++	c.pendingMutex.Lock()
++	queued := c.pendingBytes
++	c.pendingMutex.Unlock()
++	if queued > queue {
++		t.Fatalf("pending queue %d exceeds PendingQueueSize %d", queued, queue)
++	}
++
++	// Drain the client side: every frame arrives, in order, and the parked
++	// submits resume one by one as room appears.
++	var got []byte
++	done := make(chan error, 1)
++	go func() {
++		buf := make([]byte, total*bpFrame)
++		_, err := io.ReadFull(client, buf)
++		got = buf
++		done <- err
++	}()
++	select {
++	case err := <-done:
++		if err != nil {
++			t.Fatalf("read: %v", err)
++		}
++	case <-time.After(5 * time.Second):
++		t.Fatalf("stream data did not drain after the client started reading (submitted=%d)", submitted.Load())
++	}
++	for seq := uint32(0); seq < total; seq++ {
++		if s := binary.LittleEndian.Uint32(got[int(seq)*bpFrame:]); s != seq {
++			t.Fatalf("frame %d carries seq %d: egress reordered or lost under back-pressure", seq, s)
++		}
++	}
++	if c.isClosed.Load() {
++		t.Fatalf("connection closed during a back-pressured transfer")
++	}
++}
++
++// fillAndPark submits `total` stream frames from a goroutine against a
++// connection nobody reads and returns once the admitted count has settled with
++// one submit parked (the writer holds its first batch, the queue is full).
++func fillAndPark(t *testing.T, c *wispConnection, total int) (*atomic.Int32, chan struct{}) {
++	t.Helper()
++	var submitted atomic.Int32
++	finished := make(chan struct{})
++	go func() {
++		for seq := uint32(0); seq < uint32(total); seq++ {
++			frame, bufp := streamFrame(c, seq)
++			c.queueStreamWrite(frame, bufp)
++			submitted.Add(1)
++		}
++		close(finished)
++	}()
++	waitFor(t, "queue to fill", func() bool { return submitted.Load() >= 3 })
++	settled := submitted.Load()
++	waitFor(t, "admitted count to settle", func() bool {
++		time.Sleep(30 * time.Millisecond)
++		now := submitted.Load()
++		if now == settled {
++			return true
++		}
++		settled = now
++		return false
++	})
++	if int(settled) >= total {
++		t.Fatalf("all %d frames were admitted with nobody reading: nothing parked", total)
++	}
++	if c.isClosed.Load() {
++		t.Fatalf("connection closed while filling the egress queue")
++	}
++	return &submitted, finished
++}
++
++func TestControlFramesBypassBackpressure(t *testing.T) {
++	const queue = 2 * bpFrame
++	c, _ := newBackpressureConn(t, queue)
++	fillAndPark(t, c, 16)
++	c.pendingMutex.Lock()
++	queuedBefore := len(c.pendingWrites)
++	c.pendingMutex.Unlock()
++
++	// A CLOSE / CONTINUE must be queued immediately, behind the data, without
++	// parking and without tripping the last-resort cap.
++	ret := make(chan struct{})
++	go func() {
++		c.sendClosePacket(7, closeReasonVoluntary)
++		c.sendPacket(7, 32)
++		close(ret)
++	}()
++	select {
++	case <-ret:
++	case <-time.After(time.Second):
++		t.Fatalf("control frame blocked behind a full stream egress queue")
++	}
++	if c.isClosed.Load() {
++		t.Fatalf("control frame on a full queue closed the connection")
++	}
++	c.pendingMutex.Lock()
++	n := len(c.pendingWrites)
++	c.pendingMutex.Unlock()
++	if n != queuedBefore+2 { // the queued data frames + CLOSE + CONTINUE
++		t.Fatalf("pending writes = %d, want %d (queued data + 2 control)", n, queuedBefore+2)
++	}
++}
++
++func TestParkedStreamWriterWakesOnClose(t *testing.T) {
++	const queue = 2 * bpFrame
++	c, _ := newBackpressureConn(t, queue)
++	_, finished := fillAndPark(t, c, 16)
++
++	c.close()
++	select {
++	case <-finished:
++	case <-time.After(time.Second):
++		t.Fatalf("stream reader stayed parked after the connection closed")
++	}
++}
+diff --git a/wisp/twisp.go b/wisp/twisp.go
+index 3da5283..cf533f9 100644
+--- a/wisp/twisp.go
++++ b/wisp/twisp.go
+@@ -136,7 +136,7 @@ func (ts *twispStream) readPty() {
+ 
+ 			frame := make([]byte, maxHeaderLen+n-frameStart)
+ 			copy(frame, buf[frameStart:maxHeaderLen+n])
+-			ts.wispConn.queueWrite(frame)
++			ts.wispConn.queueStreamWrite(frame, nil)
+ 		}
+ 		if err != nil {
+ 			if err != io.EOF {
+diff --git a/wisp/types.go b/wisp/types.go
+index 43e88ad..d4a34ce 100644
+--- a/wisp/types.go
++++ b/wisp/types.go
+@@ -149,6 +149,9 @@ type writeReq struct {
+ 	data []byte
+ 	buf  *[]byte
+ 	done chan error
++	// stream marks outbound stream DATA (TCP/UDP reads, twisp pty output):
++	// back-pressured in submitWrite instead of counting toward the drop cap.
++	stream bool
+ }
+ 
+ type wispConnection struct {
+@@ -166,6 +169,9 @@ type wispConnection struct {
+ 	pendingWrites []writeReq
+ 	pendingBytes  int
+ 	writeActive   bool
++	// pendingCond (on pendingMutex) parks stream readers while the egress
++	// queue is full; see submitWrite / egressCond.
++	pendingCond *sync.Cond
+ 
+ 	isV2          bool
+ 	handshakeDone chan struct{}
+diff --git a/wisp/wisp-connection.go b/wisp/wisp-connection.go
+index ce15e5f..d5c7f7e 100644
+--- a/wisp/wisp-connection.go
++++ b/wisp/wisp-connection.go
+@@ -5,6 +5,7 @@ import (
+ 	"net"
+ 	"strconv"
+ 	"strings"
++	"sync"
+ 	"time"
+ 	"unicode/utf8"
+ )
+@@ -31,6 +32,8 @@ func (c *wispConnection) close() {
+ 	pending := c.pendingWrites
+ 	c.pendingWrites = nil
+ 	c.pendingBytes = 0
++	// Wake stream readers parked in submitWrite so they see isClosed and stop.
++	c.egressCond().Broadcast()
+ 	c.pendingMutex.Unlock()
+ 	for _, r := range pending {
+ 		if r.buf != nil {
+@@ -60,6 +63,8 @@ func (c *wispConnection) runWriter() {
+ 			batchBytes += len(r.data)
+ 		}
+ 		c.pendingBytes -= batchBytes
++		// Room was made: let back-pressured stream readers queue their next frame.
++		c.egressCond().Broadcast()
+ 		c.pendingMutex.Unlock()
+ 
+ 		if cap(bufs) < len(batch) {
+@@ -111,7 +116,37 @@ func (c *wispConnection) submitWrite(req writeReq) {
+ 		return
+ 	}
+ 	c.pendingMutex.Lock()
+-	if c.pendingBytes+len(req.data) > c.maxPendingQueueBytes() {
++	if req.stream {
++		// Stream egress is BACK-PRESSURED, never dropped: park this stream's
++		// reader until the writer has drained enough of the queue for the
++		// frame, so the upstream TCP socket stops being read and the sender
++		// slows down (ordinary TCP flow control). Before this the queue cap
++		// below applied to DATA too and closed the WHOLE WebSocket the moment a
++		// fast origin outran the client (a 64 MiB default fills in milliseconds
++		// on a download), which killed every stream on the mux with no CLOSE
++		// packet. An empty queue always admits the frame so PendingQueueSize
++		// can never be smaller than one frame and wedge the stream. The wait
++		// releases pendingMutex; runWriter and close() broadcast egressCond.
++		for !c.isClosed.Load() && c.pendingBytes > 0 && c.pendingBytes+len(req.data) > c.maxPendingQueueBytes() {
++			c.egressCond().Wait()
++		}
++		if c.isClosed.Load() {
++			c.pendingMutex.Unlock()
++			if req.buf != nil {
++				c.config.ReadBufPool.Put(req.buf)
++			}
++			if req.done != nil {
++				req.done <- net.ErrClosed
++			}
++			return
++		}
++	} else if c.pendingBytes+len(req.data) > c.maxPendingQueueBytes()+c.maxPendingQueueBytes()/4 {
++		// Protocol control frames (CONTINUE, CLOSE, pong, INFO, WS close) are a
++		// few bytes each and must never wait behind stream data, so they bypass
++		// the back-pressure gate. Stream data is bounded at PendingQueueSize +
++		// one frame by the gate above, so this last-resort cap (25% above it)
++		// is only reachable by a control-frame flood toward a client that never
++		// reads; the connection is dropped as before.
+ 		c.pendingMutex.Unlock()
+ 		if req.buf != nil {
+ 			c.config.ReadBufPool.Put(req.buf)
+@@ -137,8 +172,24 @@ func (c *wispConnection) queueWrite(data []byte) {
+ 	c.submitWrite(writeReq{data: data})
+ }
+ 
+-func (c *wispConnection) queueWritePooled(data []byte, buf *[]byte) {
+-	c.submitWrite(writeReq{data: data, buf: buf})
++// queueStreamWrite queues one outbound stream DATA frame (TCP/UDP stream reads
++// and twisp pty output). Unlike queueWrite it blocks the calling stream reader
++// while the connection's egress queue is full instead of dropping the
++// connection; see submitWrite. buf, when non-nil, is a ReadBufPool buffer
++// returned once the frame is written.
++func (c *wispConnection) queueStreamWrite(data []byte, buf *[]byte) {
++	c.submitWrite(writeReq{data: data, buf: buf, stream: true})
++}
++
++// egressCond is the condition variable stream readers wait on in submitWrite
++// (predicate: room in the pending queue, or the connection closed). Created
++// lazily so test literals (&wispConnection{}) need no constructor. Caller holds
++// pendingMutex.
++func (c *wispConnection) egressCond() *sync.Cond {
++	if c.pendingCond == nil {
++		c.pendingCond = sync.NewCond(&c.pendingMutex)
++	}
++	return c.pendingCond
+ }
+ 
+ func (c *wispConnection) writeAndWait(data []byte) error {
+diff --git a/wisp/wisp-stream.go b/wisp/wisp-stream.go
+index d897e8c..608de96 100644
+--- a/wisp/wisp-stream.go
++++ b/wisp/wisp-stream.go
+@@ -476,7 +476,9 @@ func (s *wispStream) readFromConnection() {
+ 			frame := buf[frameStart : maxHeaderLen+n]
+ 			handoff := bufp
+ 			bufp = pool.Get().(*[]byte)
+-			s.wispConn.queueWritePooled(frame, handoff)
++			// Blocks while the connection's egress queue is full (back-pressure
++			// to the upstream socket) rather than dropping the connection.
++			s.wispConn.queueStreamWrite(frame, handoff)
+ 		}
+ 		if err != nil {
+ 			pool.Put(bufp)
+-- 
+2.54.0
+

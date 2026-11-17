@@ -1,0 +1,210 @@
+{
+	"cities": ["was", "qas", "nyc"],
+	"upstreams": [
+		{
+			"host": "us-was-wg-socks5-001.relays.mullvad.net",
+			"port": 1080,
+			"city": "was"
+		},
+		{
+			"host": "us-was-wg-socks5-002.relays.mullvad.net",
+			"port": 1080,
+			"city": "was"
+		},
+		{
+			"host": "us-qas-wg-socks5-101.relays.mullvad.net",
+			"port": 1080,
+			"city": "qas"
+		},
+		{
+			"host": "us-qas-wg-socks5-102.relays.mullvad.net",
+			"port": 1080,
+			"city": "qas"
+		},
+		{
+			"host": "us-qas-wg-socks5-103.relays.mullvad.net",
+			"port": 1080,
+			"city": "qas"
+		},
+		{
+			"host": "us-qas-wg-socks5-201.relays.mullvad.net",
+			"port": 1080,
+			"city": "qas"
+		},
+		{
+			"host": "us-qas-wg-socks5-203.relays.mullvad.net",
+			"port": 1080,
+			"city": "qas"
+		},
+		{
+			"host": "us-qas-wg-socks5-204.relays.mullvad.net",
+			"port": 1080,
+			"city": "qas"
+		},
+		{
+			"host": "us-qas-wg-socks5-301.relays.mullvad.net",
+			"port": 1080,
+			"city": "qas"
+		},
+		{
+			"host": "us-qas-wg-socks5-302.relays.mullvad.net",
+			"port": 1080,
+			"city": "qas"
+		},
+		{
+			"host": "us-qas-wg-socks5-303.relays.mullvad.net",
+			"port": 1080,
+			"city": "qas"
+		},
+		{
+			"host": "us-qas-wg-socks5-304.relays.mullvad.net",
+			"port": 1080,
+			"city": "qas"
+		},
+		{
+			"host": "us-qas-wg-socks5-305.relays.mullvad.net",
+			"port": 1080,
+			"city": "qas"
+		},
+		{
+			"host": "us-qas-wg-socks5-306.relays.mullvad.net",
+			"port": 1080,
+			"city": "qas"
+		},
+		{
+			"host": "us-qas-wg-socks5-307.relays.mullvad.net",
+			"port": 1080,
+			"city": "qas"
+		},
+		{
+			"host": "us-qas-wg-socks5-308.relays.mullvad.net",
+			"port": 1080,
+			"city": "qas"
+		},
+		{
+			"host": "us-nyc-wg-socks5-001.relays.mullvad.net",
+			"port": 1080,
+			"city": "nyc"
+		},
+		{
+			"host": "us-nyc-wg-socks5-002.relays.mullvad.net",
+			"port": 1080,
+			"city": "nyc"
+		},
+		{
+			"host": "us-nyc-wg-socks5-003.relays.mullvad.net",
+			"port": 1080,
+			"city": "nyc"
+		},
+		{
+			"host": "us-nyc-wg-socks5-301.relays.mullvad.net",
+			"port": 1080,
+			"city": "nyc"
+		},
+		{
+			"host": "us-nyc-wg-socks5-302.relays.mullvad.net",
+			"port": 1080,
+			"city": "nyc"
+		},
+		{
+			"host": "us-nyc-wg-socks5-303.relays.mullvad.net",
+			"port": 1080,
+			"city": "nyc"
+		},
+		{
+			"host": "us-nyc-wg-socks5-501.relays.mullvad.net",
+			"port": 1080,
+			"city": "nyc"
+		},
+		{
+			"host": "us-nyc-wg-socks5-502.relays.mullvad.net",
+			"port": 1080,
+			"city": "nyc"
+		},
+		{
+			"host": "us-nyc-wg-socks5-504.relays.mullvad.net",
+			"port": 1080,
+			"city": "nyc"
+		},
+		{
+			"host": "us-nyc-wg-socks5-505.relays.mullvad.net",
+			"port": 1080,
+			"city": "nyc"
+		},
+		{
+			"host": "us-nyc-wg-socks5-506.relays.mullvad.net",
+			"port": 1080,
+			"city": "nyc"
+		},
+		{
+			"host": "us-nyc-wg-socks5-601.relays.mullvad.net",
+			"port": 1080,
+			"city": "nyc"
+		},
+		{
+			"host": "us-nyc-wg-socks5-602.relays.mullvad.net",
+			"port": 1080,
+			"city": "nyc"
+		},
+		{
+			"host": "us-nyc-wg-socks5-603.relays.mullvad.net",
+			"port": 1080,
+			"city": "nyc"
+		},
+		{
+			"host": "us-nyc-wg-socks5-604.relays.mullvad.net",
+			"port": 1080,
+			"city": "nyc"
+		},
+		{
+			"host": "us-nyc-wg-socks5-605.relays.mullvad.net",
+			"port": 1080,
+			"city": "nyc"
+		},
+		{
+			"host": "us-nyc-wg-socks5-606.relays.mullvad.net",
+			"port": 1080,
+			"city": "nyc"
+		},
+		{
+			"host": "us-nyc-wg-socks5-801.relays.mullvad.net",
+			"port": 1080,
+			"city": "nyc"
+		},
+		{
+			"host": "us-nyc-wg-socks5-802.relays.mullvad.net",
+			"port": 1080,
+			"city": "nyc"
+		},
+		{
+			"host": "us-nyc-wg-socks5-803.relays.mullvad.net",
+			"port": 1080,
+			"city": "nyc"
+		},
+		{
+			"host": "us-nyc-wg-socks5-804.relays.mullvad.net",
+			"port": 1080,
+			"city": "nyc"
+		},
+		{
+			"host": "us-nyc-wg-socks5-805.relays.mullvad.net",
+			"port": 1080,
+			"city": "nyc"
+		},
+		{
+			"host": "us-nyc-wg-socks5-806.relays.mullvad.net",
+			"port": 1080,
+			"city": "nyc"
+		},
+		{
+			"host": "us-nyc-wg-socks5-807.relays.mullvad.net",
+			"port": 1080,
+			"city": "nyc"
+		},
+		{
+			"host": "us-nyc-wg-socks5-808.relays.mullvad.net",
+			"port": 1080,
+			"city": "nyc"
+		}
+	]
+}

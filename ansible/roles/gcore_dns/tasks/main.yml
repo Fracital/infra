@@ -1,0 +1,49 @@
+---
+# Manage the byod round-robins in Gcore DNS: one apex A (+ AAAA) RRset per name
+# in byod_names (group_vars/all/main.yml), each holding that name's share of the
+# edges' addresses (host_vars edge_advertise_ips* / *_fracital), so any edge
+# terminates TLS for any name (shared Redis store makes every edge able to
+# answer the LE http-01 challenge). Per-site <site>.<fqdn> RRsets are pushed
+# for the names with `sites: true` (abulxt's nearest-site routing).
+#
+# Native Gcore healthchecks are DISABLED here (Gcore Free plan caps a dynamic
+# RRset at 3 records). This role only pushes plain static RRsets matching the
+# inventory: the Gcore zones are a rollback copy since the names moved to the
+# edge nameservers (roles/edge_dns, which health-check), README "Edge DNS".
+
+- name: Fail if the Gcore API token is not set
+  ansible.builtin.fail:
+    msg: >-
+      gcore_api_token is not set. Put a real token in
+      inventory/group_vars/all/secrets.yml (ansible-vault edit) before running the
+      dns playbook.
+  when: gcore_api_token is not defined or gcore_api_token in ('', 'REPLACE_ME')
+
+- name: Collect every advertised address of every name (duplicate check)
+  ansible.builtin.set_fact:
+    gcore_every_ip: >-
+      {{ (gcore_every_ip | default([]))
+         + (hostvars[item.1][item.0.ips_var] | default([]))
+         + (hostvars[item.1][item.0.ips_v6_var] | default([])) }}
+  # unique: [edge] holds [wisp_edge] as a child group, so a wisp box is in both lists.
+  loop: "{{ byod_names | product((groups['edge'] + (groups['wisp_edge'] | default([]))) | unique) | list }}"
+  loop_control:
+    label: "{{ item.0.fqdn }} / {{ item.1 }}"
+
+- name: Refuse an address advertised under two names
+  ansible.builtin.assert:
+    that:
+      - (gcore_every_ip | length) == (gcore_every_ip | unique | length)
+    fail_msg: >-
+      An edge address appears in more than one byod pool. Each address belongs to
+      one name: fix host_vars (edge_advertise_ips* vs edge_advertise_ips*_fracital).
+
+# A name whose host group is still empty (wisp.baby before its first region is
+# provisioned) is skipped, not emptied.
+- name: Manage each byod name
+  ansible.builtin.include_tasks: name.yml
+  loop: "{{ byod_names }}"
+  loop_control:
+    loop_var: byod_name
+    label: "{{ byod_name.fqdn }}"
+  when: groups[byod_name.group | default('edge')] | default([]) | length > 0

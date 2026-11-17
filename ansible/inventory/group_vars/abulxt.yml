@@ -1,0 +1,56 @@
+---
+# Every abulxt host (edges + origin).
+
+# --- fail2ban: vendored fail2ban role (fail2ban-contract v1) ---
+# README.md "fail2ban". The same variables, in the same order, are set in
+# infra (ansible/inventory/group_vars/abulxt.yml) and KrunkNative
+# (deploy/ansible/group_vars/all.yml); per-group overrides follow them there.
+fail2ban_manage: true
+# Base (jail.local, sshd + recidive, ignoreip, ban actions): exactly one repo
+# sets true per host. abulxt owns it on the edges and amph; KrunkNative owns it
+# on kru. Handover works like the firewall's (README.md "fail2ban").
+fail2ban_own_base: true
+fail2ban_owner: "abulxt (inputs: ansible inventory/group_vars/abulxt.yml)"
+# Never banned, on every host of both repos (plus 127.0.0.1/8, ::1 and each
+# host's own addresses). Keep in sync with KrunkNative group_vars/all.yml.
+fail2ban_ignoreip:
+  # divide, the Proxmox host of amph, kru and the edge (wisp.baby): its own SSH and the
+  # guests' NAT egress. amph (172.16.5.3) and kru (172.16.5.47) are private on its vmbr1,
+  # covered by 172.16.0.0/12 below (amph's old .41/.55 and kru's .56 are gone).
+  - 91.199.82.174
+  # admin workstation egress (seen as the source of the admin's SSH logins)
+  - 5.188.124.57
+  # meal, the Proxmox host (terp and holy stay there)
+  - 5.188.124.253
+  # (the old VPSs santaclara, losangeles, chicago and ashburn were cancelled 2026-11-13: their
+  # addresses go back to G-Core, never exempt them)
+  # private ranges: divide's vmbr1 172.16.5.0/24 (amph, kru, edge, kn, blockshooter, mull,
+  # chat, sm; meal's LAN has the same subnet), docker bridges
+  - 10.0.0.0/8
+  - 172.16.0.0/12
+  - 192.168.0.0/16
+fail2ban_ignoreip_self: true
+# CI (GitHub-hosted runners) logs in with keys: key logins and pre-auth closes
+# never count in the sshd jail's normal mode, so the runners stay unlisted.
+# true adds api.github.com/meta "actions" (thousands of CIDRs; fail2ban
+# restarts whenever GitHub changes the list). Needed if the mode goes aggressive.
+fail2ban_ignoreip_github_actions: false
+fail2ban_banaction: "nftables[type=multiport]"
+fail2ban_banaction_allports: "nftables[type=allports]"
+fail2ban_sshd_port: 22
+fail2ban_sshd_mode: normal
+fail2ban_sshd_maxretry: 5
+fail2ban_sshd_findtime: 10m
+fail2ban_sshd_bantime: 1h
+fail2ban_bantime_increment: true
+fail2ban_bantime_maxtime: 1w
+fail2ban_recidive_maxretry: 5
+fail2ban_recidive_findtime: 1d
+fail2ban_recidive_bantime: 1w
+fail2ban_dbpurgeage: 8d
+# sshd daemon settings: edges only (group_vars/edge.yml); amph keeps its own.
+fail2ban_sshd_settings: {}
+fail2ban_rollback_seconds: 120
+# This repo's jails beyond sshd + recidive: none. No HTTP jails: edge clients
+# share school/carrier NAT addresses, and amph's HTTP arrives via the edges.
+fail2ban_dropins: []

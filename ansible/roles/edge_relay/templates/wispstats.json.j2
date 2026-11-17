@@ -1,0 +1,13 @@
+{# roles/edge_relay: read once by lua/wispstats.lua in init_by_lua (as root). Holds secrets. #}
+{{ {
+  "site": wisp_site,
+  "city": edge_city | default(wisp_sites[wisp_site] | default(wisp_site)),
+  "country": edge_country | default(''),
+  "salt": wispstats_client_salt,
+  "interval": 2,
+  "holywisp_port": edge_wisp_port | int,
+  "mmdb": wispstats_mmdb,
+  "tags": wispstats_tags,
+  "host_tags": wispstats_host_tags,
+  "redis": { "host": abulxt_origin_ip, "port": auto_ssl_redis_port | int, "password": auto_ssl_redis_password, "db": 0 }
+} | to_nice_json }}

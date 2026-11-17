@@ -1,0 +1,33 @@
+---
+# Make storage pve_storage_content_id accept content pve_storage_content_type
+# (images, snippets). Adds it to the storage's existing list, never removes one.
+# Also used by pve_edge_vm (include_role tasks_from).
+
+- name: Read storage {{ pve_storage_content_id }}
+  ansible.builtin.command: pvesh get /storage/{{ pve_storage_content_id }} --output-format json
+  register: pve_storage_content_read
+  changed_when: false
+
+- name: Note storage {{ pve_storage_content_id }}'s content types
+  ansible.builtin.set_fact:
+    pve_storage_content_have: "{{ ((pve_storage_content_read.stdout | from_json).content | default('')).split(',') | select | list }}"
+
+- name: Storage {{ pve_storage_content_id }} can hold {{ pve_storage_content_type }}
+  ansible.builtin.assert:
+    that: pve_storage_content_type in pve_storage_content_have or pve_storage_manage_content | default(true) | bool
+    fail_msg: >-
+      Storage {{ pve_storage_content_id }} has content {{ pve_storage_content_have | join(',') }}, without
+      {{ pve_storage_content_type }}. Run: pvesm set {{ pve_storage_content_id }} --content
+      {{ (pve_storage_content_have + [pve_storage_content_type]) | join(',') }} (or set pve_storage_manage_content).
+    quiet: true
+
+- name: Allow {{ pve_storage_content_type }} on storage {{ pve_storage_content_id }}
+  ansible.builtin.command:
+    argv:
+      - pvesm
+      - set
+      - "{{ pve_storage_content_id }}"
+      - --content
+      - "{{ (pve_storage_content_have + [pve_storage_content_type]) | join(',') }}"
+  when: pve_storage_content_type not in pve_storage_content_have
+  changed_when: true

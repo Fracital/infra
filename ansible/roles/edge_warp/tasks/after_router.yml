@@ -1,0 +1,12 @@
+---
+# Run from the playbooks' post_tasks, after edge_wisp has restarted the router onto the
+# new WARP config (README.md "Cloudflare WARP"): retire warp-cli where kernel mode took
+# over, then check from amph that every byod address of the box still serves its name.
+
+- name: Retire warp-cli (kernel mode took over)
+  ansible.builtin.include_tasks: retire_proxy.yml
+  when: edge_warp_mode == 'kernel' and edge_warp_retire_proxy | bool
+
+- name: Every byod address of the box still serves its name
+  ansible.builtin.include_tasks: serving.yml
+  when: not ansible_check_mode

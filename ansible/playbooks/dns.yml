@@ -1,0 +1,23 @@
+---
+# Push the byod.abstracteducation.loan A-record round-robin to Gcore DNS.
+# Run this only after every edge is up and relaying (see the runbook).
+#   ansible-playbook playbooks/dns.yml --vault-password-file <file>
+# Since 2026-11-16 the Gcore zones are only a rollback copy and the live records are
+# Cloudflare A records to the edge's one address (divide_public_ip). That address is
+# shared by every name, so gcore_dns's one-address-one-name check refuses this play
+# on purpose; only `--tags gateway` (below) is live.
+
+- name: Manage byod DNS round-robin
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - gcore_dns
+
+# Lock the Cloudflare Gateway DoH classifier endpoints to the same edge fleet.
+#   ansible-playbook playbooks/dns.yml --tags gateway --vault-password-file <file>
+- name: Manage Gateway DoH source-IP allowlist
+  hosts: localhost
+  gather_facts: false
+  tags: [gateway]
+  roles:
+    - gateway_dns

@@ -1,0 +1,4 @@
+// {{ ansible_managed }}
+{% for n in byod_names %}
+zone "{{ n.zone }}" { type native; file "/etc/powerdns/zones/{{ n.zone }}.zone"; };
+{% endfor %}

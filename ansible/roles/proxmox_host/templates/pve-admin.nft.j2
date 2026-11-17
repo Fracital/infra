@@ -1,0 +1,37 @@
+{% set pve_fw_sources = (pve_admin_sources + pve_admin_sources_extra) | map('string') | unique | list %}
+{% set pve_fw_v4 = pve_fw_sources | reject('search', ':') | list %}
+{% set pve_fw_v6 = pve_fw_sources | select('search', ':') | list %}
+{% set pve_fw_ports = pve_admin_tcp_ports | map('string') | unique | list %}
+# edge-firewall-contract v1 drop-in: abulxt-pve-admin (inputs: ansible roles/proxmox_host, pve_admin_sources*).
+# Managed by Ansible: rendered by roles/proxmox_host (tasks/firewall.yml), not by edge_firewall.
+# The Proxmox web UI + consoles (8006) and spiceproxy (3128) from the admin allowlist only.
+# SSH stays in the base (open to all, as on every abulxt host). Own chain + jump: the
+# contract's tcp_accept set would open these ports to everyone.
+table inet filter {
+	set abulxt_pve_admin_v4 {
+		type ipv4_addr
+		flags interval
+		auto-merge
+{% if pve_fw_v4 | length > 0 %}
+		elements = { {{ pve_fw_v4 | join(', ') }} }
+{% endif %}
+	}
+
+	set abulxt_pve_admin_v6 {
+		type ipv6_addr
+		flags interval
+		auto-merge
+{% if pve_fw_v6 | length > 0 %}
+		elements = { {{ pve_fw_v6 | join(', ') }} }
+{% endif %}
+	}
+
+	chain abulxt_pve_admin {
+{% if pve_fw_ports | length > 0 %}
+		ip saddr @abulxt_pve_admin_v4 tcp dport { {{ pve_fw_ports | join(', ') }} } accept
+		ip6 saddr @abulxt_pve_admin_v6 tcp dport { {{ pve_fw_ports | join(', ') }} } accept
+{% endif %}
+	}
+}
+
+add rule inet filter input jump abulxt_pve_admin

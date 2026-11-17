@@ -1,0 +1,115 @@
+---
+# Cloudflare WARP, proxy mode (edge_warp_mode: proxy; defaults/main.yml, README.md
+# "Cloudflare WARP"). Order matters: the mode is set to proxy and checked *before* the
+# first connect. warp-cli's default mode is the full tunnel, which would take the
+# default route and cut the box off.
+
+- name: Download the Cloudflare WARP apt key
+  ansible.builtin.get_url:
+    url: https://pkg.cloudflareclient.com/pubkey.gpg
+    dest: /tmp/cloudflare-warp-pubkey.gpg
+    mode: "0644"
+  register: edge_warp_key
+
+- name: Dearmor the Cloudflare WARP key into a keyring
+  ansible.builtin.command: >-
+    gpg --batch --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+    /tmp/cloudflare-warp-pubkey.gpg
+  when: edge_warp_key.changed
+
+- name: Add the Cloudflare WARP apt repository
+  ansible.builtin.deb822_repository:
+    name: cloudflare-client
+    types: deb
+    uris: https://pkg.cloudflareclient.com/
+    suites: "{{ edge_warp_apt_suite }}"
+    components: main
+    architectures: amd64
+    signed_by: /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+    state: present
+  register: edge_warp_repo
+
+- name: Install cloudflare-warp
+  ansible.builtin.apt:
+    name: cloudflare-warp
+    state: present
+    update_cache: "{{ edge_warp_repo.changed }}"
+
+- name: Run warp-svc
+  ansible.builtin.systemd:
+    name: warp-svc.service
+    enabled: true
+    state: started
+
+- name: Read the WARP status
+  ansible.builtin.command: warp-cli --accept-tos status
+  register: edge_warp_status
+  changed_when: false
+  failed_when: false
+  retries: 5
+  delay: 2
+  until: edge_warp_status.rc == 0
+
+# Proxy mode before anything can connect. A fresh install is neither registered nor
+# connected; on a box that already runs WARP this is a no-op.
+- name: Set proxy mode
+  ansible.builtin.command: warp-cli --accept-tos mode proxy
+  changed_when: false
+
+- name: Set the proxy port
+  ansible.builtin.command: warp-cli --accept-tos proxy port {{ edge_warp_proxy_port | int }}
+  changed_when: false
+
+- name: Register this box as a WARP client
+  ansible.builtin.command: warp-cli --accept-tos registration new
+  when: "'missing' in (edge_warp_status.stdout + edge_warp_status.stderr) | lower"
+
+# Re-set after registering: a new registration may come up with the default settings.
+- name: Set proxy mode again after registering
+  ansible.builtin.command: warp-cli --accept-tos mode proxy
+  changed_when: false
+
+- name: Set the proxy port again after registering
+  ansible.builtin.command: warp-cli --accept-tos proxy port {{ edge_warp_proxy_port | int }}
+  changed_when: false
+
+- name: Read the WARP settings
+  ansible.builtin.command: warp-cli --accept-tos settings
+  register: edge_warp_settings
+  changed_when: false
+
+- name: The mode is the proxy on the expected port (never connect in tunnel mode)
+  ansible.builtin.assert:
+    that:
+      - "'proxy' in edge_warp_settings.stdout | lower"
+      - "(edge_warp_proxy_port | string) in edge_warp_settings.stdout"
+    fail_msg: "warp-cli settings don't show proxy mode on port {{ edge_warp_proxy_port }}; not connecting."
+    quiet: true
+
+- name: Arm the dead-man switch (warp-cli disconnect in {{ edge_warp_deadman_seconds }}s)
+  ansible.builtin.include_tasks: deadman_arm.yml
+  vars:
+    edge_warp_deadman_command: /usr/bin/warp-cli --accept-tos disconnect
+
+- name: Connect WARP
+  ansible.builtin.command: warp-cli --accept-tos connect
+  changed_when: "'connected' not in edge_warp_status.stdout | lower"
+
+- name: Wait for the proxy to answer through Cloudflare
+  ansible.builtin.command: >-
+    curl -sS -m 10 --socks5 127.0.0.1:{{ edge_warp_proxy_port | int }}
+    https://www.cloudflare.com/cdn-cgi/trace
+  register: edge_warp_trace
+  changed_when: false
+  retries: 15
+  delay: 2
+  until: edge_warp_trace.rc == 0 and 'warp=on' in edge_warp_trace.stdout
+
+- name: Confirm the box from outside, then disarm the dead-man switch
+  ansible.builtin.include_tasks: deadman_confirm.yml
+
+- name: The box's own traffic still leaves from its own address (proxy mode left routing alone)
+  ansible.builtin.command: curl -sS -m 10 https://www.cloudflare.com/cdn-cgi/trace
+  register: edge_warp_direct_trace
+  changed_when: false
+  failed_when: "'warp=off' not in edge_warp_direct_trace.stdout"

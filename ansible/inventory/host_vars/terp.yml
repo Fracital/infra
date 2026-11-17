@@ -1,0 +1,26 @@
+---
+# terp: Fracital's origin, on meal (5.188.124.62, managed on its public address).
+
+# --- Deploy user (role deploy_user via playbooks/fracital-origin.yml) -------
+# Fracital's and cloaks-fracital's CI log in as `deploy`, forced through
+# /usr/local/sbin/fracital-deploy-gate (Fracital deploy/terp-deploy-gate.sh), and powerMouse's (stomp)
+# through /usr/local/sbin/stomp-deploy-gate (powerMouse deploy/terp-deploy-gate.sh); both installed by
+# hand. Root's part is only the fixed commands below (each repo's deploy/terp-deploy-root.sh).
+deploy_user_keys:
+  - restrict,command="/usr/local/sbin/fracital-deploy-gate app" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFainLsoK1ugdgZosiB1aAWBve1ikwo6HoOVUiZ0zCYJ terp-fracital-ci@github-actions
+  - restrict,command="/usr/local/sbin/fracital-deploy-gate cloaks" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ/3WnfAq9d5KCU1Z6sO8Th+BphNv3xFxueYC9jx1AFg terp-cloaks-ci@github-actions
+  - restrict,command="/usr/local/sbin/stomp-deploy-gate" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEI2BbZQpwi8UIpBa5VXbH56Fe0cl4uo9vsqvvROWiy6 stomp-ci@github-actions
+deploy_user_sudo_commands:
+  - /usr/local/sbin/fracital-deploy-root prepare
+  - /usr/local/sbin/fracital-deploy-root restart fracital
+  - /usr/local/sbin/fracital-deploy-root restart fracital-dev
+  - /usr/local/sbin/fracital-deploy-root logs fracital
+  - /usr/local/sbin/fracital-deploy-root logs fracital-dev
+  - /usr/local/sbin/stomp-deploy-root prepare
+  - /usr/local/sbin/stomp-deploy-root restart
+  - /usr/local/sbin/stomp-deploy-root logs
+# Commits are sometimes made on terp as root (Fracital's gate refuses to overwrite them).
+deploy_user_git_safe_dirs:
+  - /opt/fracital/repo
+  - /opt/fracital/dev
+  - /opt/stomp/repo

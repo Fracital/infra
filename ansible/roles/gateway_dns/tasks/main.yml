@@ -1,0 +1,96 @@
+---
+# Lock each Cloudflare Gateway DNS location's DoH endpoint to the edge fleet.
+# Mirrors gcore_dns: aggregate per-host inventory, PUT the full list. Adding an
+# edge = add its host_vars and re-run playbooks/dns.yml.
+#
+# Source-IP filtering sees the edge's EGRESS address, which can be any alias on
+# the box (not just the advertised inbound IPs), so IPv4 is allowed per
+# edge_subnet (/24 the provider assigned us). IPv6 egress is a single address
+# per box, so those are /128s (a wisp cloud box lists all of its wisp_ips_v6:
+# none is configured as primary by the panel). The Gateway hostname has AAAA
+# records and dual-stack edges prefer v6.
+
+- name: Fail if the Cloudflare Zero Trust API token is not set
+  ansible.builtin.fail:
+    msg: >-
+      cloudflare_zt_api_token is not set. Put a real token in
+      inventory/group_vars/all/secrets.yml (ansible-vault edit).
+  when: cloudflare_zt_api_token is not defined or cloudflare_zt_api_token in ('', 'REPLACE_ME')
+
+- name: Collect every edge IPv4 subnet
+  ansible.builtin.set_fact:
+    gateway_v4_nets: "{{ gateway_v4_nets | default([]) + [hostvars[item].edge_subnet] }}"
+  loop: "{{ groups['edge'] }}"
+  when: hostvars[item].edge_subnet is defined
+
+- name: Collect every edge IPv6 egress address
+  ansible.builtin.set_fact:
+    gateway_v6_nets: "{{ gateway_v6_nets | default([]) + ((hostvars[item].edge_advertise_ips_v6 | default([]) + hostvars[item].edge_advertise_ips_v6_fracital | default([]) + hostvars[item].wisp_ips_v6 | default([])) | map('regex_replace', '$', '/128') | list) }}"
+  loop: "{{ groups['edge'] }}"
+
+# A VM whose IPv6 also takes a SLAAC address leaves from that one, not from wisp_ips_v6
+# (wisp-mnz: ...:be24:11ff:fe0f:a46b, not ::115), and Gateway answered it REFUSED, which the
+# router's classifier takes as "no verdict" and fails open on. Such a host names its /64.
+- name: Collect every edge IPv6 subnet
+  ansible.builtin.set_fact:
+    gateway_v6_nets: "{{ gateway_v6_nets | default([]) + [hostvars[item].edge_subnet_v6] }}"
+  loop: "{{ groups['edge'] }}"
+  when: hostvars[item].edge_subnet_v6 is defined
+
+- name: Build the allowed-network list
+  ansible.builtin.set_fact:
+    gateway_networks: >-
+      {{ ((gateway_v4_nets | default([])) + (gateway_v6_nets | default([])) + gateway_dns_extra_networks)
+         | unique | map('community.general.dict_kv', 'network') | list }}
+
+# The first location created becomes the account default and the API refuses
+# to un-default it, so read the current flag and echo it back.
+- name: Read current location state
+  ansible.builtin.uri:
+    url: "{{ cloudflare_api_base }}/accounts/{{ cloudflare_zt_account_id }}/gateway/locations/{{ item.id }}"
+    headers:
+      Authorization: "Bearer {{ cloudflare_zt_api_token }}"
+    return_content: true
+  register: gateway_loc_current
+  loop: "{{ cloudflare_zt_gateway_locations }}"
+  loop_control: { label: "{{ item.name }}" }
+  delegate_to: localhost
+  run_once: true
+
+- name: Lock each DoH location to the fleet networks
+  ansible.builtin.uri:
+    url: "{{ cloudflare_api_base }}/accounts/{{ cloudflare_zt_account_id }}/gateway/locations/{{ item.item.id }}"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ cloudflare_zt_api_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      name: "{{ item.item.name }}"
+      client_default: "{{ item.json.result.client_default | default(false) }}"
+      ecs_support: false
+      endpoints:
+        doh:
+          {
+            enabled: true,
+            networks: "{{ gateway_networks }}",
+            require_token: false,
+          }
+        dot: { enabled: false }
+        ipv4: { enabled: false }
+        ipv6: { enabled: false }
+      max_ttl: { mode: override, ttl_secs: "{{ gateway_dns_max_ttl_secs }}" }
+    status_code: [200]
+    return_content: true
+  register: gateway_loc
+  loop: "{{ gateway_loc_current.results }}"
+  loop_control: { label: "{{ item.item.name }}" }
+  delegate_to: localhost
+  run_once: true
+
+- name: Show the applied allowlist
+  ansible.builtin.debug:
+    msg:
+      - "DoH allowlist ({{ gateway_networks | length }}): {{ gateway_networks | map(attribute='network') | list }}"
+      - "locations: {{ cloudflare_zt_gateway_locations | map(attribute='name') | list }}"
+  run_once: true

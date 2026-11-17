@@ -1,0 +1,4 @@
+# {{ ansible_managed }}
+# The only root commands the deploy user has: the fixed root halves of the app deploys.
+Defaults:{{ deploy_user_name }} env_reset, !requiretty
+{{ deploy_user_name }} ALL=(root) NOPASSWD: {{ deploy_user_sudo_commands | join(', ') }}

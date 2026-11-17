@@ -1,0 +1,35 @@
+# abulxt fail2ban base jail config → /etc/fail2ban/jail.local
+#
+# HTTP to amph arrives via Cloudflare. Never ban Caddy remote_ip
+# (that is a CF colo). SSH jails are safe. Optional HTTP jail uses
+# CF-Connecting-Ip + Cloudflare API action (see jail.d/).
+
+[DEFAULT]
+# divide (91.199.82.174): amph's Proxmox host, its NAT egress and ProxyJump. amph itself is
+# 172.16.5.3 on divide's vmbr1 (in 172.16.0.0/12).
+ignoreip = 127.0.0.1/8 ::1 91.199.82.174 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
+bantime  = 1h
+findtime = 10m
+maxretry = 5
+backend  = systemd
+banaction = iptables-multiport
+banaction_allports = iptables-allports
+
+[sshd]
+enabled  = true
+port     = ssh
+filter   = sshd
+backend  = systemd
+maxretry = 4
+findtime = 10m
+bantime  = 2h
+
+[recidive]
+enabled  = true
+filter   = recidive
+logpath  = /var/log/fail2ban.log
+backend  = auto
+banaction = %(banaction_allports)s
+findtime = 1d
+bantime  = 1w
+maxretry = 3

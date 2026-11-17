@@ -1,0 +1,14 @@
+# Origin-internal entry point for BYOD edge traffic.
+# The legacy reverse SSH tunnel is gone: amph.ashburn (45.82.161.87) now
+# connects DIRECTLY to amph on this port, so it must listen on the public
+# interface (not just loopback). Inbound is restricted to the ashburn IP by the
+# abulxt firewall, and every request must still carry the shared X-BYOD-Token.
+http://:9080 {
+	@trusted header X-BYOD-Token {env.BYOD_PROXY_TOKEN}
+	handle @trusted {
+		import abulxt_routes
+	}
+	handle {
+		respond "Forbidden" 403
+	}
+}

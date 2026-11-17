@@ -1,0 +1,115 @@
+---
+# holywisp_source: build. Build a static holyWisp on the controller, once per
+# play, keyed by the resolved commit. Output: holywisp_binary (path on the
+# controller), which tasks/verify.yml then checks.
+#
+# The build runs inside a Debian 12 container (podman or docker; see
+# files/holywisp-build.Containerfile) with -static: the controller has no static
+# glibc or libcrypt, and a fully static binary is the only one that runs on
+# every relay (Debian 11 glibc 2.31 on abulxt-santaclara, 12, 13) without a
+# per-host toolchain. The cached output is
+# <holywisp_build_dir>/holywisp-<commit>-linux-amd64-static; a ref bump builds a
+# new file, an unchanged ref is a no-op (`creates:`).
+#
+# Every task here is controller-only and runs for real in check mode too
+# (check_mode: false), so `--check --diff` on the rest of the role shows the
+# real config/unit diff instead of failing on an unresolved binary path.
+# Nothing on the hosts is touched by this file.
+#
+# IMPORTANT: THIS STEP DETERMINES WHAT RUNS ON THE RELAYS. Building is fine;
+# actually pushing/restarting the relays (the rest of the role / play) is a
+# production mutation and is authorization-gated per AGENTS.md Hard rules.
+
+- name: Pick the container engine for the holyWisp build
+  ansible.builtin.shell: |
+    for t in {{ holywisp_container_tool if holywisp_container_tool | length > 0 else 'podman docker' }}; do
+      if command -v "$t" >/dev/null 2>&1 && "$t" info >/dev/null 2>&1; then
+        echo "$t"
+        exit 0
+      fi
+    done
+    echo 'holyWisp build: no working container engine (podman or docker) on the controller' >&2
+    exit 1
+  args:
+    executable: /bin/bash
+  register: holywisp_engine
+  changed_when: false
+  check_mode: false
+  delegate_to: localhost
+  run_once: true
+
+- name: Clone or update the holyWisp source checkout
+  ansible.builtin.git:
+    repo: "{{ holywisp_repo }}"
+    dest: "{{ holywisp_build_dir }}/src"
+    version: "{{ holywisp_ref }}"
+    force: true
+  check_mode: false
+  delegate_to: localhost
+  run_once: true
+
+- name: Resolve the exact holyWisp commit being built
+  ansible.builtin.command: git -C {{ holywisp_build_dir }}/src rev-parse --short=12 HEAD
+  register: holywisp_commit
+  changed_when: false
+  check_mode: false
+  delegate_to: localhost
+  run_once: true
+
+- name: Set the output binary path
+  ansible.builtin.set_fact:
+    holywisp_binary: "{{ holywisp_build_dir }}/holywisp-{{ holywisp_commit.stdout }}-linux-amd64-static"
+  run_once: true
+
+- name: Check whether this commit is already built
+  ansible.builtin.stat:
+    path: "{{ holywisp_binary }}"
+  register: holywisp_built
+  check_mode: false
+  delegate_to: localhost
+  run_once: true
+
+# Image layers are cached by the engine; this only costs time the first time
+# (or after the Containerfile changes) and only when a binary is missing.
+- name: Build the holyWisp build image (Debian 12 toolchain)
+  ansible.builtin.command:
+    argv:
+      - "{{ holywisp_engine.stdout }}"
+      - build
+      - -t
+      - "{{ holywisp_build_image }}"
+      - -f
+      - "{{ role_path }}/files/holywisp-build.Containerfile"
+      - "{{ role_path }}/files"
+  when: not holywisp_built.stat.exists
+  check_mode: false
+  delegate_to: localhost
+  run_once: true
+
+# No bind mounts: the source goes in as a tar stream on stdin and the binary
+# comes back on stdout, so this works the same with rootless podman, with a
+# docker daemon that runs in its own mount namespace (bind mounts of $HOME
+# show up empty there), and without uid mapping or SELinux labels. The build
+# tree lives in the container's /tmp, so no CMake cache from the controller
+# leaks in. cmake's own output goes to stderr; stdout carries only the binary.
+- name: Build holyWisp (Release, fully static) in the container
+  ansible.builtin.shell: |
+    set -euo pipefail
+    out={{ holywisp_binary | quote }}
+    tar -C {{ holywisp_build_dir | quote }} -c src | {{ holywisp_engine.stdout }} run --rm -i {{ holywisp_build_image | quote }} \
+      bash -euc '
+        tar -x -C /tmp
+        cmake -S /tmp/src -B /tmp/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DHW_BUILD_TESTS=OFF \
+          -DCMAKE_EXE_LINKER_FLAGS=-static -DHW_VERSION_SUFFIX=+{{ holywisp_commit.stdout }} >&2
+        cmake --build /tmp/build --target holywisp-bin >&2
+        cat /tmp/build/holywisp
+      ' > "$out.tmp"
+    test -s "$out.tmp"
+    chmod 0755 "$out.tmp"
+    mv "$out.tmp" "$out"
+  args:
+    executable: /bin/bash
+    creates: "{{ holywisp_binary }}"
+  check_mode: false
+  delegate_to: localhost
+  run_once: true

@@ -1,0 +1,180 @@
+---
+# Edge-specific settings.
+
+# Each edge advertises ALL of its public IPs in the Gcore DNS round-robins (see
+# playbooks/dns.yml), so a failure of any single address still leaves the rest
+# of the fleet serving. (Since 2026-11-16 there is one edge with one address, divide's
+# public_ip behind NAT, and the live byod records are Cloudflare A records to it.) The addresses are split about in half between the two
+# byod names (all/main.yml byod_names): edge_advertise_ips (IPv4) /
+# edge_advertise_ips_v6 (IPv6) go to byod.abstracteducation.loan and
+# edge_advertise_ips_fracital / edge_advertise_ips_v6_fracital to
+# byod.fracit.al, set per host in host_vars/*.yml. An address belongs to one
+# name only. Edge nginx listens on :80/:443 wildcard, so every advertised
+# address terminates TLS for every name. The edge nameservers (roles/edge_dns)
+# answer from these lists.
+edge_advertise_ips: []
+edge_advertise_ips_v6: []
+edge_advertise_ips_fracital: []
+edge_advertise_ips_v6_fracital: []
+# The holyWisp web client served on https://holywisp.fracit.al/ defaults to that
+# same public root, which the edge routes to holyWisp as the relay (no key).
+holywisp_webclient_wisp_url: "wss://{{ fracital_wisp_hosts[0] }}/"
+# Literal-IP CONNECTs are allowed on the edges: the v86 emulator in vibeOS uses
+# wss://holywisp.fracit.al/ as its guest network and can only connect by address.
+# Those streams bypass edge-router.py's adult/shady classification (it has no
+# name to look up), the public-unicast egress check still applies.
+holywisp_allow_direct_ip: true
+
+# --- Host firewall: vendored edge_firewall role (edge-firewall-contract v1) ---
+# README.md "Edge firewall". The same variables, in the same order, are set in
+# infra (ansible/inventory/group_vars/edge.yml) and KrunkNative
+# (deploy/ansible/group_vars/edges/main.yml).
+# holyWisp :6001 stays loopback-only behind nginx (closed here).
+edge_firewall_manage: true
+# Base /etc/nftables.conf: exactly one repo sets true (now abulxt). Handover:
+# flip both repos together, run the new owner's firewall.yml first.
+edge_firewall_own_base: true
+edge_firewall_owner: "abulxt (inputs: ansible inventory/group_vars/edge.yml)"
+edge_firewall_ssh_port: 22
+edge_firewall_rollback_seconds: 120
+# This repo's drop-in. Ports must not overlap KrunkNative's.
+edge_firewall_dropins:
+  - name: abulxt
+    priority: 50
+    source: ansible inventory/group_vars/edge.yml
+    comment:
+      - "abulxt public ports: nginx http/https (tcp 80/443, udp 443), tcp 8080 (SNI split:"
+      - "mcnode Wings via amph, everything else to blockshooter). divide DNATs these to the edge."
+      - "No 53: PowerDNS (roles/edge_dns) is retired, the byod names are Cloudflare records."
+    tcp: [80, 443, 8080]
+    udp: [443]
+
+# --- fail2ban (contract vars: group_vars/abulxt.yml) ---
+# sshd on the edges: scanners fill MaxStartups 10:30:100 and sshd then drops
+# CI's connections ("drop connection #10 ... Maxstartups"). 50:30:200 is the
+# value ashburn already had by hand (sshd_config.d/99-abulxt-tunnel.conf);
+# LoginGraceTime 30 frees a scanner's pre-auth slot 4x sooner than 120.
+fail2ban_sshd_settings:
+  MaxStartups: "50:30:200"
+  LoginGraceTime: 30
+  # keys only: no password logins, root by key only (CI and admins use keys)
+  PasswordAuthentication: "no"
+  KbdInteractiveAuthentication: "no"
+  PermitRootLogin: prohibit-password
+# 00password.conf (hand-made on chitown/angeles) sorts before the contract drop-in and would
+# win with PasswordAuthentication/PermitRootLogin yes: removed
+fail2ban_retire_files:
+  - /etc/ssh/sshd_config.d/00password.conf
+
+# Relay tuning
+edge_proxy_read_timeout: 1800s
+edge_proxy_send_timeout: 1800s
+edge_proxy_connect_timeout: 10s
+
+# Hosts that are orange-cloud CNAMEs to byod (verify., blog., ...) reach the
+# edge from Cloudflare with the user in CF-Connecting-IP. nginx realip trusts
+# that header only from these ranges. Refresh from
+# https://www.cloudflare.com/ips-v4 and https://www.cloudflare.com/ips-v6.
+cloudflare_ip_ranges:
+  - 173.245.48.0/20
+  - 103.21.244.0/22
+  - 103.22.200.0/22
+  - 103.31.4.0/22
+  - 141.101.64.0/18
+  - 108.162.192.0/18
+  - 190.93.240.0/20
+  - 188.114.96.0/20
+  - 197.234.240.0/22
+  - 198.41.128.0/17
+  - 162.158.0.0/15
+  - 104.16.0.0/13
+  - 104.24.0.0/14
+  - 172.64.0.0/13
+  - 131.0.72.0/22
+  - 2400:cb00::/32
+  - 2606:4700::/32
+  - 2803:f800::/32
+  - 2405:b500::/32
+  - 2405:8100::/32
+  - 2a06:98c0::/29
+  - 2c0f:f248::/32
+
+# Eaglercraft backend (eaglercraft_backend_ip, set in all/main.yml) is reached
+# through amph, not from the edge directly. Edges therefore forward the mc
+# subdomains to amph (abulxt_origin_ip, on divide's vmbr1), which relays to the
+# backend.
+eaglercraft_via_ip: "{{ abulxt_origin_ip }}" # amph relays to the backend
+# Remote edges proxy both mc subdomains to amph's :443 relay (25-mc-relay.conf),
+# which forwards to the right backend port by Host.
+eaglercraft_panel_upstream: "https://{{ eaglercraft_via_ip }}"
+eaglercraft_ws_upstream: "https://{{ eaglercraft_via_ip }}"
+# Pterodactyl Wings daemon (mcnode). Remote edges proxy to amph's :443 relay
+# (25-mc-relay.conf), which forwards to Wings :8080 on the local subnet.
+wings_upstream: "https://{{ eaglercraft_via_ip }}"
+
+# --- krunk.io (KrunkNative) service hosts, relayed straight to kru ---
+# README.md "krunk.io routes" (edge_relay: conf.d/20-krunkio.conf). These names CNAME (DNS
+# only) to byod.abstracteducation.loan; every edge terminates TLS for them and proxies to
+# kru's nginx :443 (pinned cert + X-KN-Edge-Token, krunkio_origin_token in
+# group_vars/all/krunkio_secrets.yml). Not here: game servers ashburn-<n>.krunk.io (A records
+# to divide_public_ip, which DNATs tcp/udp 21015-21017,21115 to the kn CT, not the edge) and
+# the front end krunk.io/www. (GitHub Pages).
+# false (default until the cutover): the routes are removed and nothing else changes.
+krunkio_enabled: true
+krunkio_proxy_hosts:
+  - coordinator.krunk.io
+  - matchmaker.krunk.io
+  - play.krunk.io
+krunkio_assets_hosts:
+  - assets.krunk.io
+# Names kru serves with its own vhost and certificate (krunkio-routes.conf.j2): the edge proxies
+# them to https://krunkio_origin_ip with SNI = the name, without the pinned cert or the token.
+# dl.krunk.io (client downloads) is an A record (DNS only) to divide_public_ip since 2026-11-16.
+krunkio_direct_hosts:
+  - dl.krunk.io
+# kru (CT on divide, moved from meal): its vmbr1 address, the host nginx's :443. The edge is a
+# guest of divide too, so this never leaves the bridge (kru has no public address any more;
+# dl.krunk.io is an A record to divide_public_ip).
+krunkio_origin_ip: 172.16.5.47
+krunkio_origin_port: 443
+# SNI and name of kru's pinned self-signed certificate (roles/edge_relay/files/krunkio-origin.crt).
+krunkio_origin_sni: kn-origin.krunk.io
+# true: the krunk.io names above get certificates without amph's validator (its DNS check
+# would lag the CNAME flip by up to the resolver's TTL). Never send their SNI to an edge
+# before the name points at the fleet: the ACME check would fail, and five failures an hour
+# block the name at Let's Encrypt. false: the validator's DNS-match path, like any byod name.
+krunkio_tls_local_approve: true
+krunkio_client_max_body_size: 16m
+# Asset cache (assets.krunk.io): kru holds ~2 GB of assets + ~0.7 GB of update packages.
+krunkio_cache_dir: /var/cache/openresty/krunkio
+krunkio_cache_keys_zone: 32m
+krunkio_cache_max_size: 8g
+krunkio_cache_inactive: 30d
+krunkio_cache_slice: 4m
+# UDP streams, for stomp's HTTP/3 (QUIC over wisp UDP, stomp docs/http3.md).
+# edge-router.py only classifies TCP CONNECTs, so UDP leaves directly from the
+# edge's own IP (holyWisp `proxy-udp = direct`) without its name check; the
+# user chose this on 2026-11-10 so h3 works for every stomp visitor.
+holywisp_allow_udp: true
+holywisp_proxy_udp_direct: true
+# The one name check UDP does get: edge-router.py's name gate (role defaults,
+# edge_router_dns_port). A shady hostname's TCP leaves through amph's Mullvad
+# relay, which cannot carry UDP, so its UDP streams are refused instead of
+# leaving from the edge: the client falls back to TCP and the site sees one
+# address. The refusal is CLOSE 0x03 on the stream's first datagram, not the
+# 0x48 on CONNECT of a relay without UDP (RUNBOOK Phase 6, "UDP to a shady
+# name"). Adult names are not touched (an adult name's TCP is refused by the
+# router, its UDP is still relayed). The gate is also how a name the router
+# pinned to IPv4 loses its AAAA for holyWisp ("One family per name" there).
+# 0 turns the gate off.
+edge_router_dns_port: 1083
+# One egress address per edge for a client's TCP and UDP streams. Clean TCP is
+# dialled by edge-router.py in getaddrinfo order, IPv6 first on a dual-stack
+# edge; holyWisp dials UDP itself, IPv4 first by default. A stomp session that
+# mixed HTTP/2 and HTTP/3 therefore reached a site from two addresses, and
+# YouTube ties playback to the address that loaded the page. An edge with an
+# IPv6 address in the inventory (the test gateway_dns uses for its IPv6
+# egress) dials UDP IPv6 first, like its TCP; an edge without one keeps IPv4
+# first, the only family its TCP leaves by. Pin a value in host_vars if an
+# edge's two paths still differ (RUNBOOK Phase 6, "One egress address").
+holywisp_dns_order: "{{ 'ipv6first' if (edge_advertise_ips_v6 + edge_advertise_ips_v6_fracital) | length > 0 else 'ipv4first' }}"

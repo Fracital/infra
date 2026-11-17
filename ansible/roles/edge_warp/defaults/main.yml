@@ -1,0 +1,97 @@
+# Cloudflare WARP egress for a wisp edge's relayed traffic (README.md "Cloudflare WARP").
+#
+# Only clean Wisp TCP streams use WARP: edge-router.py sends them, and nothing else on
+# the box changes route. SSH, :53, :80/:443/:8080, the game ports, replies to inbound
+# connections, the amph/kru relays (172.16.5.0/24), the shady streams (amph's Mullvad
+# relay), the Gateway DoH lookups and holyWisp's direct UDP all stay on the main table.
+#
+# Off per host. Turn it on in host_vars once the user has approved it for that box, then
+# run the warp and wisp tags together, so the router picks up the change:
+#   ansible-playbook playbooks/wisp.yml --limit edge --tags warp,wisp
+edge_warp_enabled: false
+
+# How clean streams reach WARP. Set it per host.
+#   kernel  Kernel WireGuard interfaces warp0..N, one free WARP identity each, with
+#           Table=off and one fwmark + routing table per tunnel (systemd-networkd).
+#           edge-router.py puts SO_MARK on each clean dial, picks a tunnel per site
+#           by rendezvous hash, health-checks every tunnel and skips dead ones.
+#           Turning kernel mode on retires warp-cli on that box (edge_warp_retire_proxy).
+#   proxy   warp-cli in proxy mode (one identity, SOCKS5 on 127.0.0.1:edge_warp_proxy_port).
+#           The first build, kept for boxes that haven't moved yet.
+edge_warp_mode: kernel
+
+# Registering a WARP identity (wgcf in kernel mode, `warp-cli registration new` in
+# proxy mode) accepts Cloudflare's WARP terms of service. The role refuses to register
+# until this is true.
+edge_warp_accept_tos: false
+
+# edge-router.py when WARP can't take a stream (proxy mode: the proxy is down or refuses;
+# kernel mode: no tunnel is healthy for that address family): true sends the stream out
+# directly from the box (logged once a minute), false fails it.
+edge_warp_fallback_direct: true
+
+# Dead-man switch. Before the change, a transient timer is armed that undoes it
+# (kernel mode: /usr/local/sbin/edge-warp-off; proxy mode: `warp-cli disconnect`) this
+# many seconds later. The play cancels it only after a new SSH connection and HTTPS (and DNS,
+# edge_warp_check_dns) on the box's main address answer from the controller.
+edge_warp_deadman_seconds: 180
+# The dead-man confirmation also asks the box's PowerDNS for the wisp.baby apex (tasks/
+# deadman_confirm.yml). Off: PowerDNS is retired (roles/edge_dns) and nothing on the edge answers
+# :53, so the check would always fail and the timer would undo every change.
+edge_warp_check_dns: false
+
+# ---- kernel mode
+
+# Tunnels per box. The user's call: 3-4. Free WARP exits come from a pool of about 7
+# IPv4 addresses per Cloudflare colo, so more tunnels mostly collide on the same exits
+# (measured 2026-11-12 on wisp-ams). Changing the count later is safe:
+# new tunnels register, removed ones need `edge-warp-off` (README) first.
+edge_warp_tunnel_count: 4
+
+# Tunnel i (warp<i>) uses fwmark, routing table and ip-rule priority base+1+i
+# (0x7701, 0x7702, ...). A last rule at priority base+0x80 makes any mark in
+# base/0xff00 unreachable, so a mark whose tunnel is gone fails closed instead of
+# leaving through the main table. The low byte of the base must be 0. Priorities stay
+# below main (32766). Keep in step with edge_wisp's router config (it reads these).
+edge_warp_mark_base: 30464 # 0x7700
+
+# Whether the box's public address (public_ip) is configured on the box itself. false for a box
+# behind NAT (the edge, CT 201 on divide: public_ip 91.199.82.174 is DNATed to its private
+# 172.16.5.10). holyWisp marks literal-IP streams for WARP, so a stream to the box's own public
+# address (wisp.baby's speed test dials public_ip:80 through Wisp) left through a tunnel and came
+# back from a Cloudflare address, which the speed test refuses (403). With false, every tunnel's
+# .network gets a drop-in (50-warp<i>.network.d/90-own-address-unmarked.conf) with a rule ahead of
+# the mark rules: to public_ip, tcp to edge_warp_own_address_tcp_ports, lookup main. On a box that
+# holds its public address the kernel routes it locally and no rule is needed.
+edge_public_ip_on_box: true
+edge_warp_own_address_tcp_ports: [80]
+# Below the first mark rule (edge_warp_mark_base + 1 = 30465), so it wins over every mark.
+edge_warp_own_address_priority: 30400
+
+# Cloudflare's WARP WireGuard endpoint (engage.cloudflareclient.com), as a literal so
+# the tunnels come up without DNS. MTU as wgcf and the WARP clients use.
+edge_warp_endpoint: "162.159.192.1:2408"
+edge_warp_mtu: 1280
+
+# wgcf registers the free identities (one account per tunnel, in
+# /etc/abulxt/warp/warp<i>/). Pinned by version and SHA-256 (the GitHub release digest).
+edge_warp_wgcf_version: "2.3.1"
+edge_warp_wgcf_sha256: "4fb7a136aa470ece11d17949c7db07b040ec9c604742dc8680bcf1889f85d0c8"
+
+# Adopt identities that were registered earlier instead of registering new ones: a
+# directory on the box with wgcf's account-<n>.toml and profile-<n>.conf (n = 1..count).
+# Tunnel i takes n = i+1. Copied only where the tunnel has no identity yet.
+edge_warp_adopt_dir: ""
+
+# Turning kernel mode on also removes warp-cli from the box (disconnect, delete its
+# registration, purge cloudflare-warp and its apt repo), after the router has moved to
+# the tunnels.
+edge_warp_retire_proxy: true
+
+# ---- proxy mode
+
+# The local SOCKS5 port (warp-cli's default). Loopback only.
+edge_warp_proxy_port: 40000
+
+# apt repository (pkg.cloudflareclient.com has trixie and bookworm suites).
+edge_warp_apt_suite: "{{ ansible_distribution_release }}"

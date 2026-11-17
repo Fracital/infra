@@ -1,0 +1,16 @@
+{
+	"name": "infra",
+	"private": true,
+	"description": "Ansible and host configuration for the abulxt and Fracital edge fleet",
+	"license": "ISC",
+	"author": "David Reed",
+	"repository": "github:Fracital/infra",
+	"scripts": {
+		"format": "prettier --write .",
+		"format:check": "prettier --check .",
+		"check:prose": "node scripts/check-prose.mjs"
+	},
+	"devDependencies": {
+		"prettier": "3.9.10"
+	}
+}

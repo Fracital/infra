@@ -1,0 +1,39 @@
+---
+# RETIRED 2026-11-16. Nothing is delegated to these nameservers any more:
+# byod.fracit.al, byod.abstracteducation.loan and wisp.baby are plain Cloudflare
+# records for the edge (divide's 91.199.82.174), the only wisp box left (README.md
+# "Edge DNS"). PowerDNS does not run on the edge CT and the edge's firewall keeps :53 closed
+# (divide still DNATs tcp/udp 53 to it, docs/divide-host.md); playbooks/dns-edge.yml is kept
+# only for history.
+#
+# edge_dns: every wisp box is an authoritative nameserver (PowerDNS + LUA records)
+# for the byod names (group_vars/all/main.yml byod_names). The apex A/AAAA of each
+# name answers with the healthy addresses of the box nearest the client
+# (files/geo.lua), so a resolver in London gets Amsterdam, one in Johannesburg gets
+# Johannesburg. README.md "Edge DNS".
+
+# The boxes that serve DNS, and so the zone's NS set. Each is ns-<wisp_site>.<wisp_zone>.
+edge_dns_hosts: "{{ groups['wisp_edge'] }}"
+
+# Where this box listens: its main address, and the first IPv6 of its byod share.
+# These are the NS names' A/AAAA (and the glue at the registrar for wisp.baby).
+# systemd-resolved holds 127.0.0.53/54:53, so never a wildcard.
+# public_ip: a box behind NAT (the edge on divide) has a private ansible_host.
+edge_dns_ipv4: "{{ public_ip | default(ansible_host) }}"
+edge_dns_ipv6: "{{ (edge_advertise_ips_v6 | default([]))[0] | default('') }}"
+
+# TTL of every record the boxes serve (geo answers, site records, NS, SOA, the
+# ns-* addresses). One minute: a box that goes down drops out of answers within
+# one health-check interval plus this, and an NS change takes about as long.
+# (The registry's own copy of the wisp.baby NS and glue keeps the .baby TTL, 3600.)
+edge_dns_ttl: 60
+edge_dns_health_interval: 5
+edge_dns_hostmaster: "hostmaster.{{ wisp_zone }}"
+
+# edge_dns_health_paths (what an address must answer for the health check) is in
+# group_vars/all/main.yml: edge_warp's post-change check probes the same paths.
+
+# DB-IP's free country database (CC BY 4.0, monthly). The refresh timer fetches
+# the current month's file, falling back to last month's.
+edge_dns_mmdb: /var/lib/powerdns/dbip-country.mmdb
+edge_dns_mmdb_base_url: https://download.db-ip.com/free

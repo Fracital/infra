@@ -1,0 +1,17 @@
+# Managed by Ansible (abulxt roles/edge_warp, kernel mode; defaults edge_public_ip_on_box).
+# {{ public_ip }} is this box's public address but not configured on it (NAT): without this rule a
+# marked stream to it (wisp.baby's speed test through Wisp) leaves through WARP and comes back from
+# a Cloudflare address. Ahead of the mark rules ({{ edge_warp_mark_base | int + 1 }}+), it sends
+# those streams out the main table, through the NAT's hairpin. Every tunnel carries the same rule,
+# so it stays while any tunnel is up.
+{% for port in edge_warp_own_address_tcp_ports %}
+[RoutingPolicyRule]
+To={{ public_ip }}/32
+IPProtocol=tcp
+DestinationPort={{ port }}
+Table=main
+Priority={{ edge_warp_own_address_priority }}
+{% if not loop.last %}
+
+{% endif %}
+{% endfor %}

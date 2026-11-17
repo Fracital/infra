@@ -1,0 +1,29 @@
+# {{ pve_edge_vm_name }}: cloud-init network-config (v2, rendered to netplan in
+# the guest). Managed by Ansible (pve_edge_vm, README.md "Edge VM on Proxmox").
+# The NIC is matched by its fixed MAC and named {{ pve_edge_vm_guest_if }}
+# (host_vars {{ pve_edge_vm_hostvar_prefix }}primary_if).
+version: 2
+ethernets:
+  {{ pve_edge_vm_guest_if }}:
+    match:
+      macaddress: {{ pve_edge_vm_mac_upper | lower | to_json }}
+    set-name: {{ pve_edge_vm_guest_if }}
+    dhcp4: false
+    dhcp6: false
+    accept-ra: false
+    addresses:
+{% for address in pve_edge_vm_ipv4_addresses + pve_edge_vm_ipv6_addresses %}
+      - {{ address | to_json }}
+{% endfor %}
+    routes:
+      - to: 0.0.0.0/0
+        via: {{ pve_edge_vm_ipv4_gateway | to_json }}
+{% if pve_edge_vm_ipv6_addresses | length > 0 %}
+      - to: "::/0"
+        via: {{ pve_edge_vm_ipv6_gateway | to_json }}
+{% endif %}
+    nameservers:
+      addresses:
+{% for ns in pve_edge_vm_nameservers %}
+        - {{ ns | to_json }}
+{% endfor %}

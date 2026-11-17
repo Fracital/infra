@@ -1,0 +1,173 @@
+# Apply a playbook to production. Never automatic: it runs when someone starts it
+# (Actions tab, `gh workflow run apply.yml`) or when a hook sends a repository_dispatch
+# event of type `apply`, and then waits for approval on the `production` environment.
+#
+# Hook (any client with a token that can write to this repo):
+#   gh api repos/Fracital/infra/dispatches -f event_type=apply \
+#     -F 'client_payload[playbook]=edges' -F 'client_payload[check]=false'
+# client_payload: playbook (required), limit, tags, check (default true), diff (default false).
+#
+# Secrets (environment `production`): INFRA_SSH_KEY and the vars-file secrets listed in
+# scripts/ci-secrets.json. Repository secret: ANSIBLE_PRIVATE_VARS. Variable:
+# SSH_KNOWN_HOSTS (the hosts' public keys; strict checking, nothing is accepted on first use).
+#
+# This repo is public and so are its Actions logs. --diff prints rendered files, which can
+# hold tokens and private names that the masking misses; it is off unless asked for.
+name: Apply
+
+on:
+  workflow_dispatch:
+    inputs:
+      playbook:
+        description: Playbook (ansible/playbooks/<name>.yml)
+        required: true
+        type: choice
+        options:
+          [site, origin, edges, wisp, firewall, fail2ban, fracital-origin, dns]
+      limit:
+        description: --limit (hosts or groups, optional)
+        required: false
+        type: string
+      tags:
+        description: --tags (optional)
+        required: false
+        type: string
+      check:
+        description: Check mode (--check); untick to change the hosts
+        required: true
+        type: boolean
+        default: true
+      diff:
+        description: --diff (the log is public; it may show rendered secrets)
+        required: true
+        type: boolean
+        default: false
+  repository_dispatch:
+    types: [apply]
+
+permissions:
+  contents: read
+
+# One run at a time against production, and a queued run never cancels a running one.
+concurrency:
+  group: apply-production
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    name: ansible-playbook
+    runs-on: ubuntu-24.04
+    environment: production
+    timeout-minutes: 90
+    steps:
+      # Inputs reach the shell only through the environment and are checked against an
+      # allowlist, so a dispatch payload cannot inject arguments or commands.
+      - name: Resolve inputs
+        id: args
+        env:
+          EVENT: ${{ github.event_name }}
+          PLAYBOOK: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.playbook || inputs.playbook }}
+          LIMIT: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.limit || inputs.limit }}
+          TAGS: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.tags || inputs.tags }}
+          CHECK: ${{ github.event_name == 'repository_dispatch' && format('{0}', github.event.client_payload.check) || format('{0}', inputs.check) }}
+          DIFF: ${{ github.event_name == 'repository_dispatch' && format('{0}', github.event.client_payload.diff) || format('{0}', inputs.diff) }}
+        run: |
+          case "$PLAYBOOK" in
+            site|origin|edges|wisp|firewall|fail2ban|fracital-origin|dns) ;;
+            *) echo "::error::playbook '$PLAYBOOK' is not one of the allowed playbooks"; exit 1 ;;
+          esac
+          allowed='^[A-Za-z0-9_.,:!&*-]*$'
+          for v in LIMIT TAGS; do
+            if ! [[ ${!v} =~ $allowed ]]; then
+              echo "::error::$v has characters outside [A-Za-z0-9_.,:!&*-]"; exit 1
+            fi
+          done
+          # Check mode unless a run explicitly asks for false.
+          [ "$CHECK" = "false" ] && check_mode=false || check_mode=true
+          [ "$DIFF" = "true" ] && diff_mode=true || diff_mode=false
+          {
+            echo "playbook=$PLAYBOOK"
+            echo "limit=$LIMIT"
+            echo "tags=$TAGS"
+            echo "check=$check_mode"
+            echo "diff=$diff_mode"
+          } >> "$GITHUB_OUTPUT"
+          echo "### $PLAYBOOK (check: $check_mode, diff: $diff_mode, limit: ${LIMIT:-all}, tags: ${TAGS:-all}, via $EVENT)" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Install Ansible
+        run: |
+          python3 -m venv ~/venv
+          ~/venv/bin/pip install -q -r ansible/requirements.txt
+          echo "$HOME/venv/bin" >> "$GITHUB_PATH"
+
+      - name: Install collections
+        working-directory: ansible
+        run: ansible-galaxy collection install -r requirements.yml
+
+      - name: Write the vars files
+        env:
+          ANSIBLE_PRIVATE_VARS: ${{ secrets.ANSIBLE_PRIVATE_VARS }}
+          BYOD_TOKEN: ${{ secrets.BYOD_TOKEN }}
+          AUTO_SSL_REDIS_PASSWORD: ${{ secrets.AUTO_SSL_REDIS_PASSWORD }}
+          GCORE_API_TOKEN: ${{ secrets.GCORE_API_TOKEN }}
+          CLOUDFLARE_ZT_API_TOKEN: ${{ secrets.CLOUDFLARE_ZT_API_TOKEN }}
+          SHADY_RELAY_PASSWORD: ${{ secrets.SHADY_RELAY_PASSWORD }}
+          WISP_GATE_KEY: ${{ secrets.WISP_GATE_KEY }}
+          HOLYWISP_CLIENT_KEY_MASTER: ${{ secrets.HOLYWISP_CLIENT_KEY_MASTER }}
+          KRUNKIO_ORIGIN_TOKEN: ${{ secrets.KRUNKIO_ORIGIN_TOKEN }}
+          FRACITAL_ORIGIN_TOKEN: ${{ secrets.FRACITAL_ORIGIN_TOKEN }}
+          FRACITAL_WISP_GATE_KEY: ${{ secrets.FRACITAL_WISP_GATE_KEY }}
+          FRACITAL_ORIGIN_TLS_KEY: ${{ secrets.FRACITAL_ORIGIN_TLS_KEY }}
+          HOLYUNB_WISP_GATE_KEY: ${{ secrets.HOLYUNB_WISP_GATE_KEY }}
+        run: python3 scripts/write-ci-vars.py
+
+      - name: SSH
+        env:
+          INFRA_SSH_KEY: ${{ secrets.INFRA_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ vars.SSH_KNOWN_HOSTS }}
+        run: |
+          if [ -z "$INFRA_SSH_KEY" ] || [ -z "$SSH_KNOWN_HOSTS" ]; then
+            echo "::error::INFRA_SSH_KEY (secret) and SSH_KNOWN_HOSTS (variable) must both be set"; exit 1
+          fi
+          install -d -m 700 ~/.ssh
+          (umask 077; printf '%s\n' "$INFRA_SSH_KEY" > ~/.ssh/infra_ci)
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          # Applies to ProxyJump's inner ssh too: one key, nothing accepted on first use.
+          cat > ~/.ssh/config <<'CFG'
+          Host *
+            User root
+            IdentityFile ~/.ssh/infra_ci
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            UserKnownHostsFile ~/.ssh/known_hosts
+          CFG
+
+      - name: ansible-playbook
+        working-directory: ansible
+        env:
+          PLAYBOOK: ${{ steps.args.outputs.playbook }}
+          LIMIT: ${{ steps.args.outputs.limit }}
+          TAGS: ${{ steps.args.outputs.tags }}
+          CHECK: ${{ steps.args.outputs.check }}
+          DIFF: ${{ steps.args.outputs.diff }}
+          # ansible.cfg's ssh_args, with strict host key checking instead of accept-new.
+          ANSIBLE_SSH_ARGS: -o ControlMaster=auto -o ControlPersist=10m -o StrictHostKeyChecking=yes -o PreferredAuthentications=publickey -o GSSAPIAuthentication=no
+          ANSIBLE_FORCE_COLOR: "1"
+        run: |
+          args=("playbooks/$PLAYBOOK.yml")
+          [ -n "$LIMIT" ] && args+=(--limit "$LIMIT")
+          [ -n "$TAGS" ] && args+=(--tags "$TAGS")
+          [ "$CHECK" = "true" ] && args+=(--check)
+          [ "$DIFF" = "true" ] && args+=(--diff)
+          ansible-playbook "${args[@]}"
+
+      - name: Remove the vars files and key
+        if: always()
+        run: |
+          shred -u ansible/inventory/group_vars/all/*secrets.yml ansible/inventory/group_vars/all/private.yml ~/.ssh/infra_ci 2>/dev/null || true

@@ -1,0 +1,149 @@
+---
+# Put the staged /etc/network/interfaces live over SSH without being able to lose the
+# box (the same shape as edge_firewall's apply.yml):
+#   1. back up the live file to /etc/network/interfaces.bak-pve-<timestamp>.
+#   2. arm pve-net-rollback.timer: after pve_net_rollback_seconds it restores the
+#      backup, reloads, and reboots if the network is still dead.
+#   3. install the new file and run `ifreload -a`, detached from this SSH session.
+#   4. drop the multiplexed SSH connection and log in again on a fresh one.
+#   5. check vmbr0's addresses, the default route, the bond and DNS.
+#   6. disarm the timer. If 4 or 5 fails the play fails and the timer rolls back.
+# Note: the include's `when` is inherited by the meta task below; Ansible ignores it
+# there (warning only).
+
+- name: Name the backup
+  ansible.builtin.set_fact:
+    pve_net_backup: "/etc/network/interfaces.bak-pve-{{ now(fmt='%Y%m%d%H%M%S') }}"
+
+- name: Back up the live /etc/network/interfaces to {{ pve_net_backup }}
+  ansible.builtin.command: cp -p /etc/network/interfaces {{ pve_net_backup }}
+  args:
+    creates: "{{ pve_net_backup }}"
+
+# systemd module can't reset-failed or ignore a unit that doesn't exist.
+- name: Clear any leftover rollback unit # noqa: command-instead-of-module
+  ansible.builtin.shell: |
+    systemctl stop pve-net-rollback.timer pve-net-rollback.service 2>/dev/null
+    systemctl reset-failed pve-net-rollback.timer pve-net-rollback.service 2>/dev/null
+    true
+  changed_when: false
+
+- name: Arm the network rollback, seconds = {{ pve_net_rollback_seconds }}
+  ansible.builtin.command:
+    argv:
+      "{{ ['systemd-run', '--unit=pve-net-rollback', '--description=Proxmox host network rollback (armed by Ansible)',
+      '--on-active=' ~ pve_net_rollback_seconds, '/usr/local/sbin/pve-net-rescue', pve_net_backup] + pve_net_probes }}"
+  changed_when: true
+
+- name: Install the new /etc/network/interfaces
+  ansible.builtin.copy:
+    src: /etc/network/interfaces.pve-staged
+    dest: /etc/network/interfaces
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0644"
+
+# Detached: the SSH session may die while the uplink's address moves to vmbr0. Then
+# the physical ports must hold no address of their own (the panel's config put the
+# main IPv4 on the uplink, and a leftover would duplicate vmbr0's subnet route on a
+# bond port), so they are flushed whatever ifreload did. In 802.3ad the uplink is out
+# of the bond but carries the bond's MAC: it goes down, or the switch sees the MAC on
+# two ports.
+- name: Reload the network (ifreload -a)
+  ansible.builtin.shell: |
+    /usr/sbin/ifreload -a
+    rc=$?
+    for dev in {{ (pve_10g_ifs + [pve_uplink_if]) | join(' ') }}; do
+      ip -4 addr flush dev "$dev" scope global
+      ip -6 addr flush dev "$dev" scope global
+    done
+    {% if pve_uplink_if not in pve_bond_slaves %}
+    ip link set dev {{ pve_uplink_if }} down
+    {% endif %}
+    exit $rc
+  async: "{{ pve_net_rollback_seconds | int }}"
+  poll: 0
+  register: pve_net_reload
+  changed_when: true
+
+- name: Drop the multiplexed SSH connection
+  ansible.builtin.meta: reset_connection
+
+- name: Log in again on a fresh SSH connection (the rollback fires if this fails)
+  ansible.builtin.wait_for_connection:
+    delay: 10
+    timeout: "{{ (pve_net_rollback_seconds | int) - 60 }}"
+
+- name: Wait for ifreload to finish
+  ansible.builtin.async_status:
+    jid: "{{ pve_net_reload.ansible_job_id }}"
+  register: pve_net_reload_result
+  until: pve_net_reload_result.finished
+  retries: 10
+  delay: 3
+
+- name: Read vmbr0's addresses
+  ansible.builtin.command: ip -o addr show dev vmbr0
+  register: pve_vmbr0_addrs
+  changed_when: false
+
+- name: Read the IPv4 default route
+  ansible.builtin.command: ip -4 route show default
+  register: pve_default_route
+  changed_when: false
+
+- name: Read the bond's state
+  ansible.builtin.command: cat /proc/net/bonding/bond0
+  register: pve_bond_state
+  changed_when: false
+
+- name: Resolve a name (DNS still works)
+  ansible.builtin.command: getent ahosts {{ pve_repo_uri | urlsplit('hostname') }}
+  register: pve_dns_check
+  changed_when: false
+  failed_when: false
+
+- name: Require the new network to be complete (else the rollback fires)
+  ansible.builtin.assert:
+    that:
+      - (' ' ~ pve_main_ip ~ '/' ~ pve_main_prefix ~ ' ') in pve_vmbr0_addrs.stdout
+      - pve_ipv6 | length == 0 or (' ' ~ pve_ipv6 ~ ' ') in pve_vmbr0_addrs.stdout
+      - ('via ' ~ pve_gateway ~ ' dev vmbr0') in pve_default_route.stdout
+      - "pve_bond_state.stdout is search('(?m)^MII Status: up')"
+      - pve_dns_check.rc == 0
+    fail_msg: >-
+      The new network is incomplete; pve-net-rollback.timer restores {{ pve_net_backup }} within
+      {{ pve_net_rollback_seconds }} s of arming. vmbr0: {{ pve_vmbr0_addrs.stdout_lines | join(' | ') }};
+      default: {{ pve_default_route.stdout }}; DNS rc {{ pve_dns_check.rc }}.
+    quiet: true
+
+- name: Disarm the network rollback
+  ansible.builtin.shell: |
+    set -e
+    if ! systemctl is-active --quiet pve-net-rollback.timer; then
+      echo "rollback timer is gone: it already fired (see journalctl -t pve-net-rescue); the old config is back" >&2
+      exit 1
+    fi
+    systemctl stop pve-net-rollback.timer
+    systemctl reset-failed pve-net-rollback.timer pve-net-rollback.service 2>/dev/null || true
+  changed_when: true
+
+- name: Network applied
+  ansible.builtin.debug:
+    msg: "New /etc/network/interfaces is live; the previous one is {{ pve_net_backup }}."
+
+# Informational only: the fresh SSH login already proved IPv4.
+- name: Ping the IPv6 gateway
+  ansible.builtin.command: ping -6 -c 3 -W 2 {{ pve_ipv6_gateway }}
+  register: pve_v6_ping
+  changed_when: false
+  failed_when: false
+  when: pve_ipv6_gateway | length > 0
+
+- name: Warn when the IPv6 gateway does not answer
+  ansible.builtin.debug:
+    msg: "IPv6 gateway {{ pve_ipv6_gateway }} did not answer ping from vmbr0: check pve_ipv6 / pve_ipv6_gateway."
+  when:
+    - pve_ipv6_gateway | length > 0
+    - pve_v6_ping.rc | default(0) != 0

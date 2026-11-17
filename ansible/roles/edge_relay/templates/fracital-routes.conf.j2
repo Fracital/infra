@@ -1,0 +1,325 @@
+# Fracital hosts. Managed by Ansible (edge_relay role, fracital_enabled).
+# README.md "Fracital routes". Host-specific blocks win over the 00-edge-relay catch-all,
+# so these names never reach amph:
+#
+#   client -> Cloudflare (proxied CNAME to {{ fracital_byod_fqdn }}) -> edge :443
+#     -> keyed relay path: this edge's holyWisp (127.0.0.1:{{ edge_wisp_port }})
+#     -> everything else: https://{{ fracital_origin_ip }}:{{ fracital_origin_port }} (terp OpenResty,
+#        pinned cert, X-FRX-Edge-Token; terp's firewall only admits the edges)
+#
+#   fracital_wisp_hosts ({{ fracital_wisp_hosts | default([]) | join(', ') }}): holyWisp's built-in web
+#     client on GET / (no WebSocket there), the keyed relay path and GET /health (holyWisp's own)
+#     only; everything else is 403 here. No terp relay, and /stats is never exposed.
+#
+#   Fracital's half of this edge's addresses (edge_advertise_ips_fracital / _v6_fracital, the
+#   byod.fracit.al pool) has the app server below as its default_server on :80 and :443: any Host,
+#   including a BYOD name CNAMEd to byod.fracit.al, renders Fracital there, never abulxt. nginx
+#   matches a connection to an explicitly listened address only against servers that listen on
+#   that address, so every Fracital server here lists those addresses too; the abulxt catch-all
+#   (00-edge-relay.conf, wildcard default_server) stays the default on the abstract addresses.
+
+upstream fracital_origin {
+    server {{ fracital_origin_ip }}:{{ fracital_origin_port }};
+    keepalive 32;
+}
+
+# Keepalive to terp needs an empty Connection header except for a WebSocket upgrade.
+map $http_upgrade $fracital_connection {
+    ~*^websocket$ upgrade;
+    default       "";
+}
+
+# Edge cache for Fracital's content-hashed bundles (/assets/<hash>.<ext>, location below).
+# Only the Fracital app names may use it (not fracital_extra_hosts: other apps on terp), and
+# only a response terp marks immutable is stored; nginx itself never stores a response with
+# Set-Cookie, private, no-store, no-cache or without a max-age. Bundle names change with their
+# content, so a deploy needs no purge.
+proxy_cache_path {{ fracital_cache_dir }} levels=1:2 keys_zone=fracital_assets:{{ fracital_cache_keys_zone }}
+                 max_size={{ fracital_cache_max_size }} inactive={{ fracital_cache_inactive }} use_temp_path=off;
+
+map $host $fracital_asset_skip {
+    hostnames;
+    default 1;
+{% for h in fracital_hosts + (fracital_hosts | map('regex_replace', '^', 'www.') | list) + [fracital_byod_fqdn] %}
+    {{ h }} 0;
+{% endfor %}
+}
+
+map $upstream_http_cache_control $fracital_asset_mutable {
+    ~*immutable 0;
+    default     1;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+{% for ip in edge_advertise_ips_fracital | default([]) %}
+    listen {{ ip }}:80 default_server;
+{% endfor %}
+{% for ip in edge_advertise_ips_v6_fracital | default([]) %}
+    listen [{{ ip }}]:80 default_server;
+{% endfor %}
+    server_name {{ fracital_server_names | join(' ') }};
+
+    location /.well-known/acme-challenge/ {
+        content_by_lua_block {
+            auto_ssl_instance:challenge_server()
+        }
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+{% for ip in edge_advertise_ips_fracital | default([]) %}
+    listen {{ ip }}:443 ssl default_server;
+{% endfor %}
+{% for ip in edge_advertise_ips_v6_fracital | default([]) %}
+    listen [{{ ip }}]:443 ssl default_server;
+{% endfor %}
+    http2 on;
+    server_name {{ fracital_server_names | join(' ') }};
+
+    ssl_certificate_by_lua_block {
+        auto_ssl_instance:ssl_certificate()
+    }
+    ssl_certificate {{ openresty_auto_ssl_dir }}/fallback.crt;
+    ssl_certificate_key {{ openresty_auto_ssl_dir }}/fallback.key;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    client_max_body_size {{ fracital_client_max_body_size }};
+
+    # Zones with Always Use HTTPS send Let's Encrypt's http-01 check here over :443.
+    location /.well-known/acme-challenge/ {
+        content_by_lua_block {
+            auto_ssl_instance:challenge_server()
+        }
+    }
+
+    location ~ ^/{{ fracital_wisp_path }}/{{ fracital_wisp_gate_key }}(/.*)?$ {
+        set $relay_tail $1;
+        if ($relay_tail = "") {
+            set $relay_tail "/";
+        }
+        proxy_pass http://127.0.0.1:{{ edge_wisp_port }}$relay_tail;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $ws_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_buffering off;
+        # An upgraded connection is relayed through one buffer of proxy_buffer_size each way: the
+        # 4-8 KiB default held one WebSocket to about 400 MiB/s at a full core (defaults/main.yml).
+        proxy_buffer_size {{ edge_ws_proxy_buffer }};
+        proxy_buffers 4 {{ edge_ws_proxy_buffer }};
+        proxy_busy_buffers_size {{ edge_ws_proxy_buffer }};
+        proxy_cache off;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        proxy_connect_timeout 10s;
+{% if wispstats_on | bool %}
+        # wisp.baby live stats: a 101 is a relay session starting, the log phase its end (lua/wispstats.lua).
+        header_filter_by_lua_block {
+            require("wispstats").relay_open("fracital", true)
+        }
+        log_by_lua_block {
+            require("wispstats").relay_close()
+        }
+{% endif %}
+    }
+
+    # Wrong or missing key: refused here, never relayed to terp.
+    location ~ ^/{{ fracital_wisp_path }}(/.*)?$ {
+        return 403 "Forbidden";
+    }
+
+    # ads.txt lives with the ad partner, keyed by the site's own hostname
+    # (every Fracital name, decoys and BYOD CNAMEs included, since this server
+    # is the default on the Fracital addresses). Answered at the edge; never
+    # relayed to terp.
+    location = /ads.txt {
+        return 302 https://rev.iq/$host/ads.txt;
+    }
+
+    # Content-hashed bundles, cached here (see fracital_cache_* in group_vars/all/fracital.yml).
+    # terp is asked for identity encoding so one stored copy fits every client; this edge gzips
+    # on the way out and answers 304s and ranges from the cache. The query string is not part of
+    # the key: terp serves these files by path alone. Other hosts, requests with Authorization
+    # and responses not marked immutable pass straight through.
+    location ~ "^/assets/[A-Za-z0-9_-]{6,64}\.(?:js|mjs|css|wasm|woff2?|ttf|otf|png|jpe?g|gif|webp|avif|svg|ico)$" {
+        include {{ openresty_conf_dir }}/snippets/fracital-origin.conf;
+        proxy_set_header Accept-Encoding "";
+        proxy_buffering on;
+        proxy_cache fracital_assets;
+        proxy_cache_key $host$uri;
+        proxy_cache_bypass $fracital_asset_skip $http_authorization;
+        proxy_no_cache $fracital_asset_skip $http_authorization $fracital_asset_mutable;
+        proxy_cache_lock on;
+        proxy_cache_lock_timeout 30s;
+        proxy_cache_revalidate on;
+        proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;
+        proxy_cache_background_update on;
+        add_header X-Cache-Status $upstream_cache_status always;
+        proxy_read_timeout 120s;
+        proxy_send_timeout 120s;
+    }
+
+    location / {
+        include {{ openresty_conf_dir }}/snippets/fracital-origin.conf;
+        proxy_buffering off;
+        proxy_read_timeout {{ fracital_proxy_timeout }};
+        proxy_send_timeout {{ fracital_proxy_timeout }};
+    }
+}
+{% if fracital_wisp_hosts | default([]) | length > 0 %}
+
+# Dedicated relay names: web client on /, keyed relay path, GET /health, nothing else.
+server {
+    listen 80;
+    listen [::]:80;
+{% for ip in edge_advertise_ips_fracital | default([]) %}
+    listen {{ ip }}:80;
+{% endfor %}
+{% for ip in edge_advertise_ips_v6_fracital | default([]) %}
+    listen [{{ ip }}]:80;
+{% endfor %}
+    server_name {{ fracital_wisp_hosts | join(' ') }};
+
+    location /.well-known/acme-challenge/ {
+        content_by_lua_block {
+            auto_ssl_instance:challenge_server()
+        }
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+{% for ip in edge_advertise_ips_fracital | default([]) %}
+    listen {{ ip }}:443 ssl;
+{% endfor %}
+{% for ip in edge_advertise_ips_v6_fracital | default([]) %}
+    listen [{{ ip }}]:443 ssl;
+{% endfor %}
+    http2 on;
+    server_name {{ fracital_wisp_hosts | join(' ') }};
+
+    ssl_certificate_by_lua_block {
+        auto_ssl_instance:ssl_certificate()
+    }
+    ssl_certificate {{ openresty_auto_ssl_dir }}/fallback.crt;
+    ssl_certificate_key {{ openresty_auto_ssl_dir }}/fallback.key;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    location /.well-known/acme-challenge/ {
+        content_by_lua_block {
+            auto_ssl_instance:challenge_server()
+        }
+    }
+
+    # Same keyed location as above: the relay URL works on this name and on the app names alike.
+    location ~ ^/{{ fracital_wisp_path }}/{{ fracital_wisp_gate_key }}(/.*)?$ {
+        set $relay_tail $1;
+        if ($relay_tail = "") {
+            set $relay_tail "/";
+        }
+        proxy_pass http://127.0.0.1:{{ edge_wisp_port }}$relay_tail;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $ws_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_buffering off;
+        # An upgraded connection is relayed through one buffer of proxy_buffer_size each way: the
+        # 4-8 KiB default held one WebSocket to about 400 MiB/s at a full core (defaults/main.yml).
+        proxy_buffer_size {{ edge_ws_proxy_buffer }};
+        proxy_buffers 4 {{ edge_ws_proxy_buffer }};
+        proxy_busy_buffers_size {{ edge_ws_proxy_buffer }};
+        proxy_cache off;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        proxy_connect_timeout 10s;
+{% if wispstats_on | bool %}
+        # wisp.baby live stats: a 101 is a relay session starting, the log phase its end (lua/wispstats.lua).
+        header_filter_by_lua_block {
+            require("wispstats").relay_open("fracital", true)
+        }
+        log_by_lua_block {
+            require("wispstats").relay_close()
+        }
+{% endif %}
+    }
+
+    # holyWisp's built-in browser client on a plain GET (one self-contained HTML page; its
+    # stylesheets come from jsDelivr), and the relay itself on a WebSocket upgrade:
+    # wss://holywisp.fracit.al/ is the public demo endpoint, no key. holyWisp's own egress policy,
+    # rate limits and reputation are the abuse control, the same as on the keyed path.
+    location = / {
+        limit_except GET {
+            deny all;
+        }
+        proxy_pass http://127.0.0.1:{{ edge_wisp_port }}/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $ws_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_buffering off;
+        # An upgraded connection is relayed through one buffer of proxy_buffer_size each way: the
+        # 4-8 KiB default held one WebSocket to about 400 MiB/s at a full core (defaults/main.yml).
+        proxy_buffer_size {{ edge_ws_proxy_buffer }};
+        proxy_buffers 4 {{ edge_ws_proxy_buffer }};
+        proxy_busy_buffers_size {{ edge_ws_proxy_buffer }};
+        proxy_cache off;
+        proxy_connect_timeout 10s;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+{% if wispstats_on | bool %}
+        # wisp.baby live stats: a 101 is a relay session starting, the log phase its end (lua/wispstats.lua).
+        header_filter_by_lua_block {
+            require("wispstats").relay_open("fracital")
+        }
+        log_by_lua_block {
+            require("wispstats").relay_close()
+        }
+{% endif %}
+    }
+
+    # Monitoring: holyWisp's own /health ({"status":"ok"}), GET only. /stats stays loopback-only.
+    location = /health {
+        limit_except GET {
+            deny all;
+        }
+        proxy_pass http://127.0.0.1:{{ edge_wisp_port }}/health;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 5s;
+        add_header Cache-Control "no-store" always;
+    }
+
+    # Anything else on these names (wrong key, /stats, /): refused, never relayed to terp.
+    location / {
+        return 403 "Forbidden";
+    }
+}
+{% endif %}

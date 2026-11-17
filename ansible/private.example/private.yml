@@ -1,0 +1,15 @@
+---
+# Copy to inventory/group_vars/all/private.yml (gitignored) and fill in.
+# Private, not secret: names and ids kept out of the public repo (README.md "Private values").
+
+# Fracital's cloak decoy names (apex only; www. is added). Served like fracital_direct_hosts.
+fracital_cloak_hosts:
+  - decoy-one.example.org
+  - decoy-two.example.org
+
+# Cloudflare Zero Trust Gateway (roles/gateway_dns, edge_wisp's classifier).
+cloudflare_zt_account_id: 0123456789abcdef0123456789abcdef
+cloudflare_zt_gateway_locations:
+  - { name: block-adult, id: 00000000000000000000000000000001, doh: aaaaaaaaaa }
+  - { name: block-shady, id: 00000000000000000000000000000002, doh: bbbbbbbbbb }
+  - { name: plain, id: 00000000000000000000000000000003, doh: cccccccccc }

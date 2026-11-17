@@ -1,0 +1,51 @@
+---
+# pve_edge_vm_rebuild: destroy the edge VM so tasks/main.yml re-clones it from
+# the current template. Its SSH host keys and MAC are kept (state dir, defaults),
+# its disk is not: everything on it is rebuilt by wisp.yml.
+
+- name: The rebuild is confirmed for this one box
+  ansible.builtin.assert:
+    that:
+      - pve_edge_vm_rebuild_confirm == pve_edge_vm_name
+      - ansible_play_hosts_all | length == 1
+      - pve_edge_vm_ours
+    fail_msg: >-
+      Refusing to destroy VM {{ pve_edge_vm_vmid }} on {{ inventory_hostname }}. A rebuild needs
+      -e pve_edge_vm_rebuild_confirm={{ pve_edge_vm_name }} and --limit to this one Proxmox host
+      (this play has {{ ansible_play_hosts_all | length }}), and the VM must be ours ({{ pve_edge_vm_name }},
+      {{ pve_edge_vm_description }}.* description).
+    quiet: true
+
+- name: Stop VM {{ pve_edge_vm_vmid }} ({{ pve_edge_vm_name }})
+  ansible.builtin.command:
+    argv:
+      [
+        qm,
+        shutdown,
+        "{{ pve_edge_vm_vmid }}",
+        --timeout,
+        "120",
+        --forceStop,
+        "1",
+      ]
+  when: pve_edge_vm_status.stdout is search('status:[ ]running')
+  changed_when: true
+
+- name: Destroy VM {{ pve_edge_vm_vmid }} ({{ pve_edge_vm_name }})
+  ansible.builtin.command:
+    argv:
+      [
+        qm,
+        destroy,
+        "{{ pve_edge_vm_vmid }}",
+        --purge,
+        "1",
+        --destroy-unreferenced-disks,
+        "1",
+      ]
+  changed_when: true
+
+- name: Forget the destroyed VM
+  ansible.builtin.set_fact:
+    pve_edge_vm_exists: false
+    pve_edge_vm_ours: false

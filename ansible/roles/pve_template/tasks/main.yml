@@ -1,0 +1,218 @@
+---
+# Build the golden Debian 13 template (VM pve_template_vmid) on a Proxmox VE host
+# with plain `qm`, run as root on the host: no API token, no proxmoxer. Rebuilt
+# only when pve_template_image_release changes (defaults/main.yml).
+
+- name: Fix the template's marker
+  ansible.builtin.set_fact:
+    pve_template_marker: "abulxt-pve-template.{{ pve_template_image_file | replace('.qcow2', '') }}"
+    pve_template_image_path: "{{ pve_template_image_dir }}/{{ pve_template_image_file }}"
+
+- name: Require a Proxmox VE host
+  ansible.builtin.command: pveversion
+  register: pve_template_pveversion
+  changed_when: false
+
+- name: Read VM {{ pve_template_vmid }} (the template)
+  ansible.builtin.command: qm config {{ pve_template_vmid }}
+  register: pve_template_config
+  changed_when: false
+  failed_when: false
+
+# Ours = carries an abulxt-pve-template.* description (any image). Current = this
+# image's marker and already converted to a template.
+- name: Compare the template with pve_template_image_release
+  ansible.builtin.set_fact:
+    pve_template_exists: "{{ pve_template_config.rc == 0 }}"
+    pve_template_ours: "{{ pve_template_config.rc == 0 and pve_template_config.stdout is search('(?m)^description:[ ]abulxt-pve-template\\.') }}"
+    pve_template_current: >-
+      {{ pve_template_config.rc == 0
+         and pve_template_config.stdout is search('(?m)^description:[ ]' ~ (pve_template_marker | regex_escape) ~ '\s*$')
+         and pve_template_config.stdout is search('(?m)^template:[ ]1\s*$') }}
+
+- name: VM {{ pve_template_vmid }} is free or is our template
+  ansible.builtin.assert:
+    that: not pve_template_exists or pve_template_ours
+    fail_msg: >-
+      VM {{ pve_template_vmid }} exists on {{ inventory_hostname }} and is not an abulxt template
+      (no abulxt-pve-template.* description). Nothing was changed: free the id or set pve_template_vmid.
+    quiet: true
+
+- name: Build the template from {{ pve_template_image_file }}
+  when: not pve_template_current
+  block:
+    - name: List the host's storages
+      ansible.builtin.command: pvesm status --enabled 1
+      register: pve_template_pvesm_status
+      changed_when: false
+
+    # pvesm status: "Name Type Status Total Used Available %", one storage per line.
+    - name: Choose the template's storage
+      ansible.builtin.set_fact:
+        pve_template_storage: >-
+          {{ pve_storage if pve_storage | length > 0 else
+             (pve_storage_preference
+              | select('in', pve_template_pvesm_status.stdout_lines[1:] | map('split')
+                             | selectattr('2', 'equalto', 'active') | map(attribute='0') | list)
+              | first | default('')) }}
+
+    - name: A storage was found
+      ansible.builtin.assert:
+        that: pve_template_storage | length > 0
+        fail_msg: >-
+          None of {{ pve_storage_preference | join(', ') }} is an active storage on {{ inventory_hostname }}
+          (pvesm status). Set pve_storage.
+        quiet: true
+
+    - name: Storage {{ pve_template_storage }} holds VM disks
+      ansible.builtin.include_tasks: storage_content.yml
+      vars:
+        pve_storage_content_id: "{{ pve_template_storage }}"
+        pve_storage_content_type: images
+
+    - name: Fetch SHA512SUMS of {{ pve_template_image_release }}
+      ansible.builtin.uri:
+        url: "{{ pve_template_image_base_url }}/{{ pve_template_image_release }}/SHA512SUMS"
+        return_content: true
+        validate_certs: true
+      register: pve_template_sums
+
+    - name: Pick {{ pve_template_image_file }}'s checksum
+      ansible.builtin.set_fact:
+        pve_template_image_sha512: >-
+          {{ pve_template_sums.content
+             | regex_search('(?m)^([0-9a-f]{128})\s+\*?' ~ (pve_template_image_file | regex_escape) ~ '\s*$', '\1')
+             | default([''], true) | first }}
+
+    - name: SHA512SUMS lists the image
+      ansible.builtin.assert:
+        that: pve_template_image_sha512 | length == 128
+        fail_msg: "{{ pve_template_image_file }} is not in {{ pve_template_image_base_url }}/{{ pve_template_image_release }}/SHA512SUMS."
+        quiet: true
+
+    - name: Image directory
+      ansible.builtin.file:
+        path: "{{ pve_template_image_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    # get_url verifies the checksum after the download and skips a file already
+    # present with the right one.
+    - name: Download {{ pve_template_image_file }}
+      ansible.builtin.get_url:
+        url: "{{ pve_template_image_base_url }}/{{ pve_template_image_release }}/{{ pve_template_image_file }}"
+        dest: "{{ pve_template_image_path }}"
+        checksum: "sha512:{{ pve_template_image_sha512 }}"
+        validate_certs: true
+        owner: root
+        group: root
+        mode: "0644"
+        timeout: 60
+
+    # Ours but another image, or a build that stopped before `qm template`. Full
+    # clones do not depend on it, so the edge VM keeps running.
+    - name: Destroy the old template
+      ansible.builtin.command:
+        argv:
+          [
+            qm,
+            destroy,
+            "{{ pve_template_vmid }}",
+            --purge,
+            "1",
+            --destroy-unreferenced-disks,
+            "1",
+          ]
+      when: pve_template_exists
+      changed_when: true
+
+    # The edge VM's settings (pve_edge_vm) are applied on the clone; these only
+    # make the template a bootable, identical starting point. No NIC: the clone
+    # gets net0 with its fixed MAC.
+    - name: Create VM {{ pve_template_vmid }} from the image
+      ansible.builtin.command:
+        argv: "{{ pve_template_create_argv + (pve_template_efi_argv if pve_vm_bios == 'ovmf' else []) }}"
+      vars:
+        pve_template_create_argv:
+          - qm
+          - create
+          - "{{ pve_template_vmid }}"
+          - --name
+          - "{{ pve_template_name }}"
+          - --description
+          - "{{ pve_template_marker }}"
+          - --ostype
+          - l26
+          - --machine
+          - "{{ pve_vm_machine }}"
+          - --bios
+          - "{{ pve_vm_bios }}"
+          - --cpu
+          - "{{ pve_vm_cpu }}"
+          - --sockets
+          - "1"
+          - --cores
+          - "2"
+          - --memory
+          - "2048"
+          - --balloon
+          - "0"
+          - --scsihw
+          - virtio-scsi-single
+          - --scsi0
+          - "{{ pve_template_storage }}:0,import-from={{ pve_template_image_path }},iothread=1,discard=on,ssd=1"
+          - --ide2
+          - "{{ pve_template_storage }}:cloudinit"
+          - --boot
+          - order=scsi0
+          - --serial0
+          - socket
+          - --vga
+          - serial0
+          - --agent
+          - enabled=1,fstrim_cloned_disks=1
+          - --tablet
+          - "0"
+          - --onboot
+          - "0"
+        pve_template_efi_argv:
+          - --efidisk0
+          - "{{ pve_template_storage }}:1,efitype=4m,pre-enrolled-keys=0"
+      changed_when: true
+
+    - name: Convert VM {{ pve_template_vmid }} to a template
+      ansible.builtin.command: qm template {{ pve_template_vmid }}
+      changed_when: true
+
+    - name: Re-read the template
+      ansible.builtin.command: qm config {{ pve_template_vmid }}
+      register: pve_template_config
+      changed_when: false
+
+    - name: The template is current
+      ansible.builtin.assert:
+        that:
+          - pve_template_config.stdout is search('(?m)^description:[ ]' ~ (pve_template_marker | regex_escape) ~ '\s*$')
+          - pve_template_config.stdout is search('(?m)^template:[ ]1\s*$')
+        fail_msg: "VM {{ pve_template_vmid }} was built but does not read back as template {{ pve_template_marker }}."
+        quiet: true
+
+    - name: Find older images
+      ansible.builtin.find:
+        paths: "{{ pve_template_image_dir }}"
+        patterns: "debian-*-genericcloud-*.qcow2"
+      register: pve_template_old_images
+
+    - name: Remove older images
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ pve_template_old_images.files | rejectattr('path', 'equalto', pve_template_image_path) | list }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+
+- name: Template {{ pve_template_vmid }}
+  ansible.builtin.debug:
+    msg: "{{ pve_template_name }} = {{ pve_template_marker }} on {{ inventory_hostname }} ({{ pve_template_pveversion.stdout }})"

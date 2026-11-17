@@ -1,0 +1,6 @@
+---
+# Guests of the Proxmox host divide (hosts.ini [divide_guests]): amph, edge, blockshooter, kn.
+# They sit behind divide's NAT on vmbr1 (172.16.5.0/24, gateway 172.16.5.1) with no public
+# address of their own, so ssh (Ansible, and roles that ssh from the controller, e.g.
+# edge_warp's dead-man check) jumps through divide's own sshd on divide_public_ip:22.
+ansible_ssh_common_args: "-o ProxyJump=root@{{ divide_public_ip }}"

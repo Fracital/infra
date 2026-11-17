@@ -1,0 +1,63 @@
+#!/bin/sh
+# pve-net-rescue BACKUP|- PROBE...   (installed by Ansible, roles/proxmox_host)
+#
+# Armed as a transient systemd timer before a step that can take a Proxmox host off
+# the network, and disarmed by Ansible once it has logged in again over a fresh SSH
+# connection. It only ever runs when that login did not happen.
+#
+#   BACKUP  a new /etc/network/interfaces went live: put BACKUP back and reload.
+#   -       the network was not meant to change (the ifupdown2 install): do nothing
+#           if a PROBE answers, else bring the on-disk config back up.
+#
+# Either way, if no PROBE answers afterwards, reboot: the file on disk is then the
+# known-good one and the box comes back on it.
+set -u
+backup=$1
+shift
+[ "$#" -gt 0 ] || set -- 1.1.1.1
+
+log() {
+	logger -t pve-net-rescue -- "$*"
+	echo "pve-net-rescue: $*" >&2
+}
+
+alive() {
+	for probe in "$@"; do
+		ping -c 3 -W 2 "$probe" >/dev/null 2>&1 && return 0
+	done
+	return 1
+}
+
+# ifupdown2 (ifreload) once installed; ifupdown (ifup) before; systemd last.
+# `-a` covers `auto` interfaces only, so allow-hotplug ones get their own pass.
+reload() {
+	if command -v ifreload >/dev/null 2>&1 && ifreload -a; then
+		ifup -a --allow=hotplug >/dev/null 2>&1 || true
+		return 0
+	fi
+	if command -v ifup >/dev/null 2>&1 && ifup -a; then
+		return 0
+	fi
+	systemctl restart networking
+}
+
+if [ "$backup" != "-" ]; then
+	log "Ansible did not come back: restoring /etc/network/interfaces from $backup"
+	cp -p "$backup" /etc/network/interfaces || log "copy failed"
+	reload || log "reload failed"
+else
+	if alive "$@"; then
+		log "network answers ($*): nothing to do"
+		exit 0
+	fi
+	log "no answer from $*: bringing the network config back up"
+	reload || log "reload failed"
+fi
+
+sleep 15
+if alive "$@"; then
+	log "network answers ($*)"
+	exit 0
+fi
+log "still no answer from $*: rebooting into the on-disk config"
+systemctl reboot

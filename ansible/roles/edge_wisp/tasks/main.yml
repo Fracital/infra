@@ -1,0 +1,249 @@
+---
+# Run a Wisp server on the host itself. On an edge every TCP stream is routed
+# by verdict through edge-router.py (adult -> refused, shady -> amph relay with
+# Mullvad egress, clean -> direct); UDP streams leave the edge directly, except
+# to a shady name, which the router's name gate makes holyWisp refuse
+# (edge_router_dns_port). On amph (edge_wisp_manage_router: false) holyWisp
+# sends TCP straight into mullvad-pool, UDP directly, and no router is installed.
+# holyWisp is a single static C binary the controller fetches from npm or
+# builds (holywisp_source, see defaults), so no runtime is needed on the hosts.
+# The router is stdlib Python (3.9+).
+
+- name: Check holywisp_source
+  ansible.builtin.assert:
+    that: holywisp_source in ['npm', 'build']
+    fail_msg: "holywisp_source must be npm or build, not '{{ holywisp_source }}'"
+    quiet: true
+  run_once: true
+
+- name: Fetch holyWisp from npm on the controller
+  ansible.builtin.import_tasks: npm.yml
+  when: holywisp_source == 'npm'
+
+- name: Build holyWisp from source on the controller
+  ansible.builtin.import_tasks: build.yml
+  when: holywisp_source == 'build'
+
+- name: Check the holyWisp binary on the controller
+  ansible.builtin.import_tasks: verify.yml
+
+- name: Create the wisp service user
+  ansible.builtin.user:
+    name: "{{ edge_wisp_user }}"
+    system: true
+    shell: /usr/sbin/nologin
+    home: "{{ edge_wisp_dir }}"
+    create_home: false
+
+# /etc/abulxt is included only when this role owns it (on amph abulxt_origin
+# does, as root:root 0755). The data dir is NOT in this loop: it is owned by
+# the service user (next task), and listing it here used to flip its owner
+# root -> service user on every run.
+- name: Create install and config directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: "{{ edge_wisp_user }}"
+    mode: "0750"
+  loop: "{{ [edge_wisp_dir] + (['/etc/abulxt'] if edge_wisp_manage_conf_dir else []) }}"
+
+- name: Data dir must be writable by the service (reputation store)
+  ansible.builtin.file:
+    path: "{{ edge_wisp_dir }}/data"
+    state: directory
+    owner: "{{ edge_wisp_user }}"
+    group: "{{ edge_wisp_user }}"
+    mode: "0750"
+
+- name: Install the holyWisp binary
+  ansible.builtin.copy:
+    src: "{{ holywisp_binary }}"
+    dest: "{{ edge_wisp_dir }}/holywisp"
+    owner: root
+    group: root
+    mode: "0755"
+  notify: restart edge wisp
+
+- name: Install edge-router.py
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../edge-wisp/edge-router.py"
+    dest: "{{ edge_wisp_dir }}/edge-router.py"
+    owner: root
+    group: root
+    mode: "0755"
+  notify: restart edge router
+  when: edge_wisp_manage_router
+
+- name: The client-key secret is set (holywisp_proxy_client_key)
+  ansible.builtin.assert:
+    that:
+      - vault_holywisp_client_key_master is defined
+      - vault_holywisp_client_key_master | length >= 32
+    fail_msg: >-
+      holywisp_proxy_client_key needs vault_holywisp_client_key_master (32+ random characters) in
+      group_vars/all/secrets.yml. Each box's secret is derived from it.
+    quiet: true
+  when: holywisp_proxy_client_key | bool
+
+- name: Render holyWisp config
+  ansible.builtin.template:
+    src: holywisp.conf.j2
+    dest: /etc/abulxt/holywisp.conf
+    owner: root
+    group: "{{ edge_wisp_user }}"
+    mode: "0640"
+  notify: restart edge wisp
+  # --diff would print proxy-client-key-secret.
+  diff: "{{ not (holywisp_proxy_client_key | bool) }}"
+
+# Kernel-mode WARP: the router would mark clean dials for tunnels that don't exist (its
+# probes would fail and every clean stream go direct). The warp tag sets them up first.
+- name: Kernel-mode WARP tunnels exist before the router is pointed at them
+  ansible.builtin.stat:
+    path: /etc/systemd/network/50-warp0.netdev
+  register: edge_wisp_warp_netdev
+  when:
+    - edge_wisp_manage_router
+    - edge_warp_enabled | default(false) | bool
+    - edge_warp_mode | default('kernel') == 'kernel'
+    - not ansible_check_mode
+
+- name: Refuse to point the router at missing WARP tunnels
+  ansible.builtin.assert:
+    that: edge_wisp_warp_netdev.stat.exists
+    fail_msg: >-
+      edge_warp_mode is kernel but this box has no WARP tunnels yet. Run the warp tag
+      with the wisp tag (--tags warp,wisp; README.md "Cloudflare WARP").
+    quiet: true
+  when: edge_wisp_warp_netdev.stat is defined
+
+- name: Render edge-router config (relay credential + Gateway subdomains)
+  ansible.builtin.template:
+    src: edge-router.json.j2
+    dest: /etc/abulxt/edge-router.json
+    owner: root
+    group: "{{ edge_wisp_user }}"
+    mode: "0640"
+  notify: restart edge router
+  # --diff would print the relay password (relay_pass).
+  diff: false
+  when: edge_wisp_manage_router
+
+- name: Set the list of systemd units this host runs
+  ansible.builtin.set_fact:
+    edge_wisp_unit_names: >-
+      {{ (['abulxt-edge-router.service'] if edge_wisp_manage_router else [])
+         + ['abulxt-edge-wisp.service'] }}
+
+# A changed unit restarts the relay too (the ExecStart and the sandbox live
+# here); the router unit is in the same loop, so a router-only unit change also
+# restarts the relay, which Requires= it anyway.
+- name: Install systemd units
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ edge_wisp_unit_names }}"
+  register: edge_wisp_units
+  notify: restart edge wisp
+
+- name: Reload systemd when units change
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: edge_wisp_units.changed
+
+# One-time hand-off from a hand-managed relay (amph's old npm wrapper
+# abulxt-wisp.service): it holds edge_wisp_port, so it must be down before the
+# new unit starts. A unit that no longer exists is not an error; anything else
+# (e.g. a stop that fails) still is.
+- name: Stop and disable the hand-managed relay units this role replaces
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  loop: "{{ edge_wisp_retire_units }}"
+  register: edge_wisp_retired
+  failed_when: >-
+    edge_wisp_retired.failed | default(false)
+    and 'Could not find the requested service' not in (edge_wisp_retired.msg | default(''))
+
+- name: Enable and start the router (if managed), then holyWisp
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop: "{{ edge_wisp_unit_names }}"
+
+- name: Flush handlers so restarts happen before the health check
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for holyWisp to listen
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ edge_wisp_port }}"
+    timeout: 20
+
+# holyWisp answers GET /health with {"status":"ok"} on the relay port. A relay
+# that is listening but not serving (bad config, sandbox killing it on the
+# first request) fails the play here instead of after the clients notice.
+# Skipped in check mode (the running relay may still be wispurr, which has no
+# /health).
+- name: Health check the relay
+  ansible.builtin.command:
+    argv:
+      [
+        curl,
+        -fsS,
+        --max-time,
+        "5",
+        "http://127.0.0.1:{{ edge_wisp_port }}/health",
+      ]
+  register: edge_wisp_health
+  changed_when: false
+  retries: 5
+  delay: 2
+  until: edge_wisp_health.rc == 0 and '"ok"' in edge_wisp_health.stdout
+  when: not ansible_check_mode
+
+# The router's classifier fails open: a box Cloudflare Gateway refuses (its egress address not
+# on the DoH allowlist, as wisp-mnz's SLAAC IPv6 was until 2026-11-16) calls every name clean,
+# and shady and adult names leave it unfiltered with nothing but a warning in the log. So the
+# gate must answer a known shady name, and with gate_adult a known adult one, with the relay.
+- name: The name gate routes known shady and adult names to the relay
+  ansible.builtin.command:
+    argv:
+      [
+        dig,
+        +short,
+        +time=3,
+        +tries=1,
+        "@127.0.0.1",
+        -p,
+        "{{ edge_router_dns_port }}",
+        "{{ item }}",
+        A,
+      ]
+  register: edge_wisp_gate_probe
+  changed_when: false
+  retries: 5
+  delay: 3
+  until: abulxt_origin_ip in edge_wisp_gate_probe.stdout_lines
+  loop: "{{ [edge_router_gate_probe_shady] + ([edge_router_gate_probe_adult] if holywisp_tcp_direct_on | bool else []) }}"
+  when:
+    - edge_wisp_manage_router
+    - edge_router_dns_port | int > 0
+    - not ansible_check_mode
+
+# The wispurr binary and config stay for rollback unless told otherwise
+# (RUNBOOK "Rollback to wispurr"). Only reached once holyWisp is healthy.
+- name: Remove the superseded wispurr binary and config
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ edge_wisp_dir }}/wispurr"
+    - /etc/abulxt/wispurr.json
+  when: edge_wisp_remove_wispurr | bool

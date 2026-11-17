@@ -1,0 +1,29 @@
+# Proxy settings for every krunk.io location (20-krunkio.conf). Managed by Ansible
+# (edge_relay role). Included inside each location: a location that sets its own
+# proxy_set_header would otherwise drop all of these.
+proxy_pass https://krunkio_origin;
+proxy_http_version 1.1;
+proxy_set_header Host $host;
+proxy_set_header Upgrade $ws_upgrade;
+proxy_set_header Connection $krunkio_connection;
+
+# The end client (realip already resolved it if a Cloudflare range relayed the request).
+# kru trusts these only after the token check; the services read X-Real-IP.
+proxy_set_header X-Real-IP $remote_addr;
+proxy_set_header X-Forwarded-For $remote_addr;
+proxy_set_header X-Forwarded-Proto $scheme;
+proxy_set_header CF-Connecting-IP "";
+proxy_set_header X-KN-Edge "{{ inventory_hostname }}";
+proxy_set_header X-KN-Edge-Token "{{ krunkio_origin_token }}";
+
+# TLS to kru: only its pinned self-signed certificate (roles/edge_relay/files/krunkio-origin.crt).
+proxy_ssl_server_name on;
+proxy_ssl_name {{ krunkio_origin_sni }};
+proxy_ssl_verify on;
+proxy_ssl_verify_depth 1;
+proxy_ssl_trusted_certificate {{ openresty_conf_dir }}/krunkio-origin.crt;
+proxy_ssl_protocols TLSv1.2 TLSv1.3;
+proxy_ssl_session_reuse on;
+
+proxy_connect_timeout {{ edge_proxy_connect_timeout }};
+proxy_next_upstream off;

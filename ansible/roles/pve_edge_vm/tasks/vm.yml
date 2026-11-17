@@ -1,0 +1,297 @@
+---
+# One VM of the box (tasks/main.yml runs this once per VM: wisp-<site>, then
+# kn-<site> if it has one): VM pve_edge_vm_vmid, a full clone of the
+# pve_template template with its size, a fixed MAC on vmbr0 and the VM's whole
+# address set in cloud-init, started on boot. Plain `qm`, run as root on the
+# host. Then wait until the VM answers SSH and cloud-init is done, so
+# playbooks/wisp.yml (or KrunkNative's deploy) can take it from there.
+
+- name: Work out the VM's settings
+  ansible.builtin.import_tasks: facts.yml
+
+- name: Read the template (VM {{ pve_edge_vm_template_vmid }})
+  ansible.builtin.command: qm config {{ pve_edge_vm_template_vmid }}
+  register: pve_edge_vm_template_config
+  changed_when: false
+  failed_when: false
+
+- name: The template is there
+  ansible.builtin.assert:
+    that:
+      - pve_edge_vm_template_config.rc == 0
+      - pve_edge_vm_template_config.stdout is search('(?m)^template:[ ]1\s*$')
+      - pve_edge_vm_template_config.stdout is search('(?m)^description:[ ]abulxt-pve-template\.')
+    fail_msg: "No abulxt template at VM {{ pve_edge_vm_template_vmid }} on {{ inventory_hostname }}: run the pve_template role first (playbooks/pve-vm.yml)."
+    quiet: true
+
+- name: Note the template's image and storage
+  ansible.builtin.set_fact:
+    pve_edge_vm_template_image: >-
+      {{ pve_edge_vm_template_config.stdout | regex_search('(?m)^description:[ ]abulxt-pve-template\.(\S+)', '\1') | first }}
+    pve_edge_vm_clone_storage: >-
+      {{ pve_edge_vm_storage if pve_edge_vm_storage | length > 0 else
+         (pve_edge_vm_template_config.stdout | regex_search('(?m)^scsi0:[ ]([^:,\s]+):', '\1') | first) }}
+
+- name: Read VM {{ pve_edge_vm_vmid }}
+  ansible.builtin.command: qm config {{ pve_edge_vm_vmid }}
+  register: pve_edge_vm_config_initial
+  changed_when: false
+  failed_when: false
+
+- name: Read VM {{ pve_edge_vm_vmid }}'s state
+  ansible.builtin.command: qm status {{ pve_edge_vm_vmid }}
+  register: pve_edge_vm_status
+  changed_when: false
+  failed_when: false
+
+# Ours = named pve_edge_vm_name with a <pve_edge_vm_description>.<image>
+# description (abulxt-pve-edge-vm.* for wisp-<site>, abulxt-pve-kn-vm.* for kn-<site>).
+- name: Is VM {{ pve_edge_vm_vmid }} ours
+  ansible.builtin.set_fact:
+    pve_edge_vm_exists: "{{ pve_edge_vm_config_initial.rc == 0 }}"
+    pve_edge_vm_ours: >-
+      {{ pve_edge_vm_config_initial.rc == 0
+         and pve_edge_vm_config_initial.stdout is search('(?m)^name:[ ]' ~ (pve_edge_vm_name | regex_escape) ~ '\s*$')
+         and pve_edge_vm_config_initial.stdout is search('(?m)^description:[ ]' ~ (pve_edge_vm_description | regex_escape) ~ '\.') }}
+    pve_edge_vm_was_running: "{{ pve_edge_vm_status.stdout is search('status:[ ]running') }}"
+
+- name: VM {{ pve_edge_vm_vmid }} is free or is {{ pve_edge_vm_name }}
+  ansible.builtin.assert:
+    that: not pve_edge_vm_exists or pve_edge_vm_ours
+    fail_msg: >-
+      VM {{ pve_edge_vm_vmid }} exists on {{ inventory_hostname }} and is not {{ pve_edge_vm_name }} made by
+      this role (name / {{ pve_edge_vm_description }}.* description). Nothing was changed.
+    quiet: true
+
+# A confirm that names the host's other VM rebuilds that one only.
+- name: Rebuild {{ pve_edge_vm_name }}
+  ansible.builtin.include_tasks: rebuild.yml
+  when: >-
+    pve_edge_vm_rebuild | bool and pve_edge_vm_exists
+    and pve_edge_vm_rebuild_confirm not in pve_edge_vm_rebuild_others
+
+- name: Storage {{ pve_edge_vm_snippets_storage }} holds snippets
+  ansible.builtin.include_role:
+    name: pve_template
+    tasks_from: storage_content
+  vars:
+    pve_storage_content_id: "{{ pve_edge_vm_snippets_storage }}"
+    pve_storage_content_type: snippets
+
+- name: Locate the cloud-init snippets
+  ansible.builtin.command: pvesm path {{ pve_edge_vm_snippets_storage }}:snippets/{{ pve_edge_vm_name }}-{{ item }}.yaml
+  loop: [user, network]
+  register: pve_edge_vm_snippet_paths
+  changed_when: false
+
+- name: Note the snippet paths
+  ansible.builtin.set_fact:
+    pve_edge_vm_user_snippet_path: "{{ pve_edge_vm_snippet_paths.results[0].stdout | trim }}"
+    pve_edge_vm_network_snippet_path: "{{ pve_edge_vm_snippet_paths.results[1].stdout | trim }}"
+    pve_edge_vm_cicustom: >-
+      user={{ pve_edge_vm_snippets_storage }}:snippets/{{ pve_edge_vm_name }}-user.yaml,network={{ pve_edge_vm_snippets_storage }}:snippets/{{ pve_edge_vm_name }}-network.yaml
+
+- name: SSH host keys
+  ansible.builtin.import_tasks: hostkeys.yml
+
+- name: Cloud-init snippets
+  ansible.builtin.import_tasks: snippets.yml
+
+- name: Clone {{ pve_edge_vm_name }} from the template
+  when: not pve_edge_vm_exists
+  block:
+    - name: Full-clone VM {{ pve_edge_vm_template_vmid }} to {{ pve_edge_vm_vmid }} ({{ pve_edge_vm_name }})
+      ansible.builtin.command:
+        argv:
+          - qm
+          - clone
+          - "{{ pve_edge_vm_template_vmid }}"
+          - "{{ pve_edge_vm_vmid }}"
+          - --name
+          - "{{ pve_edge_vm_name }}"
+          - --full
+          - "1"
+          - --storage
+          - "{{ pve_edge_vm_clone_storage }}"
+      changed_when: true
+
+    # The image it was cloned from, compared with the template's on later runs.
+    - name: Mark VM {{ pve_edge_vm_vmid }} as {{ pve_edge_vm_name }} from {{ pve_edge_vm_template_image }}
+      ansible.builtin.command:
+        argv:
+          [
+            qm,
+            set,
+            "{{ pve_edge_vm_vmid }}",
+            --description,
+            "{{ pve_edge_vm_description }}.{{ pve_edge_vm_template_image }}",
+          ]
+      changed_when: true
+
+- name: Note whether the VM was cloned now
+  ansible.builtin.set_fact:
+    pve_edge_vm_cloned: "{{ not pve_edge_vm_exists }}"
+
+- name: Read VM {{ pve_edge_vm_vmid }} before configuring it
+  ansible.builtin.command: qm config {{ pve_edge_vm_vmid }}
+  register: pve_edge_vm_config_before
+  changed_when: false
+
+# Every run sets the whole hardware + cloud-init picture (changed only when
+# `qm config` differs afterwards). Applied live where Proxmox can, else pending
+# until the VM's next start (see below).
+- name: Configure {{ pve_edge_vm_name }}
+  ansible.builtin.command:
+    argv:
+      - qm
+      - set
+      - "{{ pve_edge_vm_vmid }}"
+      - --name
+      - "{{ pve_edge_vm_name }}"
+      - --tags
+      - "{{ pve_edge_vm_tags }}"
+      - --onboot
+      - "1"
+      - --machine
+      - "{{ pve_vm_machine | default('q35') }}"
+      - --bios
+      - "{{ pve_vm_bios | default('seabios') }}"
+      - --cpu
+      - "{{ pve_vm_cpu | default('host') }}"
+      - --sockets
+      - "1"
+      - --cores
+      - "{{ pve_edge_vm_size_cores }}"
+      - --numa
+      - "0"
+      - --memory
+      - "{{ pve_edge_vm_size_memory_mb }}"
+      - --balloon
+      - "0"
+      - --net0
+      - "virtio={{ pve_edge_vm_mac_upper }},bridge={{ pve_edge_vm_bridge }},firewall=0,queues={{ pve_edge_vm_size_queues }}"
+      - --cicustom
+      - "{{ pve_edge_vm_cicustom }}"
+      - --agent
+      - enabled=1,fstrim_cloned_disks=1
+      - --serial0
+      - socket
+      - --vga
+      - serial0
+  changed_when: false
+
+- name: Note the disk's size
+  ansible.builtin.set_fact:
+    pve_edge_vm_disk_now: >-
+      {{ pve_edge_vm_config_before.stdout | regex_search('(?m)^scsi0:[ ].*[,]size=([0-9]+[KMGT]?)', '\1') | first }}
+
+- name: Grow the disk to {{ pve_edge_vm_disk_size }}
+  ansible.builtin.command: qm resize {{ pve_edge_vm_vmid }} scsi0 {{ pve_edge_vm_disk_size }}
+  when: (pve_edge_vm_disk_size | human_to_bytes) > (pve_edge_vm_disk_now | human_to_bytes)
+  changed_when: true
+
+- name: Read VM {{ pve_edge_vm_vmid }} after configuring it
+  ansible.builtin.command: qm config {{ pve_edge_vm_vmid }}
+  register: pve_edge_vm_config_after
+  changed_when: >-
+    (pve_edge_vm_config_after.stdout_lines | reject('match', '^digest:') | list)
+    != (pve_edge_vm_config_before.stdout_lines | reject('match', '^digest:') | list)
+
+- name: Note what changed
+  ansible.builtin.set_fact:
+    pve_edge_vm_cloudinit_changed: >-
+      {{ pve_edge_vm_cloned or pve_edge_vm_user_snippet is changed or pve_edge_vm_network_snippet is changed
+         or pve_edge_vm_config_after is changed }}
+
+- name: Regenerate {{ pve_edge_vm_name }}'s cloud-init drive
+  ansible.builtin.command: qm cloudinit update {{ pve_edge_vm_vmid }}
+  when: pve_edge_vm_cloudinit_changed
+  changed_when: true
+
+- name: Read VM {{ pve_edge_vm_vmid }}'s pending changes
+  ansible.builtin.command: qm pending {{ pve_edge_vm_vmid }}
+  register: pve_edge_vm_pending
+  changed_when: false
+
+- name: Note whether a restart is due
+  ansible.builtin.set_fact:
+    pve_edge_vm_restart_due: >-
+      {{ pve_edge_vm_exists and pve_edge_vm_was_running
+         and (pve_edge_vm_pending.stdout is search('(?m)^(new|del) ')
+              or pve_edge_vm_user_snippet is changed or pve_edge_vm_network_snippet is changed) }}
+
+- name: Start {{ pve_edge_vm_name }}
+  ansible.builtin.command: qm start {{ pve_edge_vm_vmid }}
+  when: not (pve_edge_vm_exists and pve_edge_vm_was_running) and pve_edge_vm_start | bool
+  changed_when: true
+
+# pve_edge_vm_start false (the kn VM while the wisp VM has yet to shrink): a VM
+# that was not running stays stopped, and nothing below waits for it.
+- name: Note whether {{ pve_edge_vm_name }} is running
+  ansible.builtin.set_fact:
+    pve_edge_vm_running: "{{ (pve_edge_vm_exists and pve_edge_vm_was_running) or pve_edge_vm_start | bool }}"
+
+- name: Say that {{ pve_edge_vm_name }} was left stopped
+  ansible.builtin.debug:
+    msg: >-
+      {{ pve_edge_vm_name }} (VM {{ pve_edge_vm_vmid }}) is configured but left stopped: {{ pve_edge_vm_not_started_reason | default('pve_edge_vm_start is false') }}.
+  when: not pve_edge_vm_running
+
+- name: Restart {{ pve_edge_vm_name }} for its new settings
+  ansible.builtin.command: qm reboot {{ pve_edge_vm_vmid }} --timeout 300
+  when: pve_edge_vm_restart_due and pve_edge_vm_reboot_for_pending | bool
+  changed_when: true
+
+- name: Say that a restart is due
+  ansible.builtin.debug:
+    msg: >-
+      {{ pve_edge_vm_name }} is running with settings or cloud-init data it picks up only at its next start
+      (qm pending {{ pve_edge_vm_vmid }}). Restart it when its addresses may go dark
+      (qm reboot {{ pve_edge_vm_vmid }}, or -e pve_edge_vm_reboot_for_pending=true).
+  when: pve_edge_vm_restart_due and not pve_edge_vm_reboot_for_pending | bool
+
+- name: Wait for {{ pve_edge_vm_name }} to answer SSH on {{ pve_edge_vm_ipv4_first }}
+  ansible.builtin.wait_for:
+    host: "{{ pve_edge_vm_ipv4_first }}"
+    port: 22
+    search_regex: OpenSSH
+    delay: "{{ 10 if not pve_edge_vm_was_running or pve_edge_vm_cloned else 0 }}"
+    timeout: "{{ pve_edge_vm_ssh_timeout }}"
+  delegate_to: localhost
+  become: false
+  when: pve_edge_vm_running
+
+# Exit 2 = done with recoverable errors (cloud-init >= 23.4): shown, not fatal.
+- name: Wait for cloud-init on {{ pve_edge_vm_name }}
+  ansible.builtin.command: cloud-init status --wait --long
+  delegate_to: "{{ pve_edge_vm_name }}"
+  register: pve_edge_vm_cloudinit
+  changed_when: false
+  failed_when: pve_edge_vm_cloudinit.rc not in [0, 2]
+  timeout: "{{ pve_edge_vm_ssh_timeout }}"
+  when: pve_edge_vm_running
+
+- name: Summary
+  ansible.builtin.debug:
+    msg:
+      - "{{ pve_edge_vm_name }} = VM {{ pve_edge_vm_vmid }} on {{ inventory_hostname }}: {{ pve_edge_vm_size_cores }} cores,
+        {{ pve_edge_vm_size_memory_mb }} MiB, net0 {{ pve_edge_vm_mac_upper }} on {{ pve_edge_vm_bridge }}
+        ({{ pve_edge_vm_size_queues }} queues), {{ pve_edge_vm_ipv4_addresses | length }} IPv4 +
+        {{ pve_edge_vm_ipv6_addresses | length }} IPv6 on {{ pve_edge_vm_guest_if }}"
+      - "cloud-init: {{ pve_edge_vm_cloudinit.stdout_lines | default(['(not started)']) | first | default('') }}"
+      - "host keys: {{ pve_edge_vm_hostkey_fingerprints.results | map(attribute='stdout') | join(' | ') }}"
+      - "next: {{ pve_edge_vm_next_step }}"
+
+- name: Read the VM's image
+  ansible.builtin.command: qm config {{ pve_edge_vm_vmid }}
+  register: pve_edge_vm_config_final
+  changed_when: false
+
+- name: Say that the VM is on an older image than the template
+  ansible.builtin.debug:
+    msg: >-
+      {{ pve_edge_vm_name }} was cloned from
+      {{ pve_edge_vm_config_final.stdout | regex_search('(?m)^description:[ ]' ~ (pve_edge_vm_description | regex_escape) ~ '\.(\S+)', '\1') | default(['?'], true) | first }},
+      the template is now {{ pve_edge_vm_template_image }}. Rebuild it (README.md "Edge VM on Proxmox"):
+      -e pve_edge_vm_rebuild=true -e pve_edge_vm_rebuild_confirm={{ pve_edge_vm_name }} --limit {{ inventory_hostname }},{{ pve_edge_vm_name }}
+  when: pve_edge_vm_config_final.stdout is not search('(?m)^description:[ ]' ~ (pve_edge_vm_description | regex_escape) ~ '\.' ~ (pve_edge_vm_template_image | regex_escape) ~ '\s*$')

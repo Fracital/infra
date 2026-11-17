@@ -1,0 +1,247 @@
+---
+# terp (Fracital origin): replace the hand-made nginx site with OpenResty and admit
+# only the edge fleet on :443. README.md "Fracital routes".
+#   :443  edges only (ufw, fracital_edge_subnets), pinned cert + X-FRX-Edge-Token -> app :8080
+#   :8443 dev.fracit.al (not this role's OpenResty): the edge and Cloudflare's ranges only (ufw)
+#   :80   Cloudflare only, while fracital_origin_allow_cloudflare (pre-cutover)
+# nginx is stopped and disabled, not removed (rollback: systemctl start nginx).
+
+- name: Inputs are set
+  ansible.builtin.assert:
+    that:
+      - fracital_origin_token is match('^[0-9a-f]{32,}$')
+      - fracital_origin_tls_key is search('PRIVATE KEY')
+      - fracital_edge_subnets | length > 0
+    fail_msg: "fracital secrets (vault) or edge subnets (host_vars/*.yml edge_subnet) missing."
+    quiet: true
+  no_log: true
+
+- name: Is OpenResty installed?
+  ansible.builtin.stat:
+    path: "{{ fracital_openresty_prefix }}/nginx/sbin/nginx"
+  register: fracital_openresty_bin
+
+- name: Install OpenResty
+  when: not fracital_openresty_bin.stat.exists
+  block:
+    - name: Download OpenResty .debs
+      ansible.builtin.get_url:
+        url: "https://openresty.org/package/debian/pool/openresty/o/{{ item.pkg }}/{{ item.file }}"
+        dest: "/tmp/{{ item.file }}"
+        mode: "0644"
+      loop: "{{ fracital_openresty_debs }}"
+
+    # The package starts openresty on install; nginx still holds :80, so hold the
+    # start back (policy-rc.d) and start it in the cutover below instead.
+    - name: Install OpenResty without starting it
+      block:
+        - name: Hold back service starts during dpkg
+          ansible.builtin.copy:
+            dest: /usr/sbin/policy-rc.d
+            content: "#!/bin/sh\nexit 101\n"
+            mode: "0755"
+
+        - name: dpkg -i the OpenResty .debs together
+          ansible.builtin.command:
+            argv: "{{ ['dpkg', '-i'] + (fracital_openresty_debs | map(attribute='file') | map('regex_replace', '^', '/tmp/') | list) }}"
+          changed_when: true
+      always:
+        - name: Release service starts
+          ansible.builtin.file:
+            path: /usr/sbin/policy-rc.d
+            state: absent
+
+- name: Load tcp_bbr at boot
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/tcp_bbr.conf
+    content: "tcp_bbr\n"
+    owner: root
+    group: root
+    mode: "0644"
+
+# Setting the sysctl loads tcp_bbr on demand. Only new connections pick it up: the edges'
+# keepalive connections keep cubic until they close (or until an OpenResty reload on terp).
+- name: TCP tuning for the edge relay legs
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_file: /etc/sysctl.d/90-fracital-tcp.conf
+    sysctl_set: true
+    state: present
+  loop: "{{ fracital_origin_sysctl | dict2items }}"
+
+- name: Origin TLS directory
+  ansible.builtin.file:
+    path: "{{ fracital_tls_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Origin certificate (pinned by the edges)
+  ansible.builtin.copy:
+    src: "{{ role_path }}/../edge_relay/files/fracital-origin.crt"
+    dest: "{{ fracital_tls_dir }}/origin.crt"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: reload fracital openresty
+
+- name: Origin private key
+  ansible.builtin.copy:
+    content: "{{ fracital_origin_tls_key }}"
+    dest: "{{ fracital_tls_dir }}/origin.key"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  notify: reload fracital openresty
+
+- name: conf.d directory
+  ansible.builtin.file:
+    path: "{{ fracital_openresty_conf_dir }}/conf.d"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Render origin vhosts
+  ansible.builtin.template:
+    src: fracital-origin.conf.j2
+    dest: "{{ fracital_openresty_conf_dir }}/conf.d/10-fracital.conf"
+    owner: root
+    group: root
+    mode: "0640"
+  diff: false # holds the token
+  notify: reload fracital openresty
+
+- name: Render nginx.conf
+  ansible.builtin.template:
+    src: nginx.conf.j2
+    dest: "{{ fracital_openresty_conf_dir }}/nginx.conf"
+    owner: root
+    group: root
+    mode: "0644"
+    validate: "{{ fracital_openresty_prefix }}/nginx/sbin/nginx -t -c %s"
+  notify: reload fracital openresty
+
+# The edge on divide reaches terp privately (172.16.5.10, group_vars/all/fracital.yml): :443 for
+# the relay, :8443 for dev.fracit.al.
+- name: Admit the edge fleet on tcp {{ fracital_edge_ports | join(',') }}
+  community.general.ufw:
+    rule: allow
+    proto: tcp
+    port: "{{ item.1 }}"
+    from_ip: "{{ item.0 }}"
+    comment: abulxt edge
+  loop: "{{ fracital_edge_subnets | product(fracital_edge_ports) | list }}"
+
+# dev.fracit.al: Cloudflare (origin rule to port 8443) -> divide tcp 8443 DNAT -> terp :8443. Only
+# Cloudflare's ranges (and the edge, above) reach it. The comment is not "Cloudflare", so the
+# cleanup below never matches these.
+- name: Admit Cloudflare on tcp {{ fracital_cloudflare_ports | join(',') }} (dev.fracit.al)
+  community.general.ufw:
+    rule: allow
+    proto: tcp
+    port: "{{ item.1 }}"
+    from_ip: "{{ item.0 }}"
+    comment: Cloudflare dev
+  loop: "{{ fracital_cloudflare_ip_ranges | product(fracital_cloudflare_ports) | list }}"
+
+# Debian's nginx package has no logrotate for /usr/local/openresty; keep a week.
+- name: Rotate OpenResty logs
+  ansible.builtin.copy:
+    dest: /etc/logrotate.d/openresty
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      {{ fracital_openresty_prefix }}/nginx/logs/*.log {
+          daily
+          rotate 7
+          missingok
+          notifempty
+          compress
+          delaycompress
+          sharedscripts
+          postrotate
+              [ ! -f {{ fracital_openresty_prefix }}/nginx/logs/nginx.pid ] || kill -USR1 $(cat {{ fracital_openresty_prefix }}/nginx/logs/nginx.pid)
+          endscript
+      }
+
+- name: nginx -> OpenResty cutover
+  block:
+    - name: Stop nginx
+      ansible.builtin.systemd:
+        name: nginx
+        state: stopped
+        enabled: false
+      register: fracital_nginx_stop
+      failed_when: false
+
+    - name: Start OpenResty
+      ansible.builtin.systemd:
+        name: openresty
+        state: started
+        enabled: true
+
+    - name: Edge path answers (token)
+      ansible.builtin.uri:
+        url: https://127.0.0.1/
+        validate_certs: false
+        headers:
+          Host: "{{ fracital_health_host }}"
+          X-FRX-Edge-Token: "{{ fracital_origin_token }}"
+        status_code: 200
+      no_log: true
+      retries: 5
+      delay: 2
+      register: fracital_health
+      until: fracital_health.status == 200
+
+    - name: Cloudflare path answers
+      ansible.builtin.uri:
+        url: http://127.0.0.1/
+        headers:
+          Host: "{{ fracital_health_host }}"
+        status_code: 200
+      when: fracital_origin_allow_cloudflare | bool
+  rescue:
+    - name: Put nginx back
+      ansible.builtin.shell: systemctl disable --now openresty; systemctl enable --now nginx
+      changed_when: true
+      when: fracital_nginx_stop.changed | default(false)
+
+    - name: Cutover failed
+      ansible.builtin.fail:
+        msg: OpenResty did not serve on terp; nginx was restored.
+
+- name: Edge path refuses a request without the token
+  ansible.builtin.uri:
+    url: https://127.0.0.1/
+    validate_certs: false
+    headers:
+      Host: "{{ fracital_health_host }}"
+    status_code: 403
+
+# After the DNS cutover: nothing but the edges reaches the web ports (Cloudflare keeps
+# fracital_cloudflare_ports, dev.fracit.al).
+- name: Close Cloudflare's direct access (the hand-made ufw rules tagged "# Cloudflare")
+  when: not (fracital_origin_allow_cloudflare | bool)
+  block:
+    - name: List them
+      ansible.builtin.shell: set -o pipefail; ufw status | awk '/# Cloudflare$/ { split($1, p, "/"); print p[1], $3 }'
+      args:
+        executable: /bin/bash
+      register: fracital_cf_rules
+      changed_when: false
+
+    - name: Delete them
+      community.general.ufw:
+        rule: allow
+        proto: tcp
+        port: "{{ item.split()[0] }}"
+        from_ip: "{{ item.split()[1] }}"
+        comment: Cloudflare
+        delete: true
+      loop: "{{ fracital_cf_rules.stdout_lines | reject('match', '^(' ~ (fracital_cloudflare_ports | join('|')) ~ ') ') | list }}"

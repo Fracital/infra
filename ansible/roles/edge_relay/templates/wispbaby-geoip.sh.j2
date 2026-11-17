@@ -1,0 +1,27 @@
+#!/bin/sh
+# {{ ansible_managed }}
+# roles/edge_relay: fetch DB-IP's free City Lite mmdb (this month's, else last month's) for
+# wisp.baby's /you (lua/wispstats.lua), check it answers, swap it in and reload OpenResty so the
+# workers reopen it. Run by wispbaby-geoip.timer monthly and by the role when the file is missing.
+# DB-IP City Lite is CC BY 4.0: the page credits DB-IP.
+set -eu
+dest={{ wispstats_mmdb }}
+mkdir -p "$(dirname "$dest")"
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+for m in "$(date -u +%Y-%m)" "$(date -u -d "$(date -u +%Y-%m-01) -1 day" +%Y-%m)"; do
+  if curl -fsS --max-time 600 -o "$tmp/db.gz" "{{ wispstats_mmdb_base_url }}/dbip-city-lite-$m.mmdb.gz"; then
+    gunzip -c "$tmp/db.gz" > "$tmp/db.mmdb"
+    # 8.8.8.8 must come back as US with a city, or the file is not what we expect.
+    if mmdblookup -f "$tmp/db.mmdb" -i 8.8.8.8 country iso_code | grep -q '"US"' \
+      && mmdblookup -f "$tmp/db.mmdb" -i 8.8.8.8 city names en | grep -q '"'; then
+      if [ -f "$dest" ] && cmp -s "$tmp/db.mmdb" "$dest"; then exit 0; fi
+      install -m 0644 "$tmp/db.mmdb" "$dest.new" && mv -f "$dest.new" "$dest"
+      if systemctl is-active -q openresty; then systemctl reload openresty; fi
+      echo "wispbaby-geoip: installed dbip-city-lite-$m"
+      exit 0
+    fi
+  fi
+done
+echo "wispbaby-geoip: no usable database downloaded" >&2
+exit 1

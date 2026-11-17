@@ -1,0 +1,16 @@
+---
+cloudflare_api_base: https://api.cloudflare.com/client/v4
+
+# Extra source networks allowed to use the Gateway DoH endpoints beyond the
+# edge fleet (amph queries the classifier for the shady-egress hop). amph is
+# private on divide's vmbr1 and leaves through divide's NAT, so its egress is
+# divide_public_ip (the same address as the edge's; no IPv6 egress any more).
+gateway_dns_extra_networks:
+  - "{{ divide_public_ip }}/32" # amph's egress (divide NAT)
+  # The edge's outbound since 2026-11-17: divide NATs the connections the edge opens out VLAN 2832
+  # (172.16.0.2), which the provider NATs to this address. edge-router.py asks Gateway from it.
+  - "37.9.34.169/32"
+
+# Cap on cached verdict TTL per location (seconds). Bounds how long an edge
+# keeps a stale verdict after a category change. 60..36000.
+gateway_dns_max_ttl_secs: 300

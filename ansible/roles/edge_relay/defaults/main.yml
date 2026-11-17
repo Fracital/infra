@@ -1,0 +1,77 @@
+---
+# roles/edge_relay defaults. Most of this role's variables live in inventory/group_vars.
+
+# OpenResty `worker_processes` (nginx.conf.j2). auto = one per CPU, right for a box whose cores
+# are all OpenResty's. A box that shares its cores with holyWisp pins both (host_vars: the edge on
+# divide gives OpenResty 4 of its CT's 8 cores, edge_wisp holywisp_workers the other 4).
+edge_openresty_workers: auto
+
+# The edge="..." field of every access-log line (nginx.conf.j2 log_format edge_combined). The
+# inventory name by default; host_vars can name the box after its host instead (the edge on
+# divide logs edge="divide").
+edge_log_name: "{{ inventory_hostname }}"
+
+# wisp.baby live usage stats (files/wispstats.lua; wispbaby/README.md "Live stats"): the
+# per-box counters pushed to amph's Redis every 2 s, and /live, /live/history and /you on
+# wisp.baby. Off by default; turning it on is the go-live step: set `wispstats_enabled: true` for
+# [wisp_edge] (inventory/group_vars/wisp_edge.yml) once amph's collector runs. It only takes effect
+# on [wisp_edge] hosts (the guard below), whatever the inventory says.
+wispstats_enabled: false
+# What the templates and tasks test: enabled, and a wisp box.
+wispstats_on: "{{ (wispstats_enabled | bool) and ('wisp_edge' in group_names) }}"
+# Salt of the client-address HMAC (distinct clients, "your usage"). It must be the same on every
+# box, so that one client seen on two boxes counts once, and it must be secret, so a hash can't be
+# tested against a guessed address. Derived from the shared auto-ssl Redis password, so it needs
+# no vault entry of its own. Rotating that password re-keys the hashes, which only breaks the
+# distinct-client count's continuity for the 30-day window.
+wispstats_client_salt: "{{ ('wispbaby-clients:' ~ auto_ssl_redis_password) | hash('sha256') }}"
+# DB-IP City Lite (CC BY 4.0; the page credits DB-IP), refreshed monthly by wispbaby-geoip.timer.
+wispstats_mmdb: /var/lib/wispbaby/dbip-city-lite.mmdb
+wispstats_mmdb_base_url: https://download.db-ip.com/free
+
+# Traffic by domain (README "Live stats"): the organization each relay route counts its sessions
+# under. The templates pass wispbaby (wisp.baby's own relay), abstract (abulxt byod), fracital
+# (Fracital's names and holywisp.fracit.al) or holyunb (holyunb.locker's keyed path); a Fracital origin app (stomp) gets its own tag, picked by
+# Host on the Fracital keyed path. Anything else is counted as "other".
+wispstats_app_tags: "{{ fracital_origin_apps | default([]) | map(attribute='name') | map('lower') | map('regex_replace', '[^a-z0-9]', '') | list }}"
+wispstats_tags: "{{ ['wispbaby', 'abstract', 'fracital'] + (['holyunb'] if holyunb_on | bool else []) + wispstats_app_tags }}"
+wispstats_app_hosts: "{{ fracital_origin_apps | default([]) | subelements('hosts') }}"
+wispstats_host_tags: "{{ dict(wispstats_app_hosts | map('last') | map('lower') | zip(wispstats_app_hosts | map('first') | map(attribute='name') | map('lower') | map('regex_replace', '[^a-z0-9]', ''))) }}"
+
+# The buffer nginx relays an upgraded (WebSocket) connection through, one per direction, in the
+# locations that proxy to holyWisp. Measured 2026-11-13 on wispdev, plain ws through nginx to
+# holyWisp, one connection: default (4-8 KiB) 295-498 MiB/s at a full core, 64k 1,750-1,920,
+# 128k 1,540-2,080, 256k 1,560-2,200; 8 connections x 4 streams 630-750 / 2,830 / 3,180 / 3,330.
+# 128k is nearly all of it for 256 KiB of buffer per WebSocket.
+edge_ws_proxy_buffer: 128k
+
+# Holy Unblocker routes (templates/holyunb-routes.conf.j2, inventory/group_vars/all/holyunb.yml):
+# enabled, and a wisp box. Every other edge gets no 35-holyunb.conf.
+holyunb_on: "{{ (holyunb_enabled | default(false) | bool) and ('wisp_edge' in group_names) }}"
+
+# blockshooter.io (templates/blockshooter-routes.conf.j2, inventory/group_vars/all/blockshooter.yml,
+# blockshooter/README.md): enabled, and a wisp box. Every other edge gets no 36-blockshooter.conf.
+blockshooter_on: "{{ (blockshooter_enabled | default(false) | bool) and ('wisp_edge' in group_names) }}"
+
+# TCP 8080 by SNI (templates/nginx.conf.j2 stream block, mc-routes.conf.j2): off by default, when
+# the http block's mcnode / catch-all servers own :8080 themselves. On (host_vars, the edge on
+# divide): a stream server on :8080 reads the ClientHello's SNI without terminating TLS and sends
+# edge_tcp8080_local_snis to the local TLS vhost on edge_tcp8080_local (which then listens there
+# instead of :8080), every other SNI (and a ClientHello without one) to edge_tcp8080_default_upstream.
+edge_tcp8080_split: false
+edge_tcp8080_local: "127.0.0.1:8180"
+edge_tcp8080_local_snis: [mcnode.abstracteducation.loan]
+edge_tcp8080_default_upstream: ""
+
+# Plain-HTTP ACME forwards (templates/acme-forwards.conf.j2, conf.d/<edge_acme_forwards_conf>):
+# [{host, upstream, redirect?, comment?}]. Port 80 requests for Host <host> under
+# /.well-known/acme-challenge/ are proxied to http://<upstream> (a box behind the same NAT that
+# gets a certificate on the shared public address: blockshooter's IP cert, divide's own Proxmox
+# cert); anything else on that Host is `return 301 <redirect>`, or 404 without one. Empty: the
+# file is removed.
+edge_acme_forwards: []
+edge_acme_forwards_conf: 05-acme-forwards.conf
+
+# krunk.io names kru serves with its own vhost and certificate (krunkio-routes.conf.j2): proxied
+# with SNI = the name, no pinned cert, no token. Set in group_vars/edge.yml (dl.krunk.io).
+krunkio_direct_hosts: []

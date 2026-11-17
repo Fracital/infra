@@ -1,0 +1,26 @@
+---
+# Cloudflare WARP egress for relayed traffic (defaults/main.yml, README.md "Cloudflare
+# WARP"). The playbooks run this role only where edge_warp_enabled is true, before
+# edge_wisp; their post_tasks run after_router.yml once the router has restarted.
+
+- name: The WARP mode is kernel or proxy
+  ansible.builtin.assert:
+    that: edge_warp_mode in ['kernel', 'proxy']
+    fail_msg: "edge_warp_mode must be kernel or proxy, not {{ edge_warp_mode }}."
+    quiet: true
+
+- name: Registering accepts Cloudflare's WARP terms (the user's call)
+  ansible.builtin.assert:
+    that: edge_warp_accept_tos | bool
+    fail_msg: >-
+      edge_warp_accept_tos is false. Registering a WARP identity accepts Cloudflare's WARP
+      terms of service; set it true (host_vars or -e) once the user has approved that.
+    quiet: true
+
+- name: Kernel WireGuard tunnels
+  ansible.builtin.include_tasks: kernel.yml
+  when: edge_warp_mode == 'kernel'
+
+- name: warp-cli proxy
+  ansible.builtin.include_tasks: proxy.yml
+  when: edge_warp_mode == 'proxy'

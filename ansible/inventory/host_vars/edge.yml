@@ -1,0 +1,123 @@
+---
+# edge: wisp.baby's Manassas region (G-Core Ashburn/Manassas, VA) and the only abulxt edge.
+# LXC CT 201 on divide (since 2026-11-16; before that wisp-mnz, VM 115 on meal). Debian 13.
+# One private address, 172.16.5.10/24 on divide's vmbr1 (gateway 172.16.5.1, the
+# inventory's ansible_host), and one public address that is not on the box: public_ip, divide's
+# 91.199.82.174, which DNATs tcp 80/443/8080 and udp 443 here. No usable public IPv6.
+# Every byod name and wisp.baby are Cloudflare A records (DNS only) to public_ip: the old split
+# (byod.abstracteducation.loan .32 .35 .42, byod.fracit.al .48 .63, wisp.baby .228) collapsed
+# into that one address.
+edge_city: Manassas
+edge_region: Virginia
+edge_country: US
+edge_geo: { lat: 38.7509, lon: -77.4753 }
+# The address clients reach and the edge's egress (divide masquerades vmbr1): the templates
+# that need a public address (wisp.baby's /where, edge_warp's outside checks) use it.
+public_ip: "{{ divide_public_ip }}"
+# What third parties see as the edge's source address (Cloudflare Gateway's DoH allowlist via
+# roles/gateway_dns): divide's NAT.
+edge_subnet: "{{ public_ip }}/32"
+# What the private origins see: the edge reaches amph, kru, terp and holy straight over the
+# 172.16.5.0/24 network (terp's ufw via fracital_edge_subnets; amph's firewall for
+# 9080/8822/6379/1082 takes host_vars/amph.yml abulxt_edge_subnets_override instead).
+edge_origin_source: "172.16.5.10/32"
+# public_ip is not configured on the box (divide DNATs it here): edge_warp keeps the box's own
+# streams to it off WARP (roles/edge_warp defaults edge_public_ip_on_box).
+edge_public_ip_on_box: false
+edge_primary_if: eth0
+
+# Sizing: the CT has 8 cores. OpenResty and holyWisp get 4 worker threads each instead of one
+# per CPU apiece (edge_relay edge_openresty_workers, edge_wisp holywisp_workers).
+edge_openresty_workers: 4
+holywisp_workers: 4
+holywisp_workers_note: "divide edge: 4 of the CT's 8 cores; OpenResty has the other 4"
+
+# TCP for the client legs (roles/edge_network), as live in the CT. Only per-namespace keys can be
+# set there: net.core.rmem_max / wmem_max (32 MiB) are divide's /etc/sysctl.d/90-divide-tcp.conf,
+# and tcp_bbr must be loaded on divide (/etc/modules-load.d/bbr.conf; docs/divide-host.md): the CT
+# cannot load modules.
+edge_tcp_sysctl_file: /etc/sysctl.d/90-edge-tcp-speed.conf
+edge_tcp_sysctl:
+  net.ipv4.tcp_wmem: "4096 16384 33554432"
+  net.ipv4.tcp_slow_start_after_idle: 0
+  net.ipv4.tcp_congestion_control: bbr
+  # At most 128 KiB not yet sent in a socket's queue (in flight is not limited). Unlimited, a
+  # client's Wisp socket held 15 to 23 MB unsent during a download (2026-11-16), and a small
+  # request on another stream of that connection waited 230 to 416 ms behind it, at 14 to 28 ms
+  # ping. Paired with holywisp_ws_write_high_water below, or the queue only moves into holyWisp.
+  net.ipv4.tcp_notsent_lowat: 131072
+edge_network_load_bbr: false
+# Bytes queued toward one client before holyWisp pauses that client's remotes: 2 MiB, not the
+# 8 MiB default, so what tcp_notsent_lowat keeps out of the kernel does not queue here instead.
+# It is also the refill CONTINUE budget (conn_window): 2 MiB in flight per connection is
+# ~200 Mbit/s of upload at 80 ms, past what a client of this box sends.
+holywisp_ws_write_high_water: 2097152
+
+# Access-log edge="..." (edge_relay edge_log_name): named after the host.
+edge_log_name: divide
+openresty_apt_suite: bookworm
+openresty_install_method: debs
+# One address, set by Proxmox (pct net0): edge_network adds nothing.
+edge_extra_interface_ips: []
+edge_extra_interface_ips_v6: []
+
+# The byod names get public_ip, which is not on the box, so nginx listens on the wildcard only.
+# byod.fracit.al has no address of its own any more: Fracital's names still match by server_name,
+# but an unknown Host on byod.fracit.al lands on the abulxt catch-all (00-edge-relay.conf), not
+# Fracital. Its Cloudflare A record (public_ip) is kept by hand; an address listed here would be
+# bound by nginx (fracital-routes.conf.j2), which public_ip cannot be.
+edge_advertise_ips:
+  - "{{ public_ip }}"
+edge_advertise_ips_v6: []
+edge_advertise_ips_fracital: []
+edge_advertise_ips_v6_fracital: []
+
+wisp_site: mnz
+wisp_ips:
+  - "{{ public_ip }}"
+wisp_ips_v6: []
+wisp_apex_ips:
+  - "{{ public_ip }}"
+wisp_apex_ips_v6: []
+
+# TCP 8080 (divide DNATs it here): an nginx stream block splits it by SNI (edge_relay
+# nginx.conf.j2). mcnode.abstracteducation.loan goes to the local TLS vhost on
+# edge_tcp8080_local (mc-routes.conf.j2, Wings via amph); every other SNI, and none, is
+# passed through untouched to blockshooter's 8080.
+edge_tcp8080_split: true
+edge_tcp8080_local: "127.0.0.1:8180"
+edge_tcp8080_local_snis:
+  - mcnode.abstracteducation.loan
+edge_tcp8080_default_upstream: "172.16.5.48:8080"
+
+# Other boxes' HTTP-01 on public_ip :80 (edge_relay acme-forwards.conf.j2, conf.d/05-divide-acme.conf):
+# divide's own Proxmox certificate (divide.eli.gift; the rest of that name on :80 goes to the web
+# UI on :8006; divide admits vmbr1 tcp 80 for this) and blockshooter's Let's Encrypt IP
+# certificate (Host public_ip, lego on blockshooter).
+edge_acme_forwards_conf: 05-divide-acme.conf
+edge_acme_forwards:
+  - host: divide.eli.gift
+    upstream: "172.16.5.1:80"
+    redirect: "https://$host:8006$request_uri"
+    comment: divide, the Proxmox host
+  - host: "{{ public_ip }}"
+    upstream: "172.16.5.48:80"
+    comment: blockshooter's IP certificate
+
+# wisp.baby's /speedtest/range/ (edge_relay wispbaby.conf.j2) admits the box's own addresses; a
+# stream from holyWisp to public_ip comes back through divide's hairpin NAT from vmbr1
+# (172.16.5.1), so the whole subnet is admitted too.
+wispbaby_speedtest_allow_extra:
+  - "172.16.5.0/24"
+
+# Cloudflare WARP, kernel mode (README.md "Cloudflare WARP"): clean Wisp TCP streams leave
+# through 4 WireGuard tunnels (four free identities, registered by the role). On since
+# 2026-11-13 (the user approved the rollout). In the CT the wireguard module must be loaded
+# on divide.
+edge_warp_enabled: true
+edge_warp_accept_tos: true
+
+# UDP on WARP: holyWisp marks its UDP for the tunnel the router picks (README "Cloudflare WARP").
+holywisp_udp_warp: true
+# Per-client WARP exits: holyWisp proxy-client-key (README "Cloudflare WARP").
+holywisp_proxy_client_key: true

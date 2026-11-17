@@ -1,0 +1,74 @@
+From 72d106247f55f394c9c6daf4d57764ea2a355e3a Mon Sep 17 00:00:00 2001
+From: abulxt-local <local@abulxt.invalid>
+Date: Sat, 10 Oct 2026 02:25:10 -0400
+Subject: [PATCH 2/4] wisp: size egress DATA frames to maxPayloadSize
+
+---
+ wisp/wisp-stream.go | 10 +++++++++-
+ wisp/wsreader.go    | 26 ++++++++++++++++++++++++++
+ 2 files changed, 35 insertions(+), 1 deletion(-)
+
+diff --git a/wisp/wisp-stream.go b/wisp/wisp-stream.go
+index 600892f..d897e8c 100644
+--- a/wisp/wisp-stream.go
++++ b/wisp/wisp-stream.go
+@@ -421,10 +421,18 @@ func (s *wispStream) readFromConnection() {
+ 	streamId := s.streamId
+ 
+ 	bufp := pool.Get().(*[]byte)
++	// Cap each read so one DATA packet's on-the-wire WebSocket message stays
++	// within maxPayloadSize. The loop fragments a larger upstream read into
++	// multiple DATA packets. See maxEgressDataPayload.
++	maxData := s.wispConn.maxEgressDataPayload()
+ 
+ 	for {
+ 		buf := *bufp
+-		n, err := s.conn.Read(buf[maxHeaderLen:])
++		readEnd := maxHeaderLen + maxData
++		if readEnd > len(buf) {
++			readEnd = len(buf)
++		}
++		n, err := s.conn.Read(buf[maxHeaderLen:readEnd])
+ 		if n > 0 {
+ 			if s.wispConn.globals != nil && s.wispConn.globals.Bandwidth != nil && !s.wispConn.globals.Bandwidth.Wait(s.wispConn.closeCh, s.wispConn.remoteIP, n) {
+ 				pool.Put(bufp)
+diff --git a/wisp/wsreader.go b/wisp/wsreader.go
+index 4f4c6ba..7e2121b 100644
+--- a/wisp/wsreader.go
++++ b/wisp/wsreader.go
+@@ -267,6 +267,32 @@ func (c *wispConnection) maxPayloadSize() uint64 {
+ 	return DefaultMaxPayloadSize
+ }
+ 
++// wispDataHeaderLen is the Wisp packet header carried on every DATA frame: a
++// 1-byte packet type plus a 4-byte little-endian stream id (see
++// readFromConnection, which builds "5 + n" payloads).
++const wispDataHeaderLen = 5
++
++// maxEgressDataPayload is the largest amount of upstream stream data this
++// connection may place in ONE outbound Wisp DATA packet so the on-the-wire
++// WebSocket message stays within maxPayloadSize. A DATA packet is
++// wispDataHeaderLen bytes of header + n bytes of stream data.
++//
++// This is the EGRESS mirror of maxInboundFrameSize. Without it the stream read
++// loop read up to TcpBufferSize (which defaults to maxPayloadSize) and emitted a
++// "5 + TcpBufferSize" packet, a few bytes OVER maxPayloadSize. A symmetric Wisp
++// peer enforces maxPayloadSize on the packets it receives and tears the whole
++// multiplexed connection down on the first oversized packet. Capping the read
++// here makes the relay size-transparent; readFromConnection fragments a larger
++// upstream read across multiple DATA packets by looping, which Wisp allows.
++// The wire format is unchanged.
++func (c *wispConnection) maxEgressDataPayload() int {
++	max := int(c.maxPayloadSize()) - wispDataHeaderLen
++	if max < 1 {
++		max = 1
++	}
++	return max
++}
++
+ func (c *wispConnection) handleWispFrame(packet []byte, bufp *[]byte) bool {
+ 	if len(packet) < 5 {
+ 		return false
+-- 
+2.54.0
+

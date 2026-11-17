@@ -1,0 +1,41 @@
+---
+# Configure only the edges (assumes origin is already set up).
+#   ansible-playbook playbooks/edges.yml --vault-password-file <file>
+
+- name: Install and configure OpenResty on all edges
+  hosts: edge
+  gather_facts: true
+  roles:
+    # `--tags network` runs only the TCP sysctls and interface addresses.
+    - { role: edge_network, tags: ["network"] }
+    - openresty
+    # Cloudflare WARP (README.md "Cloudflare WARP"): only where edge_warp_enabled.
+    # Before edge_wisp, so the tunnels (or the proxy) are up before the router config
+    # points at them. `--tags warp,wisp` runs the two (and the post_tasks below).
+    - {
+        role: edge_warp,
+        tags: ["warp"],
+        when: edge_warp_enabled | default(false) | bool,
+      }
+    # `--tags wisp` runs only the relay (holyWisp binary + config + unit),
+    # skipping the network/openresty/relay roles. Matches origin.yml.
+    - { role: edge_wisp, tags: ["wisp"] }
+    # `--tags relay` runs only the byod OpenResty vhost (the keyed route).
+    - { role: edge_relay, tags: ["relay"] }
+    # Host firewall (vendored edge_firewall role). playbooks/firewall.yml runs
+    # it alone (README.md "Edge firewall"); applies with a 120s auto-rollback.
+    - { role: edge_firewall, tags: ["firewall"] }
+    # fail2ban (vendored role, README.md "fail2ban"; playbooks/fail2ban.yml runs it
+    # alone). After the firewall: its nftables.service hook restarts fail2ban.
+    - { role: fail2ban, tags: ["fail2ban"] }
+  post_tasks:
+    # After edge_wisp restarted the router onto the WARP config: retire warp-cli where
+    # kernel mode took over, then check from amph that the box's byod addresses still serve.
+    - name: WARP after the router moved (retire warp-cli, byod addresses still serve)
+      ansible.builtin.include_role:
+        name: edge_warp
+        tasks_from: after_router.yml
+        apply:
+          tags: ["warp"]
+      when: edge_warp_enabled | default(false) | bool
+      tags: ["warp"]

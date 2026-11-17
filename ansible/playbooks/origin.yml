@@ -1,0 +1,25 @@
+---
+# Configure only amph (shared Redis store + firewall + the origin Wisp relay).
+#   ansible-playbook playbooks/origin.yml --vault-password-file <file>
+#   ansible-playbook playbooks/origin.yml --tags wisp ...   # relay only
+#   ansible-playbook playbooks/origin.yml --tags fail2ban ...  # fail2ban only
+#
+# edge_wisp here is the same role the edges run, parameterised by
+# inventory/host_vars/amph.yml (no edge-router, mullvad-pool egress, loopback
+# bind, /opt/abulxt-wispurr, holyWisp binary). Its first run stops and disables the old
+# hand-managed abulxt-wisp.service before abulxt-edge-wisp.service takes :6001.
+
+- name: Configure amph origin
+  hosts: origin
+  gather_facts: true
+  roles:
+    - role: abulxt_origin
+      tags: [origin]
+    - role: edge_wisp
+      tags: [wisp]
+    # The unprivileged user abulxt's and holt's CI deploy as (README.md "Deploy user").
+    - role: deploy_user
+      tags: [deploy_user]
+    # fail2ban (vendored role, README.md "fail2ban"; playbooks/fail2ban.yml runs it alone).
+    - role: fail2ban
+      tags: [fail2ban]

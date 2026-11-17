@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FAQ — BLOCK SHOOTER</title>
+    <meta name="description" content="Frequently asked questions about Block Shooter.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Teko:wght@400;600;700&family=Rajdhani:wght@500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/global.css?v=20260418a">
+    <style>
+        .container { max-width: 900px; }
+
+        .faq-category { margin-bottom: 3rem; }
+        .faq-category-title {
+            font-family: var(--font-heading); font-size: 1.1rem; font-weight: 700;
+            color: var(--accent); text-transform: uppercase; margin-bottom: 1rem;
+            letter-spacing: .1em;
+        }
+
+        .faq-item { margin-bottom: 0.5rem; }
+        .faq-question {
+            width: 100%; display: flex; align-items: center; justify-content: space-between;
+            background: var(--panel-bg); border: 1px solid var(--border); border-radius: 0;
+            padding: 1.2rem 1.5rem; cursor: pointer;
+            font-family: var(--font-heading); font-size: 1.1rem; font-weight: 700;
+            color: var(--text); letter-spacing: .02em; text-align: left; text-transform: uppercase;
+            transition: all .15s ease; position: relative; z-index: 2;
+            backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+        }
+        .faq-question:hover { border-color: var(--border-mid); background: rgba(16, 22, 34, 0.6); }
+        .faq-question.open { border-color: var(--accent); background: rgba(16, 22, 34, 0.8); }
+        .faq-icon { font-size: 1.2rem; line-height: 1; transition: transform .3s ease; color: var(--text-dim); }
+        .faq-question.open .faq-icon { transform: rotate(45deg); color: var(--accent); }
+        
+        .faq-answer-wrap { overflow: hidden; max-height: 0; transition: max-height .3s ease; }
+        .faq-answer {
+            padding: 1.5rem; background: rgba(6, 9, 14, 0.4);
+            border-left: 1px solid var(--border); border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);
+            color: var(--text-mid); font-size: 0.95rem; line-height: 1.6;
+        }
+    </style>
+</head>
+<body>
+
+<canvas id="bg-canvas"></canvas>
+<div id="bg-overlay"></div>
+
+<nav id="nav">
+    <div class="nav-inner">
+        <a href="/" class="nav-logo">BLOCK <span>SHOOTER</span></a>
+        <div class="nav-links">
+            <a href="/faq" class="nav-link active">FAQ</a>
+            <a href="/warnings" class="nav-link">WARNINGS</a>
+            <a href="/privacy" class="nav-link">PRIVACY</a>
+            <a href="https://discord.blockshooter.io" class="btn btn-sm btn-primary" target="_blank">Discord</a>
+        </div>
+    </div>
+</nav>
+
+<main>
+    <div class="page-header">
+        <div class="page-kicker" data-a>Support // Answers</div>
+        <h1 class="page-title" data-a>Straight Answers</h1>
+    </div>
+
+    <div class="container">
+
+        <div class="faq-category" data-a>
+            <h2 class="faq-category-title">SYSTEM // THE GAME</h2>
+            
+            <div class="faq-item">
+                <button class="faq-question panel-fx">What exactly is Block Shooter? <span class="faq-icon">+</span></button>
+                <div class="faq-answer-wrap">
+                    <div class="faq-answer">It's the competitive FPS we always wanted to play but nobody was making: destructible voxel maps, high-skill movement, and raw gunplay with a strong emphasis on player-created chaos.</div>
+                </div>
+            </div>
+            <div class="faq-item">
+                <button class="faq-question panel-fx">When can I play it? <span class="faq-icon">+</span></button>
+                <div class="faq-answer-wrap">
+                    <div class="faq-answer">Right now. The open playtest is live on Steam here: <a href="https://store.steampowered.com/app/4475780/Block_Shooter/" target="_blank" rel="noopener">Block Shooter Open Playtest</a>. Major updates and patch notes still land in Discord first.</div>
+                </div>
+            </div>
+            <div class="faq-item">
+                <button class="faq-question panel-fx">Is it Pay-to-Win? <span class="faq-icon">+</span></button>
+                <div class="faq-answer-wrap">
+                    <div class="faq-answer">No. We do not sell gameplay advantages. If we add monetization later, the plan is to keep it cosmetic.</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="faq-category" data-a>
+            <h2 class="faq-category-title">MODULE // MECHANICS</h2>
+            
+            <div class="faq-item">
+                <button class="faq-question panel-fx">How does destruction actually work? <span class="faq-icon">+</span></button>
+                <div class="faq-answer-wrap">
+                    <div class="faq-answer">Shoot a wall, and that specific chunk blows up. Drop a C4, and you are making a new doorway. The match stays server-authoritative, so everyone sees the same breach instead of fake client-side destruction.</div>
+                </div>
+            </div>
+            <div class="faq-item">
+                <button class="faq-question panel-fx">Tell me about the movement. <span class="faq-icon">+</span></button>
+                <div class="faq-answer-wrap">
+                    <div class="faq-answer">Movement leans into the classics. Bunny hopping works. Air strafing works. If you master the momentum, you can cross the map in seconds. It takes practice, and the skill ceiling is high.</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="faq-category" data-a>
+            <h2 class="faq-category-title">MODULE // MODDING</h2>
+            
+            <div class="faq-item">
+                <button class="faq-question panel-fx">Can I make my own maps? <span class="faq-icon">+</span></button>
+                <div class="faq-answer-wrap">
+                    <div class="faq-answer">Yes. Because the game is voxel-based, map building is straightforward to learn. Official tooling and workflows for community-made maps are planned.</div>
+                </div>
+            </div>
+            <div class="faq-item">
+                <button class="faq-question panel-fx">What about custom game modes? <span class="faq-icon">+</span></button>
+                <div class="faq-answer-wrap">
+                    <div class="faq-answer">The modding API supports extensive scripting. Want to make a mode where everyone only has RPGs and 1 HP? Go for it. The public docs are hidden for now while that work gets cleaned up.</div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</main>
+
+<footer>
+    <div class="container" style="max-width:1120px">
+        <div class="footer-logo">BLOCK <span>SHOOTER</span></div>
+        <div class="footer-links">
+            <a href="/faq">FAQ</a>
+            <a href="/warnings">Rules</a>
+            <a href="/privacy">Privacy</a>
+        </div>
+        <div class="footer-copy">&copy; 2026 Block Shooter.</div>
+    </div>
+</footer>
+
+<script src="/global.js?v=20260418a"></script>
+</body>
+</html>

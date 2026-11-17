@@ -1,0 +1,10 @@
+---
+- name: Restart pdns
+  ansible.builtin.systemd:
+    name: pdns
+    state: restarted
+
+- name: Reload zones
+  ansible.builtin.command: pdns_control bind-reload-now {{ item }}
+  loop: "{{ byod_names | map(attribute='zone') | list }}"
+  changed_when: true

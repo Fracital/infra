@@ -1,0 +1,31 @@
+[Unit]
+Description=abulxt edge classifying SOCKS5 router (Gateway DoH verdicts)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ edge_wisp_user }}
+Group={{ edge_wisp_user }}
+ExecStart=/usr/bin/python3 {{ edge_wisp_dir }}/edge-router.py
+Restart=always
+RestartSec=2
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadOnlyPaths=/etc/abulxt
+LimitNOFILE=65536
+{% if edge_warp_enabled | default(false) | bool and edge_warp_mode | default('kernel') == 'kernel' %}
+# Kernel-mode WARP (roles/edge_warp): SO_MARK on clean dials picks a WARP tunnel.
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+# warp.json, the tunnels up per family, rewritten every probe round; holyWisp (the same
+# user) reads it to mark its UDP (holywisp_udp_warp).
+RuntimeDirectory=abulxt-edge-router
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=restart
+{% endif %}
+
+[Install]
+WantedBy=multi-user.target

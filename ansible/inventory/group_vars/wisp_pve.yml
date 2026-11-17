@@ -1,0 +1,6 @@
+---
+# The wisp cloud's Proxmox hosts (hv-<site>, playbooks/pve.yml).
+# Web UI (8006) and spiceproxy (3128) are also open to the admin workstation's
+# egress (the same address fail2ban_ignoreip lists in group_vars/abulxt.yml).
+pve_admin_sources_extra:
+  - 5.188.124.57

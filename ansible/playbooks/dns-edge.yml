@@ -1,0 +1,21 @@
+---
+# RETIRED 2026-11-16. Nothing is delegated to these nameservers any more:
+# byod.fracit.al, byod.abstracteducation.loan and wisp.baby are plain Cloudflare
+# records for the edge (divide's 91.199.82.174), the only wisp box left (README.md
+# "Edge DNS"). PowerDNS does not run on the edge CT, and the edge's firewall keeps :53 closed
+# (divide still DNATs tcp/udp 53 to it, docs/divide-host.md): do not run this (it would install
+# PowerDNS nobody can reach). Kept for history.
+#
+# Geo nameservers on the wisp boxes (roles/edge_dns, README.md "Edge DNS"): each
+# [wisp_edge] box is ns-<site>.wisp.baby, authoritative for every byod name.
+#   ansible-playbook playbooks/dns-edge.yml --vault-password-file <file>
+# Port 53 is opened by the abulxt edge_firewall drop-in (group_vars/edge.yml);
+# run playbooks/firewall.yml first on a new box.
+# Run it on all boxes together: every box renders the same zones from the
+# inventory, and a box left behind keeps answering with the old address lists.
+
+- name: Edge DNS
+  hosts: wisp_edge
+  gather_facts: false
+  roles:
+    - edge_dns

@@ -1,0 +1,245 @@
+/* ============================================================
+   BLOCK DEFENSE -- in-game multiplayer overlays (owner: B1)
+   All selectors are scoped under .gs-root.gs-mp so they never
+   touch the solo game screen. Builds on css/base.css tokens.
+   ============================================================ */
+
+/* The overlay layer sits above the canvas but must not eat field clicks:
+   the container is click-through; only interactive children opt back in. */
+.gs-root.gs-mp .gs-mp-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 40;
+    pointer-events: none;
+    font-family: var(--font-ui);
+}
+
+/* In MP the round button is a READY toggle (below); hide the HUD start button. */
+.gs-root.gs-mp .hud-start { display: none !important; }
+
+/* ---------------- connection status pill ---------------- */
+
+.gs-root.gs-mp .gs-mp-pill {
+    position: absolute;
+    top: 58px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 3px 14px;
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--c-text);
+    background: var(--c-panel);
+    border: 2px solid #000;
+    box-shadow: inset 0 0 0 2px var(--c-border-light);
+    pointer-events: none;
+}
+
+.gs-root.gs-mp .gs-mp-pill-live { box-shadow: inset 0 0 0 2px var(--c-emerald); color: var(--c-emerald); }
+.gs-root.gs-mp .gs-mp-pill-reconnecting,
+.gs-root.gs-mp .gs-mp-pill-resyncing { box-shadow: inset 0 0 0 2px var(--c-gold); color: var(--c-gold); animation: pulseGlow 1s infinite; }
+.gs-root.gs-mp .gs-mp-pill-dead { box-shadow: inset 0 0 0 2px var(--c-redstone); color: var(--c-redstone); }
+.gs-root.gs-mp .gs-mp-pill-ended { box-shadow: inset 0 0 0 2px var(--c-lapis); color: var(--c-lapis); }
+
+/* ---------------- ready toggle + vote count ---------------- */
+
+.gs-root.gs-mp .gs-mp-ready {
+    position: absolute;
+    bottom: 18px;
+    left: 50%;
+    transform: translateX(-50%);
+    pointer-events: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 128px;
+    justify-content: center;
+}
+
+.gs-root.gs-mp .gs-mp-ready.is-ready { animation: pulseGlow 1.4s infinite; }
+.gs-root.gs-mp .gs-mp-ready-votes {
+    font-size: 12px;
+    font-weight: 800;
+    padding: 1px 6px;
+    background: rgba(0, 0, 0, 0.45);
+    border: 1px solid rgba(0, 0, 0, 0.6);
+    color: var(--c-gold);
+}
+
+/* ---------------- pause-vote banner ---------------- */
+
+.gs-root.gs-mp .gs-mp-pausebanner {
+    position: absolute;
+    top: 96px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 6px 22px;
+    font-size: 18px;
+    font-weight: 900;
+    letter-spacing: 2px;
+    color: var(--c-gold);
+    background: var(--c-panel);
+    border: 2px solid #000;
+    box-shadow: inset 0 0 0 2px var(--c-gold), 0 6px 20px rgba(0, 0, 0, 0.6);
+    text-transform: uppercase;
+    pointer-events: none;
+    animation: pulseGlow 1.2s infinite;
+}
+
+/* ---------------- spectator banner + leave ---------------- */
+
+.gs-root.gs-mp.gs-spectator .gs-mp-spectate {
+    position: absolute;
+    top: 58px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 4px 18px;
+    font-size: 13px;
+    font-weight: 800;
+    letter-spacing: 2px;
+    color: var(--c-text);
+    background: var(--c-panel);
+    border: 2px solid #000;
+    box-shadow: inset 0 0 0 2px var(--c-lapis);
+    text-transform: uppercase;
+    pointer-events: none;
+}
+
+.gs-root.gs-mp .gs-mp-spectate-leave {
+    position: absolute;
+    top: 54px;
+    right: 16px;
+    pointer-events: auto;
+}
+
+/* ---------------- chat overlay ---------------- */
+
+.gs-root.gs-mp .gs-mp-chat {
+    position: absolute;
+    left: 14px;
+    bottom: 14px;
+    width: 340px;
+    max-width: 40%;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    pointer-events: none;
+    transition: opacity 0.6s;
+}
+
+.gs-root.gs-mp .gs-mp-chat.faded { opacity: 0.28; }
+
+.gs-root.gs-mp .gs-mp-chatlog {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-height: 168px;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+.gs-root.gs-mp .gs-mp-chatline {
+    font-size: 13px;
+    line-height: 1.35;
+    color: var(--c-text);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+    background: rgba(10, 9, 16, 0.42);
+    padding: 1px 6px;
+    width: fit-content;
+    max-width: 100%;
+    word-break: break-word;
+}
+
+.gs-root.gs-mp .gs-mp-chatline.system {
+    font-style: italic;
+    color: var(--c-text-dim);
+}
+
+.gs-root.gs-mp .gs-mp-chatname { font-weight: 800; }
+
+.gs-root.gs-mp .gs-mp-chatinput {
+    pointer-events: auto;
+    width: 100%;
+    font-family: var(--font-ui);
+    font-size: 14px;
+    color: var(--c-text);
+    background: rgba(10, 9, 16, 0.92);
+    border: 2px solid #000;
+    box-shadow: inset 0 0 0 2px var(--c-border-light);
+    padding: 6px 10px;
+    outline: none;
+}
+
+.gs-root.gs-mp .gs-mp-chatinput.hidden { display: none; }
+
+/* ---------------- resync / catch-up veil ---------------- */
+
+.gs-root.gs-mp .gs-mp-veil {
+    position: absolute;
+    inset: 0;
+    z-index: 60;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    background: rgba(8, 7, 14, 0.82);
+    pointer-events: auto;
+}
+
+.gs-root.gs-mp .gs-mp-veil.hidden { display: none; }
+
+.gs-root.gs-mp .gs-mp-veil-label {
+    font-size: 26px;
+    font-weight: 900;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--c-gold);
+    text-shadow: 0 3px 0 rgba(0, 0, 0, 0.9);
+}
+
+.gs-root.gs-mp .gs-mp-veil-bar {
+    width: 360px;
+    height: 20px;
+    background: #0d0b13;
+    border: 2px solid #000;
+    box-shadow: inset 0 0 0 2px #494257;
+    padding: 3px;
+}
+
+.gs-root.gs-mp .gs-mp-veil-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(var(--c-diamond), var(--c-lapis));
+    box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.4);
+    transition: width 0.12s;
+}
+
+.gs-root.gs-mp .gs-mp-veil-pct { font-size: 15px; color: var(--c-text-dim); letter-spacing: 1px; }
+
+/* ---------------- right rail (co-op: empty; pvp: send panel host) ---------------- */
+
+.gs-root.gs-mp .gs-rail {
+    position: absolute;
+    top: 64px;
+    right: 12px;
+    bottom: 64px;
+    width: 0;
+    pointer-events: none;
+}
+
+.gs-root.gs-mp.gs-pvp .gs-rail {
+    width: 300px;
+    pointer-events: auto;
+}
+
+/* ==========================================================================
+   PVP SECTION -- owned by agent B2. B2 appends its send-panel / opponent
+   mini-board styles BELOW this line only. Do not add PVP selectors above.
+   B1 provides the host hooks: .gs-root.gs-mp.gs-pvp .gs-rail (rail host).
+   ========================================================================== */
+
+/* --- begin B2 pvp styles --- */
+/* (intentionally empty: B2 appends here) */
+/* --- end B2 pvp styles --- */

@@ -1,0 +1,146 @@
+# blockshooter.io. Managed by Ansible (edge_relay role, blockshooter_enabled, wisp boxes only).
+# blockshooter/README.md. Host-specific blocks win over the 00-edge-relay catch-all:
+#
+#   client -> Cloudflare (proxied CNAME to {{ wisp_zone }}) -> edge :443
+#     -> /towerdefense/api/, /towerdefense/ws: https://{{ blockshooter_backend_host }} (the game's backend)
+#     -> everything else: /var/www/blockshooter (the mirrored frontend, blockshooter/site/)
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name {{ ([blockshooter_host, blockshooter_discord_host] + blockshooter_redirect_hosts) | join(' ') }};
+
+    location /.well-known/acme-challenge/ {
+        content_by_lua_block {
+            auto_ssl_instance:challenge_server()
+        }
+    }
+
+    # Each name to its own HTTPS server (discord. goes on to the invite from there).
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name {{ blockshooter_redirect_hosts | join(' ') }};
+
+    ssl_certificate_by_lua_block {
+        auto_ssl_instance:ssl_certificate()
+    }
+    ssl_certificate {{ openresty_auto_ssl_dir }}/fallback.crt;
+    ssl_certificate_key {{ openresty_auto_ssl_dir }}/fallback.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    location /.well-known/acme-challenge/ {
+        content_by_lua_block {
+            auto_ssl_instance:challenge_server()
+        }
+    }
+
+    location / {
+        return 301 https://{{ blockshooter_host }}$request_uri;
+    }
+}
+
+# discord.blockshooter.io: straight to the Discord invite.
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name {{ blockshooter_discord_host }};
+
+    ssl_certificate_by_lua_block {
+        auto_ssl_instance:ssl_certificate()
+    }
+    ssl_certificate {{ openresty_auto_ssl_dir }}/fallback.crt;
+    ssl_certificate_key {{ openresty_auto_ssl_dir }}/fallback.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    location /.well-known/acme-challenge/ {
+        content_by_lua_block {
+            auto_ssl_instance:challenge_server()
+        }
+    }
+
+    location / {
+        return 301 {{ blockshooter_discord_invite }};
+    }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name {{ blockshooter_host }};
+
+    ssl_certificate_by_lua_block {
+        auto_ssl_instance:ssl_certificate()
+    }
+    ssl_certificate {{ openresty_auto_ssl_dir }}/fallback.crt;
+    ssl_certificate_key {{ openresty_auto_ssl_dir }}/fallback.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    root /var/www/blockshooter;
+    index index.html;
+    charset utf-8;
+    # .js is served as text/javascript by mime.types; ES modules need nothing more.
+
+    # Zones with Always Use HTTPS send Let's Encrypt's http-01 check here over :443.
+    location /.well-known/acme-challenge/ {
+        content_by_lua_block {
+            auto_ssl_instance:challenge_server()
+        }
+    }
+
+    # The tower defense backend: accounts, saves, matchmaking (token header, no cookies).
+    location /towerdefense/api/ {
+        proxy_pass https://{{ blockshooter_backend_host }};
+        proxy_http_version 1.1;
+        proxy_ssl_server_name on;
+        proxy_ssl_name {{ blockshooter_backend_host }};
+        proxy_set_header Host {{ blockshooter_backend_host }};
+        proxy_set_header Connection "";
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_connect_timeout {{ edge_proxy_connect_timeout }};
+        proxy_read_timeout 60s;
+        client_max_body_size 1m;
+    }
+
+    # Multiplayer: one WebSocket per match.
+    location = /towerdefense/ws {
+        proxy_pass https://{{ blockshooter_backend_host }};
+        proxy_http_version 1.1;
+        proxy_ssl_server_name on;
+        proxy_ssl_name {{ blockshooter_backend_host }};
+        proxy_set_header Host {{ blockshooter_backend_host }};
+        proxy_set_header Upgrade $ws_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_buffering off;
+        proxy_connect_timeout {{ edge_proxy_connect_timeout }};
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+    }
+
+    # Pages: /faq -> faq/index.html (the crawl saved each route as <route>/index.html).
+    location / {
+        try_files $uri $uri/index.html $uri.html =404;
+        # Assets carry ?v=<build> in their URLs; HTML is re-checked so a refreshed mirror shows up.
+        location ~* \.(?:js|mjs|css|png|jpe?g|gif|webp|svg|ico|woff2?|ttf|mp3|ogg|wav|json)$ {
+            add_header Cache-Control "public, max-age=3600";
+        }
+        add_header Cache-Control "no-cache";
+    }
+}

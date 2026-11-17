@@ -1,0 +1,395 @@
+# wisp.baby. Managed by Ansible (edge_relay role, rendered on [wisp_edge] only).
+# README.md "The wisp cloud (wisp.baby)"; the contract is wispbaby/README.md "Server".
+# This box: {{ wisp_site }}.{{ wisp_zone }} ({{ edge_city | default(wisp_sites[wisp_site] | default(wisp_site)) }}, {{ edge_country | default('') }}).
+#
+#   https://{{ wisp_zone }}/ and https://*.{{ wisp_zone }}/ (:443)
+#     GET /             the speed test page (/var/www/wispbaby, wispbaby/site/)
+#     WebSocket on /    the public Wisp relay: this box's holyWisp (127.0.0.1:{{ edge_wisp_port }}), no key,
+#                       like holywisp.fracit.al. holyWisp's egress policy, rate limits and reputation
+#                       are the abuse control.
+#     GET /where        which box answered, JSON, no-store
+#     GET /live         live usage stats, all boxes (the collector's blob from amph's Redis, held in
+#                       shared memory: lua/wispstats.lua), max-age=1
+#     GET /live/history the graph's longer series, max-age=30
+#     GET /you          this visitor on this box: address, GeoIP, TCP RTT, last 24 h; no-store
+#     GET /health       holyWisp's /health
+#     /<file>           the page's other static files; anything else 404
+#
+#   http://{{ wisp_zone }}/ (:80)
+#     /speedtest/range/A-B   GET: B-A+1 incompressible bytes (at most 26214400); POST: body read and
+#                            discarded, empty 200. Only from this box's own addresses: the browser
+#                            reaches it as a Wisp TCP stream from holyWisp here to <box address>:80,
+#                            which leaves from (and arrives at) that same address. Anyone else: 403.
+#     ACME challenges; everything else 301 to https.
+#
+# Certificates: lua-resty-auto-ssl like every other name on the edge; amph's validator approves these
+# names once they resolve to an address in its domains.loadBalancerIp (README step 3).
+{#
+  The /where body is a single-quoted nginx string: backslashes are doubled and quotes escaped so nginx
+  hands the JSON through unchanged, and `$` is dropped from inventory values (nginx strings have no
+  escape for it). $server_addr is meant to be interpolated: the address the browser reached. A box
+  behind NAT (public_ip set, the edge on divide) gives its public address instead: $server_addr
+  would be the private one, which the speed test cannot dial through Wisp.
+#}
+{% set wispbaby_city = edge_city | default(wisp_sites[wisp_site] | default(wisp_site)) %}
+{% set wispbaby_where = '{"site":' ~ (wisp_site | replace('$', '') | to_json)
+     ~ ',"host":' ~ ((wisp_site ~ '.' ~ wisp_zone) | replace('$', '') | to_json)
+     ~ ',"city":' ~ (wispbaby_city | replace('$', '') | to_json)
+     ~ ',"country":' ~ (edge_country | default('') | replace('$', '') | to_json)
+     ~ ',"addr":"' ~ (public_ip | default('$server_addr')) ~ '","speedPort":80}' %}
+{% set wispbaby_self = (wisp_ips | default([])) + (wisp_ips_v6 | default([]))
+     + ([ansible_host] if (ansible_host | default('')) is match('^[0-9A-Fa-f:.]+$') else [])
+     + ['127.0.0.1', '::1'] + (wispbaby_speedtest_allow_extra | default([])) %}
+{% macro wispbaby_headers() -%}
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+{%- endmacro %}
+
+# 1 when the request asks for a WebSocket: `location = /` relays it, anything else on / is the page.
+map $http_upgrade $wispbaby_websocket {
+    ~*^websocket$ 1;
+    default       0;
+}
+
+# The page's Content-Security-Policy (a map only to hold the long constant). The page talks to:
+# itself (static files, /where), the relay (wss:// on this zone; 'self' covers the same host in CSP3,
+# the explicit names cover the apex/site split and older Safari), and jsDelivr for libcurl.js (netflix
+# mode), which the engine fetches, hash-checks and then imports / instantiates from blob: URLs (hence
+# blob: in script-src and connect-src, and 'wasm-unsafe-eval'). No inline scripts or inline event
+# handlers: script-src has no 'unsafe-inline'.
+map $host $wispbaby_csp {
+    default "default-src 'none'; script-src 'self' blob: 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' wss://{{ wisp_zone }} wss://*.{{ wisp_zone }} https://cdn.jsdelivr.net blob:; worker-src 'self' blob:; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name {{ wisp_zone }} *.{{ wisp_zone }};
+
+    location /.well-known/acme-challenge/ {
+        content_by_lua_block {
+            auto_ssl_instance:challenge_server()
+        }
+    }
+
+    # The self-hosted speed test (wispbaby/README.md "Two modes", G-Core). Reached only through
+    # Wisp, from this box: the allow list is every address on it plus loopback (and
+    # wispbaby_speedtest_allow_extra: the NAT a box behind it sees its own streams come back from).
+    location /speedtest/range/ {
+{% for ip in wispbaby_self | unique %}
+        allow {{ ip }};
+{% endfor %}
+        deny all;
+
+        # POST bodies are read here in 64 KiB pieces and dropped (never buffered to disk).
+        client_max_body_size 26214400;
+        client_body_timeout 60s;
+        lua_socket_buffer_size 64k;
+        lua_socket_read_timeout 60s;
+        send_timeout 60s;
+        gzip off;
+        access_log off;
+{% if wispstats_on | bool %}
+        log_by_lua_block {
+            require("wispstats").speedtest_log()
+        }
+{% endif %}
+
+        content_by_lua_block {
+            local CAP = 26214400
+            local CHUNK = 65536
+
+            local a, b = ngx.var.uri:match("^/speedtest/range/(%d+)%-(%d+)$")
+            if not a or #a > 9 or #b > 9 then
+                return ngx.exit(ngx.HTTP_NOT_FOUND)
+            end
+            a, b = tonumber(a), tonumber(b)
+            if b < a then
+                return ngx.exit(ngx.HTTP_BAD_REQUEST)
+            end
+
+            local method = ngx.req.get_method()
+
+            if method == "POST" then
+                -- Upload: read the whole body before answering, so the 200 means "all of it arrived".
+                local len = tonumber(ngx.var.content_length or "")
+                if not len then
+                    return ngx.exit(411)  -- chunked uploads are not read; send Content-Length
+                end
+                if len > CAP then
+                    return ngx.exit(413)
+                end
+                if len > 0 then
+                    local sock, err = ngx.req.socket()
+                    if not sock then
+                        ngx.log(ngx.WARN, "wispbaby upload: no request socket: ", err)
+                        return ngx.exit(ngx.HTTP_BAD_REQUEST)
+                    end
+                    local left = len
+                    while left > 0 do
+                        local n = left < CHUNK and left or CHUNK
+                        local data = sock:receive(n)
+                        if not data then
+                            return ngx.exit(444)  -- client went away mid-body
+                        end
+                        left = left - n
+                    end
+                end
+                ngx.status = 200
+                ngx.header["Content-Length"] = 0
+                ngx.header["Cache-Control"] = "no-store"
+                ngx.send_headers()
+                return ngx.eof()
+            end
+
+            if method ~= "GET" and method ~= "HEAD" then
+                ngx.header["Allow"] = "GET, HEAD, POST"
+                return ngx.exit(ngx.HTTP_NOT_ALLOWED)
+            end
+
+            -- Download. One 1 MiB random buffer per worker, made on first use (package.loaded is per
+            -- worker VM and outlives the request).
+            local buf = package.loaded["wispbaby.speedtest.buf"]
+            if not buf then
+                local ok, random = pcall(require, "resty.random")
+                if ok and random then
+                    buf = random.bytes(1048576)
+                end
+                if not buf or #buf ~= 1048576 then
+                    math.randomseed(ngx.now() * 1000 + ngx.worker.pid())
+                    local parts, char, rnd = {}, string.char, math.random
+                    for i = 1, 1024 do
+                        local t = {}
+                        for j = 1, 1024 do
+                            t[j] = rnd(0, 255)
+                        end
+                        parts[i] = char(unpack(t))
+                    end
+                    buf = table.concat(parts)
+                end
+                package.loaded["wispbaby.speedtest.buf"] = buf
+            end
+
+            local count = b - a + 1
+            if count > CAP then
+                count = CAP
+            end
+
+            ngx.status = 200
+            ngx.header["Content-Type"] = "application/octet-stream"
+            ngx.header["Content-Length"] = count
+            ngx.header["Cache-Control"] = "no-store"
+            if method == "HEAD" then
+                ngx.send_headers()
+                return ngx.eof()
+            end
+
+            local size = #buf
+            local left = count
+            while left > 0 do
+                local n = left < size and left or size
+                local ok = ngx.print(n == size and buf or buf:sub(1, n))
+                if not ok then
+                    return
+                end
+                -- Wait for the socket to take it, so a worker never holds more than one chunk per request.
+                ok = ngx.flush(true)
+                if not ok then
+                    return
+                end
+                left = left - n
+            end
+        }
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name {{ wisp_zone }} *.{{ wisp_zone }};
+
+    ssl_certificate_by_lua_block {
+        auto_ssl_instance:ssl_certificate()
+    }
+    ssl_certificate {{ openresty_auto_ssl_dir }}/fallback.crt;
+    ssl_certificate_key {{ openresty_auto_ssl_dir }}/fallback.key;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    root /var/www/wispbaby;
+    charset utf-8;
+    charset_types text/css text/javascript application/json image/svg+xml text/plain application/manifest+json;
+
+    # Every location that sets its own add_header repeats these (nginx does not inherit add_header
+    # into a location that has any), hence the macro.
+{{ wispbaby_headers() }}
+    add_header Content-Security-Policy $wispbaby_csp always;
+
+    # :80 answers ACME itself; this one catches a challenge that was redirected to https.
+    location /.well-known/acme-challenge/ {
+        content_by_lua_block {
+            auto_ssl_instance:challenge_server()
+        }
+    }
+
+    # The relay on a WebSocket upgrade (wss://{{ wisp_zone }}/, Wisp v1, no subprotocol needed),
+    # the page on anything else. rewrite ... last is one of the two things that are safe in a
+    # location `if`.
+    location = / {
+        if ($wispbaby_websocket = 0) {
+            rewrite ^ /index.html last;
+        }
+        limit_except GET {
+            deny all;
+        }
+        proxy_pass http://127.0.0.1:{{ edge_wisp_port }}/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $ws_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_buffering off;
+        # An upgraded connection is relayed through one buffer of proxy_buffer_size each way: the
+        # 4-8 KiB default held one WebSocket to about 400 MiB/s at a full core (defaults/main.yml).
+        proxy_buffer_size {{ edge_ws_proxy_buffer }};
+        proxy_buffers 4 {{ edge_ws_proxy_buffer }};
+        proxy_busy_buffers_size {{ edge_ws_proxy_buffer }};
+        proxy_cache off;
+        proxy_connect_timeout 10s;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+{% if wispstats_on | bool %}
+        # Live stats: a 101 is a session starting, the log phase is its end (lua/wispstats.lua).
+        header_filter_by_lua_block {
+            require("wispstats").relay_open("wispbaby")
+        }
+        log_by_lua_block {
+            require("wispstats").relay_close()
+        }
+{% endif %}
+    }
+
+    location = /index.html {
+        limit_except GET {
+            deny all;
+        }
+        # Not content-hashed: always revalidate (ETag / Last-Modified make that a 304).
+        add_header Cache-Control "no-cache" always;
+{{ wispbaby_headers() }}
+        add_header Content-Security-Policy $wispbaby_csp always;
+        try_files /index.html =404;
+    }
+
+    # Which box answered (wispbaby/README.md "Server").
+    location = /where {
+        limit_except GET {
+            deny all;
+        }
+        default_type application/json;
+        add_header Cache-Control "no-store" always;
+{{ wispbaby_headers() }}
+        add_header Content-Security-Policy $wispbaby_csp always;
+        return 200 '{{ wispbaby_where | replace("\\", "\\\\") | replace("'", "\\'") }}';
+    }
+
+{% if wispstats_on | bool %}
+    # Live usage stats (wispbaby/README.md "Live stats"), all from this box's shared memory:
+    # no request reaches Redis or Postgres. /you is per visitor and not logged.
+    location = /live {
+        limit_except GET {
+            deny all;
+        }
+        access_log off;
+        default_type application/json;
+{{ wispbaby_headers() }}
+        add_header Content-Security-Policy $wispbaby_csp always;
+        content_by_lua_block {
+            require("wispstats").serve_live()
+        }
+    }
+
+    location = /live/history {
+        limit_except GET {
+            deny all;
+        }
+        access_log off;
+        default_type application/json;
+{{ wispbaby_headers() }}
+        add_header Content-Security-Policy $wispbaby_csp always;
+        content_by_lua_block {
+            require("wispstats").serve_history()
+        }
+    }
+
+    location = /you {
+        limit_except GET {
+            deny all;
+        }
+        access_log off;
+        default_type application/json;
+{{ wispbaby_headers() }}
+        add_header Content-Security-Policy $wispbaby_csp always;
+        content_by_lua_block {
+            require("wispstats").serve_you()
+        }
+    }
+
+{% endif %}
+    # Monitoring: holyWisp's own /health ({"status":"ok"}), GET only. /stats stays loopback-only.
+    location = /health {
+        limit_except GET {
+            deny all;
+        }
+        proxy_pass http://127.0.0.1:{{ edge_wisp_port }}/health;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 5s;
+        add_header Cache-Control "no-store" always;
+{{ wispbaby_headers() }}
+        add_header Content-Security-Policy $wispbaby_csp always;
+    }
+
+    # The page's other files (wispbaby/site/): plain names, optionally in subdirectories, never
+    # dotfiles. Not content-hashed, so a short max-age (revalidated with ETag after).
+    location ~ "^/(?:[A-Za-z0-9_-][A-Za-z0-9._-]*/)*[A-Za-z0-9_-][A-Za-z0-9._-]*\.(?:html|js|mjs|css|svg|png|ico|webp|avif|jpg|woff2|json|webmanifest|txt|wasm)$" {
+        limit_except GET {
+            deny all;
+        }
+        types {
+            text/html html;
+            text/javascript js mjs;
+            text/css css;
+            image/svg+xml svg;
+            image/png png;
+            image/x-icon ico;
+            image/webp webp;
+            image/avif avif;
+            image/jpeg jpg;
+            font/woff2 woff2;
+            application/json json;
+            application/manifest+json webmanifest;
+            text/plain txt;
+            application/wasm wasm;
+        }
+        add_header Cache-Control "public, max-age=300" always;
+{{ wispbaby_headers() }}
+        add_header Content-Security-Policy $wispbaby_csp always;
+        try_files $uri =404;
+    }
+
+    location / {
+        return 404;
+    }
+}

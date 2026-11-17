@@ -1,0 +1,172 @@
+/* ============================================================
+   BLOCK DEFENSE -- main menu screen (owned by U1)
+   Backdrop canvas + blocky logo + staggered button stack + footer.
+   Builds on css/base.css design tokens and .mc-btn.
+   ============================================================ */
+
+.screen-menu {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    background:
+        radial-gradient(ellipse at 50% 32%, rgba(60, 45, 90, 0.35), transparent 70%),
+        #0a0910;
+}
+
+/* ---------------- backdrop canvas ---------------- */
+
+.menu-bg-canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    image-rendering: pixelated;
+    pointer-events: none;
+    animation: fadeIn 0.8s ease-out both;
+}
+
+/* ---------------- foreground layout ---------------- */
+
+.menu-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 34px;
+    padding: 40px;
+}
+
+/* ---------------- blocky logo ---------------- */
+
+.menu-logo {
+    animation: menuLogoIn 0.72s cubic-bezier(0.2, 0.9, 0.25, 1.15) both;
+}
+
+.menu-logo-inner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    line-height: 0.9;
+    animation: floaty 6.5s ease-in-out infinite;
+}
+
+.menu-logo-line {
+    font-size: 90px;
+    font-weight: 900;
+    letter-spacing: 10px;
+    text-transform: uppercase;
+    color: #eef7e2;
+    text-shadow:
+        0 6px 0 rgba(0, 0, 0, 0.85),
+        0 0 46px rgba(124, 189, 86, 0.42);
+}
+
+.menu-logo-line:last-child {
+    /* nudge the second word so the two blocky caps stack cleanly */
+    margin-top: 6px;
+    letter-spacing: 8px;
+}
+
+.menu-logo .mc-block {
+    display: inline-block;
+    background: linear-gradient(#8ecf63, #55943a);
+    color: #16260d;
+    text-shadow: 0 3px 0 rgba(255, 255, 255, 0.28);
+    padding: 2px 14px 6px;
+    margin-right: 6px;
+    border: 4px solid #000;
+    box-shadow:
+        inset 0 5px 0 rgba(255, 255, 255, 0.35),
+        inset 0 -6px 0 rgba(0, 0, 0, 0.35),
+        0 6px 0 rgba(0, 0, 0, 0.5);
+}
+
+/* ---------------- subtitle ---------------- */
+
+.menu-subtitle {
+    margin-top: -10px;
+    font-size: 19px;
+    letter-spacing: 4px;
+    color: var(--c-text-dim);
+    text-shadow: 0 2px 0 rgba(0, 0, 0, 0.8);
+    animation: fadeIn 0.6s ease-out 0.35s both;
+}
+
+/* ---------------- button stack ---------------- */
+
+.menu-buttons {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 14px;
+    width: 320px;
+    margin-top: 6px;
+}
+
+.menu-buttons .menu-btn {
+    width: 100%;
+    font-size: 19px;
+    letter-spacing: 2px;
+    padding: 14px 26px;
+    animation: menuBtnIn 0.42s ease-out both;
+}
+
+/* staggered entrance -- delays cascade regardless of the optional CONTINUE */
+.menu-buttons .menu-btn:nth-child(1) { animation-delay: 0.42s; }
+.menu-buttons .menu-btn:nth-child(2) { animation-delay: 0.50s; }
+.menu-buttons .menu-btn:nth-child(3) { animation-delay: 0.58s; }
+.menu-buttons .menu-btn:nth-child(4) { animation-delay: 0.66s; }
+.menu-buttons .menu-btn:nth-child(5) { animation-delay: 0.74s; }
+.menu-buttons .menu-btn:nth-child(6) { animation-delay: 0.82s; }
+
+/* PLAY carries a soft emerald glow so the eye lands on it first. */
+.menu-buttons .menu-btn.mc-btn-green {
+    box-shadow:
+        inset 0 2px 0 rgba(255, 255, 255, 0.35),
+        inset 0 -3px 0 rgba(0, 0, 0, 0.45),
+        0 3px 0 rgba(0, 0, 0, 0.6),
+        0 0 22px rgba(110, 206, 74, 0.42);
+}
+
+.menu-buttons .menu-btn.mc-btn-green:active {
+    box-shadow:
+        inset 0 2px 0 rgba(255, 255, 255, 0.2),
+        inset 0 -2px 0 rgba(0, 0, 0, 0.45),
+        0 1px 0 rgba(0, 0, 0, 0.6),
+        0 0 16px rgba(110, 206, 74, 0.4);
+}
+
+/* ---------------- footer ---------------- */
+
+.menu-footer {
+    position: absolute;
+    bottom: 14px;
+    left: 0;
+    right: 0;
+    z-index: 2;
+    text-align: center;
+    font-size: 12px;
+    letter-spacing: 1px;
+    color: var(--c-text-dim);
+    text-shadow: 0 1px 0 rgba(0, 0, 0, 0.9);
+    animation: fadeIn 0.6s ease-out 0.9s both;
+}
+
+.menu-foot-ver { color: var(--c-text); font-weight: 700; }
+.menu-foot-dot { opacity: 0.6; }
+.menu-foot-credit { opacity: 0.85; }
+
+/* ---------------- keyframes ---------------- */
+
+@keyframes menuLogoIn {
+    from { transform: translateY(-34px) scale(0.92); opacity: 0; }
+    to { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+@keyframes menuBtnIn {
+    from { transform: translateY(22px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+}

@@ -1,0 +1,146 @@
+# BYOD edge relay. Managed by Ansible (abulxt edge_relay role).
+# Terminates TLS for any approved domain and relays to amph's origin-internal
+# listener (:9080) with the shared X-BYOD-Token.
+#
+# The wildcard default_server below is the catch-all for the abstract half of
+# this edge's addresses only (byod.abstracteducation.loan pool): the Fracital
+# half (edge_advertise_ips_fracital) is listened on explicitly by the Fracital
+# servers in conf.d/30-fracital.conf, which are the default there, so an unknown
+# Host on a byod.fracit.al address renders Fracital, never abulxt.
+
+# Internal lua-resty-auto-ssl hook server. Dehydrated (the ACME client) calls
+# this on loopback to deploy/clean up http-01 challenge tokens into the shared
+# Redis store before telling the CA to validate.
+server {
+    listen 127.0.0.1:8999;
+    client_max_body_size 128k;
+    client_body_buffer_size 128k;
+
+    location / {
+        content_by_lua_block {
+            auto_ssl_instance:hook_server()
+        }
+    }
+}
+
+# HTTP: answer ACME challenges, redirect everything else to HTTPS.
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+
+    location /.well-known/acme-challenge/ {
+        content_by_lua_block {
+            auto_ssl_instance:challenge_server()
+        }
+    }
+
+    # Redirect www.* to apex. Keep this inside location /: a server-level
+    # `if` runs before location matching and would redirect www ACME
+    # challenges too, so www.* certs could never issue (Cloudflare Full
+    # (strict) then 526s on www).
+    location / {
+        if ($host ~* ^www\.(.+)$) {
+            return 301 https://$1$request_uri;
+        }
+        return 301 https://$host$request_uri;
+    }
+}
+
+# HTTPS: on-demand TLS (shared Redis storage) + reverse-proxy to amph.
+server {
+    # reuseport: a listener per worker. With one shared listener, one of four workers held 225 of
+    # 237 client connections and 96% of nginx's CPU (2026-11-16). Only one listen of an address
+    # and port may carry it, so it is here, on the default server.
+    listen 443 ssl default_server reuseport;
+    listen [::]:443 ssl default_server reuseport;
+    http2 on;
+    server_name _;
+    # nginx's default is 1m, which rejected chat sends (/api/ai) with 413 before they reached the origin. Matches the
+    # origin's /api/ai and /v1 limit (abulxt deploy/openresty/snippets/routes-common.conf).
+    client_max_body_size 16m;
+
+    ssl_certificate_by_lua_block {
+        auto_ssl_instance:ssl_certificate()
+    }
+    ssl_certificate {{ openresty_auto_ssl_dir }}/fallback.crt;
+    ssl_certificate_key {{ openresty_auto_ssl_dir }}/fallback.key;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+    if ($host ~* ^www\.(.+)$) {
+        return 301 https://$1$request_uri;
+    }
+
+    # Edge-local relay: the keyed path is served by holyWisp on this box (no
+    # hop to amph). Its router classifies every stream via Gateway DoH and
+    # sends only "shady" ones through amph's Mullvad egress. The path is
+    # /{{ wisp_path }}/<key>/ and nothing else on the relay exists.
+    location ~* ^/{{ wisp_path }}/{{ wisp_gate_key }}(/.*)?$ {
+        set $relay_tail $1;
+        if ($relay_tail = "") {
+            set $relay_tail "/";
+        }
+        proxy_pass http://127.0.0.1:{{ edge_wisp_port }}$relay_tail;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $ws_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_buffering off;
+        # An upgraded connection is relayed through one buffer of proxy_buffer_size each way: the
+        # 4-8 KiB default held one WebSocket to about 400 MiB/s at a full core (defaults/main.yml).
+        proxy_buffer_size {{ edge_ws_proxy_buffer }};
+        proxy_buffers 4 {{ edge_ws_proxy_buffer }};
+        proxy_busy_buffers_size {{ edge_ws_proxy_buffer }};
+        proxy_cache off;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        proxy_connect_timeout 10s;
+{% if wispstats_on | bool %}
+        # wisp.baby live stats: a 101 is a relay session starting, the log phase its end (lua/wispstats.lua).
+        header_filter_by_lua_block {
+            require("wispstats").relay_open("abstract")
+        }
+        log_by_lua_block {
+            require("wispstats").relay_close()
+        }
+{% endif %}
+    }
+
+    # Any other request under the relay segment (wrong or missing key) is
+    # refused. Must stay: without it these fall through to the app server.
+    location ~* ^/{{ wisp_path }}(/.*)?$ {
+        return 403 "Forbidden";
+    }
+
+    location / {
+        proxy_pass http://{{ abulxt_origin_ip }}:{{ abulxt_origin_internal_port }};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $ws_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header CF-Connecting-IP $remote_addr;
+        proxy_set_header X-BYOD-Token "{{ byod_token }}";
+
+        proxy_set_header Sec-WebSocket-Protocol $http_sec_websocket_protocol;
+        proxy_set_header Sec-WebSocket-Extensions $http_sec_websocket_extensions;
+        proxy_set_header Sec-WebSocket-Key $http_sec_websocket_key;
+        proxy_set_header Sec-WebSocket-Version $http_sec_websocket_version;
+
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout {{ edge_proxy_read_timeout }};
+        proxy_send_timeout {{ edge_proxy_send_timeout }};
+        proxy_connect_timeout {{ edge_proxy_connect_timeout }};
+    }
+}

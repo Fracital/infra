@@ -1,0 +1,8 @@
+---
+# Collections the roles use (ansible-galaxy collection install -r requirements.yml).
+# Pinned to what the playbooks were last run with; CI installs exactly these.
+collections:
+  - name: ansible.posix
+    version: "2.2.0"
+  - name: community.general
+    version: "12.6.1"

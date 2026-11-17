@@ -1,0 +1,10 @@
+---
+# fail2ban only: the vendored fail2ban role (fail2ban-contract v1, README.md
+# "fail2ban"). Inputs: inventory/group_vars/abulxt.yml (+ edge.yml sshd settings,
+# host_vars/amph.yml retired files). KrunkNative runs the same role (fail2ban.yml).
+#   ansible-playbook playbooks/fail2ban.yml --vault-password-file <file> --check --diff [--limit <host>]
+- name: fail2ban (edges + origin)
+  hosts: abulxt
+  gather_facts: true
+  roles:
+    - { role: fail2ban, tags: [fail2ban] }

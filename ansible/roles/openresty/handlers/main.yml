@@ -1,0 +1,14 @@
+---
+- name: Test openresty configuration
+  ansible.builtin.command: "{{ openresty_prefix }}/nginx/sbin/nginx -t"
+  register: openresty_test
+  changed_when: false
+  listen: reload openresty
+
+- name: Reload openresty
+  ansible.builtin.systemd:
+    name: openresty
+    state: reloaded
+    enabled: true
+  listen: reload openresty
+  when: openresty_test.rc == 0

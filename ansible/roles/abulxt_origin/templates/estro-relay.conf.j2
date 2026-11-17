@@ -1,0 +1,40 @@
+# estro.help on amph's origin-internal listener. Managed by Ansible (abulxt_origin role).
+#
+# The name is a DNS-only CNAME to {{ abulxt_byod_fqdn }}, so the edges' catch-all
+# (byod-edge.conf.j2) terminates TLS with the shared on-demand cert and relays here with Host,
+# X-Real-IP and X-BYOD-Token. amph forwards over divide's vmbr1 (172.16.5.0/24) to {{ estro_upstream }}.
+# The edges 301 www. to the apex before relaying. 57 keeps this after 50-origin-internal.conf,
+# whose catch-all stays the :9080 default; :9080 is firewalled to the edge subnets.
+
+server {
+    listen 9080;
+    listen [::]:9080;
+    server_name {{ estro_hosts | join(' ') }};
+
+    if ($http_x_byod_token = "") {
+        return 403 "Forbidden";
+    }
+
+    # Matches the edge catch-all's limit.
+    client_max_body_size 16m;
+
+    location / {
+        proxy_pass http://{{ estro_upstream }};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        # The edge already set these to the end client.
+        proxy_set_header X-Real-IP $http_x_real_ip;
+        proxy_set_header X-Forwarded-For $http_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        # The relay token and the edge's client-IP copy stay on this side of the VLAN.
+        proxy_set_header X-BYOD-Token "";
+        proxy_set_header CF-Connecting-IP "";
+        proxy_set_header Upgrade $ws_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+
+        proxy_buffering off;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 1d;
+        proxy_send_timeout 1d;
+    }
+}

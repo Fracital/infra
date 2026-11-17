@@ -1,0 +1,179 @@
+---
+# One byod name (byod_name: zone, fqdn, ips_var, ips_v6_var, sites, and optionally
+# group, site_regex, site_ips_var, site_ips_v6_var; see group_vars/all/main.yml).
+
+- name: "{{ byod_name.fqdn }}: reset the collected lists"
+  ansible.builtin.set_fact:
+    gcore_all_v4: []
+    gcore_all_v6: []
+    gcore_a_records: []
+    gcore_aaaa_records: []
+    gcore_sites: []
+    gcore_site_records: {}
+    gcore_site_records_v6: {}
+    gcore_hosts: "{{ groups[byod_name.group | default('edge')] }}"
+
+- name: "{{ byod_name.fqdn }}: collect every advertised IPv4 across the edge group"
+  ansible.builtin.set_fact:
+    gcore_all_v4: "{{ gcore_all_v4 + (hostvars[item][byod_name.ips_var] | default([])) }}"
+  loop: "{{ gcore_hosts }}"
+
+- name: "{{ byod_name.fqdn }}: collect every advertised IPv6 across the edge group"
+  ansible.builtin.set_fact:
+    gcore_all_v6: "{{ gcore_all_v6 + (hostvars[item][byod_name.ips_v6_var] | default([])) }}"
+  loop: "{{ gcore_hosts }}"
+
+- name: "{{ byod_name.fqdn }}: refuse to publish an empty apex"
+  ansible.builtin.assert:
+    that: gcore_all_v4 | length > 0
+    fail_msg: "No edge has {{ byod_name.ips_var }} set; {{ byod_name.fqdn }} would be emptied."
+
+# The zone is a subzone delegated from the parent (Cloudflare NS records ->
+# ns1.gcorelabs.net / ns2.gcdn.services); creating it here is idempotent.
+- name: "{{ byod_name.fqdn }}: look up the Gcore zone {{ byod_name.zone }}"
+  ansible.builtin.uri:
+    url: "{{ gcore_api_base }}/zones/{{ byod_name.zone }}"
+    headers:
+      Authorization: "apikey {{ gcore_api_token }}"
+    status_code: [200, 404]
+  register: gcore_zone
+  delegate_to: localhost
+  run_once: true
+
+- name: "{{ byod_name.fqdn }}: create the Gcore zone {{ byod_name.zone }}"
+  ansible.builtin.uri:
+    url: "{{ gcore_api_base }}/zones"
+    method: POST
+    headers:
+      Authorization: "apikey {{ gcore_api_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      name: "{{ byod_name.zone }}"
+    status_code: [200, 201]
+  delegate_to: localhost
+  run_once: true
+  when: gcore_zone.status == 404
+
+- name: "{{ byod_name.fqdn }}: build A-record entries for the API body"
+  ansible.builtin.set_fact:
+    gcore_a_records: "{{ gcore_a_records + [{ 'content': [item], 'enabled': true }] }}"
+  loop: "{{ gcore_all_v4 }}"
+
+- name: "{{ byod_name.fqdn }}: upsert the apex A RRset"
+  # Gcore replace-RRset endpoint: PUT /dns/v2/zones/{zone}/{name}/{type}
+  ansible.builtin.uri:
+    url: "{{ gcore_api_base }}/zones/{{ byod_name.zone }}/{{ byod_name.fqdn }}/A"
+    method: PUT
+    headers:
+      Authorization: "apikey {{ gcore_api_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      ttl: "{{ gcore_dns_ttl }}"
+      resource_records: "{{ gcore_a_records }}"
+    status_code: [200, 201]
+    return_content: true
+  delegate_to: localhost
+  run_once: true
+
+- name: "{{ byod_name.fqdn }}: build AAAA-record entries for the API body"
+  ansible.builtin.set_fact:
+    gcore_aaaa_records: "{{ gcore_aaaa_records + [{ 'content': [item], 'enabled': true }] }}"
+  loop: "{{ gcore_all_v6 }}"
+
+- name: "{{ byod_name.fqdn }}: upsert the apex AAAA RRset"
+  ansible.builtin.uri:
+    url: "{{ gcore_api_base }}/zones/{{ byod_name.zone }}/{{ byod_name.fqdn }}/AAAA"
+    method: PUT
+    headers:
+      Authorization: "apikey {{ gcore_api_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      ttl: "{{ gcore_dns_ttl }}"
+      resource_records: "{{ gcore_aaaa_records }}"
+    status_code: [200, 201]
+    return_content: true
+  delegate_to: localhost
+  run_once: true
+  when: gcore_all_v6 | length > 0
+
+# Per-site names for the browser's nearest-site routing (config.client.relaySites):
+# <site>.<fqdn> -> only that edge's share of addresses for this name, where
+# <site> is the host's wisp_site when it has one (edge -> mnz), else the inventory name minus
+# byod_name.site_regex (default `^abulxt-`: ashburn, chicago, losangeles, santaclara;
+# wisp.baby: `^wisp-`, wisp-syd -> syd).
+# site_ips_var / site_ips_v6_var (default ips_var, no AAAA) let a site carry more
+# addresses than it gives the apex. The edges approve TLS for any name that resolves to
+# an edge IP (edge-dns.ts), so no edge config changes are needed. These RRsets
+# are static (so is the apex here; roles/edge_dns health-checks the live zone), and the browser's
+# round-trip race skips a dead site and falls back to the apex.
+- name: "{{ byod_name.fqdn }}: list each edge site with its addresses"
+  ansible.builtin.set_fact:
+    gcore_sites: >-
+      {{ gcore_sites + [{
+           'site': hostvars[item].wisp_site | default(item | regex_replace(byod_name.site_regex | default('^abulxt-'), '')),
+           'ips': hostvars[item][byod_name.site_ips_var | default(byod_name.ips_var)] | default([]),
+           'ips_v6': (hostvars[item][byod_name.site_ips_v6_var] | default([])) if byod_name.site_ips_v6_var is defined else []
+         }] }}
+  loop: "{{ gcore_hosts }}"
+  tags: [sites]
+  when: byod_name.sites | default(false) | bool
+
+- name: "{{ byod_name.fqdn }}: build per-site A-record entries for the API body"
+  ansible.builtin.set_fact:
+    gcore_site_records: "{{ gcore_site_records | combine({ item.0.site: gcore_site_records.get(item.0.site, []) + [{ 'content': [item.1 | string], 'enabled': true }] }) }}"
+  loop: "{{ gcore_sites | subelements('ips') }}"
+  tags: [sites]
+  when: byod_name.sites | default(false) | bool
+
+- name: "{{ byod_name.fqdn }}: upsert per-site A RRsets (<site>.{{ byod_name.fqdn }})"
+  ansible.builtin.uri:
+    url: "{{ gcore_api_base }}/zones/{{ byod_name.zone }}/{{ item.key }}.{{ byod_name.fqdn }}/A"
+    method: PUT
+    headers:
+      Authorization: "apikey {{ gcore_api_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      ttl: "{{ gcore_dns_ttl }}"
+      resource_records: "{{ item.value }}"
+    status_code: [200, 201]
+  loop: "{{ gcore_site_records | dict2items }}"
+  delegate_to: localhost
+  run_once: true
+  tags: [sites]
+  when: byod_name.sites | default(false) | bool
+
+- name: "{{ byod_name.fqdn }}: build per-site AAAA-record entries for the API body"
+  ansible.builtin.set_fact:
+    gcore_site_records_v6: "{{ gcore_site_records_v6 | combine({ item.0.site: gcore_site_records_v6.get(item.0.site, []) + [{ 'content': [item.1 | string], 'enabled': true }] }) }}"
+  loop: "{{ gcore_sites | subelements('ips_v6') }}"
+  tags: [sites]
+  when: byod_name.sites | default(false) | bool
+
+- name: "{{ byod_name.fqdn }}: upsert per-site AAAA RRsets (<site>.{{ byod_name.fqdn }})"
+  ansible.builtin.uri:
+    url: "{{ gcore_api_base }}/zones/{{ byod_name.zone }}/{{ item.key }}.{{ byod_name.fqdn }}/AAAA"
+    method: PUT
+    headers:
+      Authorization: "apikey {{ gcore_api_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      ttl: "{{ gcore_dns_ttl }}"
+      resource_records: "{{ item.value }}"
+    status_code: [200, 201]
+  loop: "{{ gcore_site_records_v6 | dict2items }}"
+  delegate_to: localhost
+  run_once: true
+  tags: [sites]
+  when: byod_name.sites | default(false) | bool
+
+- name: "{{ byod_name.fqdn }}: show the applied records"
+  ansible.builtin.debug:
+    msg:
+      - "{{ byod_name.fqdn }} A ({{ gcore_all_v4 | length }}): {{ gcore_all_v4 }}"
+      - "{{ byod_name.fqdn }} AAAA ({{ gcore_all_v6 | length }}): {{ gcore_all_v6 }}"
+      - "per-site: {{ gcore_site_records.keys() | list }} under {{ byod_name.fqdn }}"

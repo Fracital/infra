@@ -1,0 +1,25 @@
+---
+- name: Restart redis
+  ansible.builtin.systemd:
+    name: redis-server
+    state: restarted
+  listen: restart redis
+
+- name: Test amph openresty configuration
+  ansible.builtin.command: "{{ openresty_prefix }}/nginx/sbin/nginx -t"
+  register: amph_openresty_test
+  changed_when: false
+  listen: reload openresty on amph
+
+- name: Reload amph openresty
+  ansible.builtin.systemd:
+    name: openresty
+    state: reloaded
+  listen: reload openresty on amph
+  when: amph_openresty_test.rc == 0
+
+- name: Restart shady relay
+  ansible.builtin.systemd:
+    name: shady-relay.service
+    state: restarted
+  listen: restart shady relay

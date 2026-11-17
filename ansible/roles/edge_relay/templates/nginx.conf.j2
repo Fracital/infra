@@ -1,0 +1,229 @@
+# OpenResty edge configuration. Managed by Ansible (abulxt edge_relay role).
+# Any manual changes will be overwritten.
+
+user www-data;
+worker_processes {{ edge_openresty_workers }};
+worker_rlimit_nofile 8192;
+pid {{ openresty_prefix }}/nginx/logs/nginx.pid;
+error_log {{ openresty_prefix }}/nginx/logs/error.log warn;
+
+events {
+    worker_connections 4096;
+    multi_accept on;
+    use epoll;
+}
+
+http {
+    include {{ openresty_prefix }}/nginx/conf/mime.types;
+    default_type application/octet-stream;
+
+    lua_package_path "{% if wispstats_on | bool %}{{ openresty_conf_dir }}/lua/?.lua;{% endif %}/usr/local/share/lua/5.1/?.lua;/usr/local/share/lua/5.1/?/init.lua;;";
+    lua_package_cpath "/usr/local/lib/lua/5.1/?.so;;";
+
+    log_format edge_combined '$remote_addr - $remote_user [$time_local] '
+                             '"$request" $status $body_bytes_sent '
+                             '"$http_referer" "$http_user_agent" '
+                             'rt=$request_time uct="$upstream_connect_time" '
+                             'uht="$upstream_header_time" urt="$upstream_response_time" '
+                             'host="$host" edge="{{ edge_log_name }}"';
+    access_log {{ openresty_prefix }}/nginx/logs/access.log edge_combined;
+
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    types_hash_max_size 2048;
+    map_hash_bucket_size 128;
+    # Long server names (e.g. mcpanel.abstracteducation.loan) need a bigger
+    # server_names hash than the default 32.
+    server_names_hash_bucket_size 64;
+    server_tokens off;
+
+    # TLS resumption: tickets (on by default) lived 300 s, so a client back after five minutes
+    # paid a full handshake. A shared cache for TLS 1.2 clients without tickets.
+    ssl_session_cache shared:SSL:20m;
+    ssl_session_timeout 4h;
+
+    gzip on;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_comp_level 6;
+    gzip_types text/plain text/css text/xml application/json application/javascript
+               application/x-javascript application/xml application/xml+rss
+               text/javascript image/svg+xml;
+
+    # Real client IP. Hosts fronted by Cloudflare (orange-cloud CNAME -> byod)
+    # arrive from CF's edge with the user in CF-Connecting-IP. realip rewrites
+    # $remote_addr from that header ONLY when the TCP peer is a Cloudflare
+    # range, so a direct client cannot spoof it. Ranges from
+    # https://www.cloudflare.com/ips-v4 and /ips-v6 (role var cloudflare_ip_ranges).
+{% for cidr in cloudflare_ip_ranges %}
+    set_real_ip_from {{ cidr }};
+{% endfor %}
+    real_ip_header CF-Connecting-IP;
+
+    # Forward Upgrade only for real WebSocket requests (see 01-maps.conf on origin).
+    map $http_upgrade $ws_upgrade {
+        ~*^websocket$ $http_upgrade;
+        default       "";
+    }
+
+    # WebSocket upgrade connection map (used by the relay server block).
+    map $http_upgrade $connection_upgrade {
+        default upgrade;
+        ''      close;
+    }
+
+    # Shared memory for lua-resty-auto-ssl. 1m held a fraction of the certificates: 378 forced
+    # evictions in 3 h across 87 of 115 domains (2026-11-16), each a Redis fetch on amph during
+    # the handshake.
+    lua_shared_dict auto_ssl 16m;
+    lua_shared_dict auto_ssl_settings 64k;
+{% if wispstats_on | bool %}
+
+    # wisp.baby live stats (lua/wispstats.lua): the collector's blobs, the speed test counter and
+    # the distinct-client queue; and the per-client hourly buckets behind /you (hashes, 25 h).
+    lua_shared_dict wispstats 8m;
+    lua_shared_dict wispstats_you 32m;
+{% endif %}
+
+    init_by_lua_block {
+        local auto_ssl = require("resty.auto-ssl")
+        auto_ssl_instance = auto_ssl.new()
+
+        -- Shared Redis storage on amph: certs + ACME http-01 challenge tokens
+        -- live in one namespace across ALL edges, so issuance on any edge is
+        -- immediately valid everywhere and LE can validate via any edge IP.
+        -- storage_adapter = module path; init_master does require(...).new(instance),
+        -- and the redis adapter's .new reads instance:get("redis") for its opts.
+        auto_ssl_instance:set("redis", {
+            host = "{{ abulxt_origin_ip }}",
+            port = {{ auto_ssl_redis_port }},
+            auth = "{{ auto_ssl_redis_password }}",
+            prefix = "auto-ssl",
+        })
+        auto_ssl_instance:set("storage_adapter", "resty.auto-ssl.storage_adapters.redis")
+
+{% if krunkio_enabled | bool and krunkio_tls_local_approve | bool %}
+        -- krunk.io service names (conf.d/20-krunkio.conf): approved here, without the
+        -- validator's DNS check and its caches, so the first handshake after a name's
+        -- CNAME flip issues at once. Only these fixed names (README.md "krunk.io routes").
+        local krunkio_names = {
+{% for h in krunkio_proxy_hosts + krunkio_assets_hosts + krunkio_direct_hosts %}
+            ["{{ h }}"] = true,
+{% endfor %}
+        }
+
+{% endif %}
+{% if fracital_enabled | bool %}
+        -- Fracital names (conf.d/30-fracital.conf): proxied Cloudflare CNAMEs resolve to
+        -- Cloudflare, never to an edge, so the validator's DNS match cannot approve them.
+        -- Includes the dedicated relay names (fracital_wisp_hosts).
+        local fracital_names = {
+{% for h in fracital_server_names + (fracital_wisp_hosts | default([])) %}
+            ["{{ h }}"] = true,
+{% endfor %}
+        }
+
+{% endif %}
+{% if blockshooter_on | bool %}
+        -- blockshooter.io names (conf.d/36-blockshooter.conf): proxied Cloudflare CNAMEs, like holyunb's.
+        local blockshooter_names = {
+{% for h in [blockshooter_host, blockshooter_discord_host] + blockshooter_redirect_hosts %}
+            ["{{ h }}"] = true,
+{% endfor %}
+        }
+
+{% endif %}
+{% if holyunb_on | bool %}
+        -- Holy Unblocker names (conf.d/35-holyunb.conf): proxied Cloudflare CNAMEs, like Fracital's.
+        local holyunb_names = {
+{% for h in holyunb_hosts %}
+            ["{{ h }}"] = true,
+{% endfor %}
+        }
+
+{% endif %}
+        -- Domain approval: ask amph's abulxt-domains validator (target=edge).
+        -- It approves only when the name's DNS already resolves to this edge.
+        auto_ssl_instance:set("allow_domain", function(domain, ssl_auto_ssl_instance, ssl_options)
+{% if krunkio_enabled | bool and krunkio_tls_local_approve | bool %}
+            if krunkio_names[domain] then
+                return true
+            end
+{% endif %}
+{% if fracital_enabled | bool %}
+            if fracital_names[domain] then
+                return true
+            end
+{% endif %}
+{% if holyunb_on | bool %}
+            if holyunb_names[domain] then
+                return true
+            end
+{% endif %}
+{% if blockshooter_on | bool %}
+            if blockshooter_names[domain] then
+                return true
+            end
+{% endif %}
+            local http = require("resty.http")
+            local httpc = http.new()
+            httpc:set_timeout(800)
+            local res, err = httpc:request_uri(
+                "http://{{ abulxt_origin_ip }}:{{ abulxt_domains_validator_port }}/ask?target=edge&domain=" .. domain,
+                { method = "GET" })
+            if not res then
+                ngx.log(ngx.ERR, "domain validator unreachable for ", domain, ": ", tostring(err))
+                return false
+            end
+            return res.status == 200 or res.status == 204
+        end)
+
+        auto_ssl_instance:set("dir", "{{ openresty_auto_ssl_dir }}")
+        -- Let's Encrypt certificates carry no OCSP URL any more, so stapling fails on every
+        -- handshake: 43k error lines in 4.5 h at the default level.
+        auto_ssl_instance:set("ocsp_stapling_error_level", ngx.NOTICE)
+        auto_ssl_instance:init()
+{% if wispstats_on | bool %}
+
+        -- wisp.baby live stats (wispbaby/README.md "Live stats"). wispstats.json is root-only:
+        -- it holds the Redis password and the client-hash salt.
+        require("wispstats").init("{{ openresty_conf_dir }}/wispstats.json")
+{% endif %}
+    }
+
+    init_worker_by_lua_block {
+        auto_ssl_instance:init_worker()
+{% if wispstats_on | bool %}
+        require("wispstats").init_worker()
+{% endif %}
+    }
+
+    include {{ openresty_conf_dir }}/conf.d/*.conf;
+}
+{% if edge_tcp8080_split | bool %}
+
+# TCP 8080 split by SNI (edge_relay defaults edge_tcp8080_*): TLS is not terminated here.
+# {{ edge_tcp8080_local_snis | join(', ') }} -> {{ edge_tcp8080_local }} (the TLS vhost in
+# conf.d/10-mc-routes.conf), everything else -> {{ edge_tcp8080_default_upstream }}.
+stream {
+    map $ssl_preread_server_name $edge_tcp8080_upstream {
+        hostnames;
+{% for n in edge_tcp8080_local_snis %}
+        {{ n }} {{ edge_tcp8080_local }};
+{% endfor %}
+        default {{ edge_tcp8080_default_upstream }};
+    }
+
+    server {
+        listen 8080;
+        listen [::]:8080;
+        ssl_preread on;
+        preread_timeout 10s;
+        proxy_pass $edge_tcp8080_upstream;
+        proxy_connect_timeout {{ edge_proxy_connect_timeout }};
+        proxy_timeout 1d;
+    }
+}
+{% endif %}

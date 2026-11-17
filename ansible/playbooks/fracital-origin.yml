@@ -1,0 +1,14 @@
+---
+# terp (Fracital origin): OpenResty in place of nginx, :443 open to the edges only.
+# README.md "Fracital routes". Run before the edges get the Fracital routes:
+#   ansible-playbook playbooks/fracital-origin.yml --vault-password-file <file> --check --diff
+#   ansible-playbook playbooks/fracital-origin.yml --vault-password-file <file>
+- name: Fracital origin
+  hosts: fracital_origin
+  gather_facts: false
+  roles:
+    - role: fracital_origin
+      tags: [origin]
+    # The unprivileged user Fracital's CI deploys as (README.md "Deploy user").
+    - role: deploy_user
+      tags: [deploy_user]

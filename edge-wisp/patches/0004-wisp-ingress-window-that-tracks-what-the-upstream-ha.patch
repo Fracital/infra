@@ -1,0 +1,450 @@
+From 82e7a2f003ac7c57e78af3f6d7b7269c9bc39b5f Mon Sep 17 00:00:00 2001
+From: abulxt-local <local@abulxt.invalid>
+Date: Fri, 9 Oct 2026 19:52:05 -0400
+Subject: [PATCH 4/4] wisp: ingress window that tracks what the upstream has
+ actually drained
+
+The upload mirror of the previous patch. submitIngress closed a stream with
+0x49 (THROTTLED) when its per-stream ingress queue would exceed
+PendingQueueSize (64 MiB), and nothing ever slowed the client down first:
+handleDataPacket decremented the client's CONTINUE budget per packet but
+refilled it to BufferRemainingLength (32768 packets) unconditionally the
+moment it reached zero, and 32768 packets of up to maxPayloadSize is not a
+meaningful window anyway. So a client that can push into the relay faster
+than the relay can deliver upstream (a browser on a local relay with a
+slower uplink; any slow target) overran the queue in under a second and lost
+the stream mid-upload.
+
+Captured with a raw Wisp v1 client, 4 parallel 200 MiB POSTs to a loopback
+sink reading at 5 MB/s: every stream was closed by the relay with 0x49 at
+~133 MB sent, with zero CONTINUE packets ever sent.
+
+ingressWindow() bounds the advertised window so a full window of
+maximum-size packets fits in half the queue:
+min(BufferRemainingLength, PendingQueueSize/2/maxPayloadSize), 128 by
+default. It is what the initial stream-0 CONTINUE (v1 and v2) and the
+stream-confirm CONTINUE now carry. The budget is replenished only as the
+ingress writer actually delivers upstream: submitIngress counts packets in
+flight and the budget the client believes it has (packets buffered before
+CONNECT completes are counted too, since the client spent budget on them),
+and ingressDrained sends CONTINUE(window - inflight) once at least half a
+window has been freed since the last announcement, or whenever the queue has
+fully drained while the client holds less than the whole window. The 0x49
+cap stays as a backstop for clients that ignore CONTINUE. The UDP path keeps
+its direct write and simple refill.
+
+wisp/ingress_flowcontrol_test.go: no CONTINUE while the upstream is stalled,
+the whole window handed back once it drains (twice, no drift), and packets
+sent before CONNECT completes are counted so the client is never left
+blocked on an empty queue.
+
+Verified through the relay: the same 4x200 MiB
+uploads at 5 MB/s complete exactly (128 CONTINUEs each), 256 KiB-packet
+uploads at 20 MB/s complete, fast-sink uploads unchanged, downloads
+unchanged.
+---
+ wisp/ingress_flowcontrol_test.go | 195 +++++++++++++++++++++++++++++++
+ wisp/types.go                    |   5 +
+ wisp/v2.go                       |   2 +-
+ wisp/wisp-connection.go          |  49 ++++++--
+ wisp/wisp-stream.go              |  45 ++++++-
+ wisp/wisp.go                     |   2 +-
+ 6 files changed, 287 insertions(+), 11 deletions(-)
+ create mode 100644 wisp/ingress_flowcontrol_test.go
+
+diff --git a/wisp/ingress_flowcontrol_test.go b/wisp/ingress_flowcontrol_test.go
+new file mode 100644
+index 0000000..0fe8970
+--- /dev/null
++++ b/wisp/ingress_flowcontrol_test.go
+@@ -0,0 +1,195 @@
++package wisp
++
++import (
++	"encoding/binary"
++	"io"
++	"net"
++	"sync"
++	"testing"
++	"time"
++)
++
++// Client->server flow control: the CONTINUE window a stream advertises must
++// track what the ingress writer has actually delivered upstream. While the
++// upstream is stalled no CONTINUE may be sent (the client stays blocked at a
++// zero budget instead of filling the per-stream queue until the cap closes the
++// stream with 0x49); once the upstream drains, the budget is replenished.
++
++// readContinues parses unmasked server WebSocket frames off the WS side of a
++// wispConnection and reports every CONTINUE's (streamId, bufferRemaining).
++func readContinues(t *testing.T, ws net.Conn, out chan<- [2]uint32) {
++	t.Helper()
++	hdr := make([]byte, 2)
++	for {
++		if _, err := io.ReadFull(ws, hdr); err != nil {
++			return
++		}
++		l := uint64(hdr[1] & 0x7f)
++		switch l {
++		case 126:
++			var b [2]byte
++			if _, err := io.ReadFull(ws, b[:]); err != nil {
++				return
++			}
++			l = uint64(binary.BigEndian.Uint16(b[:]))
++		case 127:
++			var b [8]byte
++			if _, err := io.ReadFull(ws, b[:]); err != nil {
++				return
++			}
++			l = binary.BigEndian.Uint64(b[:])
++		}
++		p := make([]byte, l)
++		if _, err := io.ReadFull(ws, p); err != nil {
++			return
++		}
++		if hdr[0]&0x0f == 0x2 && len(p) == 9 && p[0] == packetTypeContinue {
++			out <- [2]uint32{binary.LittleEndian.Uint32(p[1:5]), binary.LittleEndian.Uint32(p[5:9])}
++		}
++	}
++}
++
++func TestIngressWindowReplenishesOnlyAsUpstreamDrains(t *testing.T) {
++	wsServer, wsClient := net.Pipe()
++	upServer, upClient := net.Pipe()
++	pool := &sync.Pool{New: func() any { b := make([]byte, 15+DefaultMaxPayloadSize); return &b }}
++	// PendingQueueSize = 8 max packets -> window = 8/2 = 4 packets.
++	c := &wispConnection{
++		netConn: wsServer,
++		closeCh: make(chan struct{}),
++		config:  &Config{PendingQueueSize: 8 * DefaultMaxPayloadSize, BufferRemainingLength: 32768, ReadBufPool: pool},
++	}
++	t.Cleanup(func() { c.close(); wsClient.Close(); upClient.Close() })
++	window := c.ingressWindow()
++	if window != 4 {
++		t.Fatalf("ingressWindow = %d, want 4 (half of an 8-packet queue)", window)
++	}
++
++	continues := make(chan [2]uint32, 64)
++	go readContinues(t, wsClient, continues)
++
++	s := &wispStream{wispConn: c, streamId: 1, streamType: streamTypeTCP, conn: upServer, connReady: make(chan struct{}), pendingIngress: make([]ingressJob, 0, 16)}
++	s.isOpen.Store(true)
++	s.connReadyDone.Store(true)
++	s.ingressActive.Store(true)
++	s.bufferRemaining = window
++	s.ingressAdvertised = window
++	c.streams.Store(s.streamId, s)
++
++	const pkt = 1000
++	payload := func(b byte) []byte {
++		p := make([]byte, pkt)
++		for i := range p {
++			p[i] = b
++		}
++		return p
++	}
++	// The client spends its whole window; the upstream (upClient) reads nothing.
++	for i := 0; i < int(window); i++ {
++		c.handleDataPacket(s.streamId, payload(byte('a'+i)), nil)
++	}
++	select {
++	case got := <-continues:
++		t.Fatalf("CONTINUE %v sent while the upstream was stalled: the client would keep sending into a queue nobody drains", got)
++	case <-time.After(80 * time.Millisecond):
++	}
++	if !s.isOpen.Load() || c.isClosed.Load() {
++		t.Fatalf("stream or connection closed while the window was merely full")
++	}
++
++	// drainPhase reads one full window off the upstream and collects the
++	// CONTINUEs that follow. The writer may deliver the window in several
++	// batches, so there can be more than one announcement; each is an absolute
++	// budget that must stay within the window and never shrink, and the last
++	// one must hand the whole window back.
++	buf := make([]byte, int(window)*pkt)
++	drainPhase := func(phase string) {
++		if _, err := io.ReadFull(upClient, buf); err != nil {
++			t.Fatalf("%s: upstream read: %v", phase, err)
++		}
++		var seen []uint32
++		deadline := time.After(time.Second)
++		for {
++			select {
++			case got := <-continues:
++				if got[0] != s.streamId {
++					t.Fatalf("%s: CONTINUE for stream %d, want %d", phase, got[0], s.streamId)
++				}
++				if got[1] > window || (len(seen) > 0 && got[1] < seen[len(seen)-1]) {
++					t.Fatalf("%s: CONTINUE advertised %d after %v (window %d)", phase, got[1], seen, window)
++				}
++				seen = append(seen, got[1])
++				if got[1] == window {
++					return
++				}
++			case <-deadline:
++				t.Fatalf("%s: window not handed back after the upstream drained (CONTINUEs seen: %v): the client would stay blocked", phase, seen)
++			}
++		}
++	}
++	drainPhase("first drain")
++
++	// A second window round-trips the same way (the accounting does not drift).
++	for i := 0; i < int(window); i++ {
++		c.handleDataPacket(s.streamId, payload('z'), nil)
++	}
++	select {
++	case got := <-continues:
++		t.Fatalf("CONTINUE %v sent with the upstream stalled again", got)
++	case <-time.After(80 * time.Millisecond):
++	}
++	drainPhase("second drain")
++}
++
++// Packets the client sends before CONNECT completes (a TLS ClientHello is the
++// normal case) are buffered and flushed straight to the upstream, bypassing
++// the ingress queue. They still spent the client's budget, so the mirror must
++// count them or the server could withhold a replenishment the client needs.
++func TestIngressWindowCountsPacketsSentBeforeConnect(t *testing.T) {
++	wsServer, wsClient := net.Pipe()
++	upServer, upClient := net.Pipe()
++	pool := &sync.Pool{New: func() any { b := make([]byte, 15+DefaultMaxPayloadSize); return &b }}
++	c := &wispConnection{
++		netConn: wsServer,
++		closeCh: make(chan struct{}),
++		config:  &Config{PendingQueueSize: 8 * DefaultMaxPayloadSize, BufferRemainingLength: 32768, ReadBufPool: pool},
++	}
++	t.Cleanup(func() { c.close(); wsClient.Close(); upClient.Close() })
++	window := c.ingressWindow() // 4
++	continues := make(chan [2]uint32, 64)
++	go readContinues(t, wsClient, continues)
++
++	// Exactly what handleConnectPacket builds, before handleConnect has run.
++	s := &wispStream{wispConn: c, streamId: 1, connReady: make(chan struct{}), pendingIngress: make([]ingressJob, 0, 16), ingressAdvertised: window}
++	s.isOpen.Store(true)
++	c.streams.Store(s.streamId, s)
++
++	const pkt = 1000
++	payload := make([]byte, pkt)
++	// Client sends 3 of its 4 packets before the dial completes.
++	for i := 0; i < 3; i++ {
++		c.handleDataPacket(s.streamId, payload, nil)
++	}
++	// Dial completes: flush the buffered packets (someone reads them) and mark
++	// the stream ready, as handleConnect does.
++	s.conn = upServer
++	s.streamType = streamTypeTCP
++	s.bufferRemaining = window
++	go func() { io.ReadFull(upClient, make([]byte, 3*pkt)) }()
++	if err := s.flushPendingAndMarkReady(streamTypeTCP); err != nil {
++		t.Fatalf("flush: %v", err)
++	}
++	// Client spends its last packet; it is now blocked at a zero budget.
++	c.handleDataPacket(s.streamId, payload, nil)
++	if _, err := io.ReadFull(upClient, make([]byte, pkt)); err != nil {
++		t.Fatalf("upstream read: %v", err)
++	}
++	select {
++	case got := <-continues:
++		if got[1] != window {
++			t.Fatalf("CONTINUE advertised %d after a full drain, want the whole window %d", got[1], window)
++		}
++	case <-time.After(time.Second):
++		t.Fatalf("no CONTINUE after the upstream drained: packets sent before CONNECT were not counted and the client is stuck")
++	}
++}
+diff --git a/wisp/types.go b/wisp/types.go
+index d4a34ce..a76e061 100644
+--- a/wisp/types.go
++++ b/wisp/types.go
+@@ -217,6 +217,11 @@ type wispStream struct {
+ 	pendingIngress  []ingressJob
+ 	pendingIngBytes int
+ 	ingressWriting  bool
++	// Client->server window accounting (guarded by pendingIngMu): packets
++	// queued but not yet written upstream, and the budget the client currently
++	// believes it has (last CONTINUE minus packets received since).
++	ingressInflight   uint32
++	ingressAdvertised uint32
+ }
+ 
+ type ingressJob struct {
+diff --git a/wisp/v2.go b/wisp/v2.go
+index cd272a1..cca2327 100644
+--- a/wisp/v2.go
++++ b/wisp/v2.go
+@@ -182,7 +182,7 @@ func (c *wispConnection) handleInfo(streamId uint32, payload []byte) {
+ 	c.authenticated.Store(authPassed)
+ 	c.streamConfirm = clientExts.streamConfirm
+ 
+-	c.sendPacket(0, c.config.BufferRemainingLength)
++	c.sendPacket(0, c.ingressWindow())
+ 
+ 	_ = c.netConn.SetReadDeadline(time.Time{})
+ 	close(c.handshakeDone)
+diff --git a/wisp/wisp-connection.go b/wisp/wisp-connection.go
+index d5c7f7e..4736dbd 100644
+--- a/wisp/wisp-connection.go
++++ b/wisp/wisp-connection.go
+@@ -264,6 +264,10 @@ func (c *wispConnection) handleConnectPacket(streamId uint32, payload []byte) {
+ 		hostname:       strings.ToLower(strings.TrimSpace(hostname)),
+ 		portNum:        int(portU16),
+ 		pendingIngress: make([]ingressJob, 0, 16),
++		// The client starts with the full window (initial / stream-confirm
++		// CONTINUE); mirrored here from the first packet on, including packets
++		// that arrive before CONNECT completes.
++		ingressAdvertised: c.ingressWindow(),
+ 	}
+ 	stream.isOpen.Store(true)
+ 
+@@ -369,20 +373,25 @@ func (c *wispConnection) handleDataPacket(streamId uint32, payload []byte, bufp
+ 			stream.pendingData = append(stream.pendingData, dataCopy)
+ 			stream.pendingBytes += len(dataCopy)
+ 			stream.pendingMutex.Unlock()
++			// The client spent window budget on this packet too; keep the
++			// mirror honest or a later replenishment could be withheld.
++			stream.pendingIngMu.Lock()
++			if stream.ingressAdvertised > 0 {
++				stream.ingressAdvertised--
++			}
++			stream.pendingIngMu.Unlock()
+ 			return false
+ 		}
+ 		stream.pendingMutex.Unlock()
+ 	}
+ 
+ 	if stream.streamType == streamTypeTCP && stream.ingressActive.Load() {
+-		if !stream.queueIngressOwned(payload, bufp) {
+-			return true
+-		}
+-		stream.bufferRemaining--
+-		if stream.bufferRemaining == 0 {
+-			stream.bufferRemaining = c.config.BufferRemainingLength
+-			c.sendPacket(streamId, stream.bufferRemaining)
+-		}
++		// Window accounting lives in submitIngress / runIngressWriter: the
++		// client's budget is only replenished (CONTINUE) as the ingress writer
++		// actually drains to the upstream. The old unconditional refill here
++		// let a client outrun a slow upstream until the per-stream queue cap
++		// closed the stream (0x49).
++		stream.queueIngressOwned(payload, bufp)
+ 		return true
+ 	}
+ 
+@@ -429,6 +438,30 @@ func (c *wispConnection) handleClosePacket(streamId uint32, payload []byte) {
+ 	go stream.close(closeReasonVoluntary)
+ }
+ 
++// ingressWindow is the client->server flow-control window advertised in
++// CONTINUE packets (initial stream 0, stream confirm, and replenishment): the
++// number of DATA packets the client may have in flight toward one stream.
++// Wisp counts the window in packets, but each packet can be up to
++// maxPayloadSize, so a window of BufferRemainingLength (32768 by default) could
++// stand for gigabytes and the per-stream ingress queue cap (PendingQueueSize)
++// was always hit first. The window is therefore also bounded so a full window
++// of maximum-size packets fits in half the queue; replenishment then keeps the
++// queue bounded without ever closing the stream.
++func (c *wispConnection) ingressWindow() uint32 {
++	w := uint32(32768)
++	if c != nil && c.config != nil && c.config.BufferRemainingLength > 0 {
++		w = c.config.BufferRemainingLength
++	}
++	byMem := c.maxPendingQueueBytes() / 2 / int(c.maxPayloadSize())
++	if byMem < 1 {
++		byMem = 1
++	}
++	if uint32(byMem) < w {
++		w = uint32(byMem)
++	}
++	return w
++}
++
+ func (c *wispConnection) sendPacket(streamId uint32, bufferRemaining uint32) {
+ 	if c.isClosed.Load() {
+ 		return
+diff --git a/wisp/wisp-stream.go b/wisp/wisp-stream.go
+index 608de96..4fe5a4e 100644
+--- a/wisp/wisp-stream.go
++++ b/wisp/wisp-stream.go
+@@ -202,7 +202,7 @@ func (s *wispStream) handleConnect(streamType uint8, port string, hostname strin
+ 	}
+ 
+ 	s.streamType = streamType
+-	s.bufferRemaining = cfg.BufferRemainingLength
++	s.bufferRemaining = c.ingressWindow()
+ 
+ 	destination := net.JoinHostPort(resolvedHostname, port)
+ 
+@@ -373,6 +373,43 @@ func (s *wispStream) runIngressWriter() {
+ 			s.close(closeReasonNetworkError)
+ 			return
+ 		}
++		s.ingressDrained(len(jobs))
++	}
++}
++
++// ingressDrained records that n queued DATA packets reached the upstream and
++// replenishes the client's window with a CONTINUE once at least half the
++// window has been freed since the last advertisement (hysteresis keeps CONTINUE
++// traffic to a few packets per window, and the client is only ever blocked
++// while more than half a window is still queued here), and whenever the queue
++// has fully drained while the client holds less than the whole window — so a
++// client can never be left waiting on an empty queue, whatever the mirror of
++// its budget says. The advertised value is absolute: window minus what is
++// still in flight.
++func (s *wispStream) ingressDrained(n int) {
++	window := s.wispConn.ingressWindow()
++	step := window / 2
++	if step < 1 {
++		step = 1
++	}
++	s.pendingIngMu.Lock()
++	if uint32(n) <= s.ingressInflight {
++		s.ingressInflight -= uint32(n)
++	} else {
++		s.ingressInflight = 0
++	}
++	var avail uint32
++	if s.ingressInflight < window {
++		avail = window - s.ingressInflight
++	}
++	var announce uint32
++	if avail >= s.ingressAdvertised+step || (s.ingressInflight == 0 && s.ingressAdvertised < window) {
++		s.ingressAdvertised = avail
++		announce = avail
++	}
++	s.pendingIngMu.Unlock()
++	if announce > 0 && s.isOpen.Load() {
++		s.wispConn.sendPacket(s.streamId, announce)
+ 	}
+ }
+ 
+@@ -390,6 +427,12 @@ func (s *wispStream) submitIngress(job ingressJob) bool {
+ 	}
+ 	s.pendingIngress = append(s.pendingIngress, job)
+ 	s.pendingIngBytes += len(job.payload)
++	// Window accounting (see ingressDrained): one more packet in flight, one
++	// less in the budget the client believes it has.
++	s.ingressInflight++
++	if s.ingressAdvertised > 0 {
++		s.ingressAdvertised--
++	}
+ 	if s.ingressWriting {
+ 		s.pendingIngMu.Unlock()
+ 		return true
+diff --git a/wisp/wisp.go b/wisp/wisp.go
+index f5f0b19..aad3874 100644
+--- a/wisp/wisp.go
++++ b/wisp/wisp.go
+@@ -155,7 +155,7 @@ func createWispHandler(config *Config) http.HandlerFunc {
+ 			_ = wc.netConn.SetReadDeadline(time.Now().Add(time.Duration(config.HandshakeTimeoutSeconds) * time.Second))
+ 			go wc.v2Handshake()
+ 		} else {
+-			wc.sendPacket(0, config.BufferRemainingLength)
++			wc.sendPacket(0, wc.ingressWindow())
+ 			go wc.readLoop()
+ 		}
+ 	}
+-- 
+2.54.0
+

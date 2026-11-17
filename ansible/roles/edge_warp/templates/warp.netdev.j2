@@ -1,0 +1,21 @@
+# Managed by Ansible (abulxt roles/edge_warp, kernel mode). Cloudflare WARP tunnel
+# {{ item.index }}: one free WARP identity (/etc/abulxt/warp/{{ item.name }}/).
+# RouteTable=off: no route to AllowedIPs anywhere. Only sockets marked
+# {{ '0x%x' | format(item.mark) }} reach this tunnel ({{ item.name }}.network). The outer
+# WireGuard packets carry no mark, so they leave through the main table.
+[NetDev]
+Name={{ item.name }}
+Kind=wireguard
+MTUBytes={{ edge_warp_mtu | int }}
+Description=Cloudflare WARP tunnel {{ item.index }} (abulxt edge_warp)
+
+[WireGuard]
+PrivateKeyFile=/etc/systemd/network/50-{{ item.name }}.key
+RouteTable=off
+
+[WireGuardPeer]
+PublicKey={{ item.peer }}
+AllowedIPs=0.0.0.0/0
+AllowedIPs=::/0
+Endpoint={{ edge_warp_endpoint }}
+PersistentKeepalive=25

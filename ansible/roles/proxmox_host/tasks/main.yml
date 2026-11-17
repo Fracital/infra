@@ -1,0 +1,34 @@
+---
+# A fresh G-Core dedi on Debian 13 -> a Proxmox VE 9 host (defaults/main.yml lists the
+# host_vars). Order matters: the node name must resolve before proxmox-ve installs, the
+# box must run the Proxmox kernel with ifupdown2 before the bridge is built, and the
+# firewall goes on last, over a network that is known good.
+- name: Preflight
+  ansible.builtin.import_tasks: preflight.yml
+
+- name: Hostname and /etc/hosts
+  ansible.builtin.import_tasks: hosts.yml
+
+# Both scripts are needed before anything can take the network away.
+- name: Install the network rescue and NIC ring scripts
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "/usr/local/sbin/{{ item }}"
+    owner: root
+    group: root
+    mode: "0755"
+  loop: [pve-net-rescue, pve-nic-rings]
+
+- name: Proxmox VE packages
+  ansible.builtin.import_tasks: install.yml
+
+- name: Kernel and NIC tuning, bridged traffic left unfiltered
+  ansible.builtin.import_tasks: tuning.yml
+  tags: [tuning]
+
+- name: Bond and bridge
+  ansible.builtin.import_tasks: network.yml
+
+- name: Host firewall
+  ansible.builtin.import_tasks: firewall.yml
+  when: pve_firewall_manage | bool

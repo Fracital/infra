@@ -1,0 +1,133 @@
+---
+# Shared settings for every abulxt host.
+
+# Relay URL path segment that precedes the gate key, so the public route is not
+# literally /wisp/. Must equal gateKeys.wispPath in each host's abulxt main/config.js
+# and the origin snippet (__WISP_PATH__). Edge/origin OpenResty accepts both this
+# and legacy /wisp/ during cutover, so changing it is non-breaking.
+wisp_path: stream
+
+# divide: the Proxmox host (alias wisp.baby) every abulxt host is a guest of since 2026-11-16.
+# Its one public IPv4, DNATed to the guests on vmbr1 172.16.5.0/24 (hosts.ini); also the
+# guests' NAT egress and the ProxyJump for reaching them (group_vars/divide_guests.yml).
+divide_public_ip: "91.199.82.174"
+
+# Origin (amph VM on divide): where all edges relay traffic. Private only: the edge
+# reaches its 9080/8822/6379/1082/443 over vmbr1.
+abulxt_origin_ip: "172.16.5.3"
+abulxt_origin_internal_port: 9080 # origin-internal listener on amph
+abulxt_domains_validator_port: 8822 # abulxt-domains on-demand TLS validator
+
+# OpenResty layout (matches abulxt's deploy/openresty* conventions)
+openresty_prefix: /usr/local/openresty
+openresty_conf_dir: "{{ openresty_prefix }}/nginx/conf"
+openresty_auto_ssl_dir: /etc/resty-auto-ssl
+
+# Domains. abstracteducation.loan delegates a dedicated subzone
+# `byod.abstracteducation.loan` to Gcore: the round-robin lives at that zone's
+# APEX (an A record whose name equals the zone itself).
+abulxt_byod_zone: byod.abstracteducation.loan
+abulxt_byod_record: "@" # apex of the byod zone
+# Full RRset owner name used in the Gcore API path.
+abulxt_byod_fqdn: byod.abstracteducation.loan
+
+# Fracital's byod name: the same kind of delegated Gcore subzone (fracit.al is on
+# Cloudflare; `byod` NS -> ns1.gcorelabs.net / ns2.gcdn.services), same Gcore
+# token. The fleet's addresses are split between the two names: every edge's
+# edge_advertise_ips* go to byod.abstracteducation.loan and its
+# edge_advertise_ips*_fracital go to byod.fracit.al (host_vars). Fracital's
+# Cloudflare names CNAME to this one (README.md "Fracital routes").
+fracital_byod_zone: byod.fracit.al
+fracital_byod_fqdn: byod.fracit.al
+
+# Every byod name the gcore_dns role and the edge nameservers (roles/edge_dns) keep: the inventory variable holding each edge's share, and whether the
+# per-site <site>.<fqdn> records exist for the browser's nearest-site routing
+# (abulxt's client.relaySites; Fracital builds its relay URL from the page origin).
+byod_names:
+  - zone: "{{ abulxt_byod_zone }}"
+    fqdn: "{{ abulxt_byod_fqdn }}"
+    ips_var: edge_advertise_ips
+    ips_v6_var: edge_advertise_ips_v6
+    sites: true
+    # <site>.byod.abstracteducation.loan: a host's wisp_site when set (edge -> mnz), else the
+    # inventory name minus site_regex (the abulxt-* edges are retired).
+    site_regex: "^(abulxt|wisp)-"
+  - zone: "{{ fracital_byod_zone }}"
+    fqdn: "{{ fracital_byod_fqdn }}"
+    ips_var: edge_advertise_ips_fracital
+    ips_v6_var: edge_advertise_ips_v6_fracital
+    sites: false
+  # The wisp cloud: each G-Core 2x10GbE dedi is an edge serving wisp.baby only.
+  # The apex gets a few addresses per box (a 200-address RRset would overflow a
+  # 1232-byte UDP answer); <site>.wisp.baby gets every address on that box.
+  - zone: "{{ wisp_zone }}"
+    fqdn: "{{ wisp_zone }}"
+    group: wisp_edge
+    ips_var: wisp_apex_ips
+    ips_v6_var: wisp_apex_ips_v6
+    sites: true
+    site_regex: "^wisp-"
+    site_ips_var: wisp_ips
+    site_ips_v6_var: wisp_ips_v6
+    # Extra TXT records, name relative to the zone: value or list of values
+    # (roles/edge_dns zone.j2). _discord: Discord's domain verification (2026-11-13).
+    txt:
+      _discord: "dh=71398cebb31df41b5e9ceda8f85ff16bf9fac2d8"
+
+# What a box's address must answer for the edge nameservers' health checks (roles/edge_dns)
+# and edge_warp's post-change check, per name. Default https://<fqdn>/ (any 2xx). The
+# wisp.baby apex has holyWisp's own /health.
+edge_dns_health_paths:
+  wisp.baby: /health
+
+# wisp.baby (registrar Spaceship, NS delegated to ns-<site>.wisp.baby, roles/edge_dns;
+# before 2026-11-12 Gcore). Per region <site> (IATA-style metro code): the box is
+# wisp-<site> (inventory name, SSH alias, hostname) and <site>.wisp.baby (every
+# address on it); wisp.baby is every box's healthy wisp_apex_ips (roles/edge_dns).
+wisp_zone: wisp.baby
+wisp_sites:
+  syd: Sydney
+  tyo: Tokyo
+  ala: Almaty
+  sin: Singapore
+  mad: Madrid
+  hkg: Hong Kong
+  bom: Mumbai
+  tlv: Tel Aviv
+  lux: Luxembourg
+  ams: Amsterdam
+  jnb: Johannesburg
+  lon: London
+  mia: Miami
+  chi: Chicago
+  sjc: Santa Clara
+  fra: Frankfurt
+  sao: São Paulo
+  iev: Kyiv
+  mnz: Manassas
+
+# Shared lua-resty-auto-ssl Redis store on amph (decision 1: per-edge HTTP-01
+# issuance made multi-edge-safe via one central store).
+auto_ssl_redis_port: 6379
+
+# Eaglercraft backend on amph's local subnet (not routable from remote edges).
+# amph relays the mc subdomains to it; edges forward to amph (see edge.yml).
+eaglercraft_backend_ip: 5.188.124.125
+
+# Cloudflare Zero Trust Gateway: three DoH "DNS locations" the edge proxy
+# queries to classify a hostname (adult / shady / clean). Policies on each
+# location return A 0.0.0.0 for a blocked category. The gateway_dns role locks
+# each location's DoH endpoint to the edge fleet's source networks.
+# The account id and the locations (name, id, doh subdomain) are cloudflare_zt_account_id and
+# cloudflare_zt_gateway_locations in the gitignored group_vars/all/private.yml: a location's DoH
+# subdomain is all a client needs to use it.
+
+# Shady-traffic hop: amph runs an authenticated SOCKS5 relay (shady-relay.py)
+# that chains into mullvad-pool. Edge Wisp routers send "shady" streams here.
+# Password lives in secrets.yml (shady_relay_password).
+shady_relay_port: 1082
+shady_relay_user: edge
+
+# Secrets (byod_token, auto_ssl_redis_password, gcore_api_token,
+# cloudflare_zt_api_token) live in inventory/group_vars/all/secrets.yml,
+# ansible-vault encrypted.

@@ -1,0 +1,15 @@
+# Secrets and private values: never committed (ansible/README.md "Secrets", "Private values").
+# CI writes these files inside the runner from GitHub Actions secrets.
+ansible/inventory/group_vars/all/*secrets.yml
+ansible/inventory/group_vars/all/private.yml
+.vault-pass*
+*.vault-pass
+*.pem
+*.key
+
+# Local tooling
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+*.retry

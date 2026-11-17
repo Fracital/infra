@@ -1,0 +1,19 @@
+---
+# The wisp cloud's hypervisors (README.md "The wisp cloud", "Proxmox hosts"): a fresh
+# G-Core dedi -> Debian 13 -> Proxmox VE 9 with bond0/vmbr0 and the fleet firewall.
+# Scoped to [wisp_pve] only.
+#   ansible-playbook playbooks/pve.yml --limit hv-<site> --vault-password-file ~/.abulxt-vault-pass
+# Prerequisites: host_vars/hv-<site>.yml (roles/proxmox_host/defaults/main.yml lists
+# the variables), the host in [wisp_pve], root SSH by key, and the panel's console
+# (KVM/IPMI) open in case the network rollback cannot bring the box back. Expect 3 to 5
+# reboots on a first run (debian_release steps, the Proxmox kernel, the finished PVE).
+# One box at a time: a bad network change then costs one box.
+
+- name: Debian 13 and Proxmox VE on the wisp cloud hypervisors
+  hosts: wisp_pve
+  gather_facts: true
+  serial: 1
+  roles:
+    - { role: debian_release, debian_release_target: 13 }
+    - proxmox_host
+    - { role: fail2ban, tags: ["fail2ban"] }

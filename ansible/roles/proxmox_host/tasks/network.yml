@@ -1,0 +1,125 @@
+---
+# /etc/network/interfaces: bond0 (the 10GbE ports, plus the 1 GbE uplink in
+# active-backup) under vmbr0, the Linux bridge that carries the host's addresses and
+# that the VMs plug into. The file is rendered to a staging path and parsed by
+# ifupdown2 first; network-apply.yml puts it live only when it differs from the
+# current file, under an armed rollback.
+
+# Interface names come from the running (Proxmox) kernel and its drivers, so they are
+# checked now, not before the kernel reboot.
+- name: Re-read the network facts
+  ansible.builtin.setup:
+    gather_subset: [min, network]
+
+- name: Require every bond port on this box
+  ansible.builtin.assert:
+    that: item in ansible_facts.interfaces
+    fail_msg: "{{ item }} is not an interface on {{ inventory_hostname }} ({{ ansible_facts.interfaces | sort | join(', ') }})."
+    quiet: true
+  loop: "{{ pve_10g_ifs + [pve_uplink_if] }}"
+
+- name: Warn about 10GbE ports without a 10 Gb/s link
+  ansible.builtin.debug:
+    msg: >-
+      {{ item }} reports speed {{ ansible_facts[item].speed | default('?') }}, active
+      {{ ansible_facts[item].active | default('?') }}: the bond will run on its other ports.
+  when: (ansible_facts[item].speed | default(0) | int) != 10000
+  loop: "{{ pve_10g_ifs }}"
+
+# First run: on the uplink (the panel's config). Later runs: on vmbr0. Anything else
+# means the host_vars name the wrong port.
+- name: Find the interface that carries {{ pve_main_ip }}
+  ansible.builtin.command: ip -o -4 addr show to {{ pve_main_ip }}
+  register: pve_main_ip_dev
+  changed_when: false
+  check_mode: false
+
+- name: Require {{ pve_main_ip }} on {{ pve_uplink_if }} or vmbr0
+  ansible.builtin.assert:
+    that:
+      - pve_main_ip_dev.stdout | length > 0
+      - pve_main_ip_dev.stdout.split()[1] in [pve_uplink_if, 'vmbr0']
+    fail_msg: >-
+      {{ pve_main_ip }} is on '{{ (pve_main_ip_dev.stdout.split() + ['?', '?'])[1] }}', not on
+      pve_uplink_if {{ pve_uplink_if }} or vmbr0: check host_vars/{{ inventory_hostname }}.yml.
+    quiet: true
+
+# Permanent (burned-in) address: right both before the bond exists and after, when the
+# uplink carries the bond's MAC.
+- name: Read the uplink's permanent MAC
+  ansible.builtin.command: ethtool -P {{ pve_uplink_if }}
+  register: pve_uplink_perm_mac
+  changed_when: false
+  check_mode: false
+
+- name: Read the current /etc/network/interfaces
+  ansible.builtin.slurp:
+    src: /etc/network/interfaces
+  register: pve_interfaces_current
+
+- name: Work out the bond ports, its MAC and the DNS lines
+  ansible.builtin.set_fact:
+    pve_bond_slaves: "{{ pve_10g_ifs + ([] if pve_bond_mode == '802.3ad' else [pve_uplink_if]) }}"
+    pve_bond_mac: >-
+      {{ pve_bond_hwaddress if pve_bond_hwaddress | length > 0 else
+         (pve_uplink_perm_mac.stdout | regex_search('([0-9a-f]{2}:){5}[0-9a-f]{2}') | default('', true)
+          | regex_replace('^00:00:00:00:00:00$', '')) or ansible_facts[pve_uplink_if].macaddress }}
+    pve_dns_nameservers_effective: >-
+      {{ pve_dns_nameservers if pve_dns_nameservers | length > 0 else
+         (pve_interfaces_current.content | b64decode
+          | regex_findall('(?m)^\s*dns-nameservers\s+(.+?)\s*$') | map('split') | flatten | unique | list) }}
+
+- name: Require a bond MAC
+  ansible.builtin.assert:
+    that: pve_bond_mac is match('^([0-9a-f]{2}:){5}[0-9a-f]{2}$')
+    fail_msg: "No usable MAC for bond0 ('{{ pve_bond_mac }}'): set pve_bond_hwaddress."
+    quiet: true
+
+# ifup -s only runs ifupdown2's parser over the file (nothing is applied).
+- name: Render the new /etc/network/interfaces to a staging file
+  ansible.builtin.template:
+    src: interfaces.j2
+    dest: /etc/network/interfaces.pve-staged
+    owner: root
+    group: root
+    mode: "0644"
+    validate: ifup -a -s -i %s
+
+- name: Compare it with the live file
+  ansible.builtin.command: cmp -s /etc/network/interfaces.pve-staged /etc/network/interfaces
+  register: pve_interfaces_cmp
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+# The new file holds everything and has no `source` line, so these stop being read.
+- name: List /etc/network/interfaces.d
+  ansible.builtin.find:
+    paths: /etc/network/interfaces.d
+    file_type: any
+  register: pve_interfaces_d
+  when: pve_interfaces_cmp.rc != 0
+
+- name: Note files in interfaces.d that the new config no longer reads
+  ansible.builtin.debug:
+    msg: "Not read any more (no `source` line): {{ pve_interfaces_d.files | map(attribute='path') | join(', ') }}"
+  when:
+    - pve_interfaces_cmp.rc != 0
+    - pve_interfaces_d.files | default([]) | length > 0
+
+- name: Apply the new network config safely
+  ansible.builtin.include_tasks: network-apply.yml
+  when:
+    - pve_interfaces_cmp.rc != 0
+    - not ansible_check_mode
+
+- name: Read the bond's active port
+  ansible.builtin.command: cat /sys/class/net/bond0/bonding/active_slave
+  register: pve_bond_active
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Show the bond's active port
+  ansible.builtin.debug:
+    msg: "bond0 {{ pve_bond_mode }}, active port: {{ pve_bond_active.stdout | default('') or 'none (802.3ad or no bond yet)' }}"

@@ -1,0 +1,28 @@
+{
+  "doh_adult": "{{ (cloudflare_zt_gateway_locations | selectattr('name', 'equalto', 'block-adult') | first).doh }}",
+  "doh_shady": "{{ (cloudflare_zt_gateway_locations | selectattr('name', 'equalto', 'block-shady') | first).doh }}",
+  "doh_plain": "{{ (cloudflare_zt_gateway_locations | selectattr('name', 'equalto', 'plain') | first).doh }}",
+  "relay_host": "{{ abulxt_origin_ip }}",
+  "relay_port": {{ shady_relay_port }},
+{% if edge_warp_enabled | default(false) | bool %}
+{%   if edge_warp_mode | default('kernel') == 'kernel' %}
+  "warp_tunnels": [{% for i in range(edge_warp_tunnel_count | default(4) | int) %}{"name": "warp{{ i }}", "mark": {{ edge_warp_mark_base | default(30464) | int + 1 + i }}}{{ ', ' if not loop.last else '' }}{% endfor %}],
+  "warp_state": "/run/abulxt-edge-router/warp.json",
+{%   else %}
+  "warp_proxy": "127.0.0.1:{{ edge_warp_proxy_port | default(40000) | int }}",
+{%   endif %}
+  "warp_fallback_direct": {{ (edge_warp_fallback_direct | default(true) | bool) | to_json }},
+{%   if edge_warp_bypass_hosts | length > 0 %}
+  "warp_bypass": {{ edge_warp_bypass_hosts | to_json }},
+{%   endif %}
+{% endif %}
+  "relay_user": "{{ shady_relay_user }}",
+  "relay_pass": "{{ shady_relay_password }}"{{ ',' if edge_router_dns_port | int > 0 else '' }}
+{% if edge_router_dns_port | int > 0 %}
+{%   if holywisp_tcp_direct_on | bool %}
+  "gate_adult": true,
+{%   endif %}
+  "dns_port": {{ edge_router_dns_port | int }},
+  "dns_upstreams": {{ holywisp_dns_servers | to_json }}
+{% endif %}
+}

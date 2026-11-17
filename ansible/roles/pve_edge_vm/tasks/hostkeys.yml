@@ -1,0 +1,52 @@
+---
+# The VM's SSH host keys: generated once on the Proxmox host, kept in
+# pve_edge_vm_state_dir/<vm>/ (root, 0700) and handed to every clone through
+# cloud-init (ssh_keys), so a rebuilt VM answers with the same keys. They never
+# leave the host except into the VM's cloud-init drive.
+
+- name: State directory for {{ pve_edge_vm_name }}
+  ansible.builtin.file:
+    path: "{{ pve_edge_vm_state_dir }}/{{ pve_edge_vm_name }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Generate {{ pve_edge_vm_name }}'s SSH host keys (once)
+  ansible.builtin.command:
+    argv:
+      - ssh-keygen
+      - -q
+      - -t
+      - "{{ item }}"
+      - -N
+      - ""
+      - -C
+      - "root@{{ pve_edge_vm_name }}"
+      - -f
+      - "{{ pve_edge_vm_state_dir }}/{{ pve_edge_vm_name }}/ssh_host_{{ item }}_key"
+    creates: "{{ pve_edge_vm_state_dir }}/{{ pve_edge_vm_name }}/ssh_host_{{ item }}_key"
+  loop: "{{ pve_edge_vm_hostkey_types }}"
+
+- name: Read {{ pve_edge_vm_name }}'s SSH host keys
+  ansible.builtin.slurp:
+    src: "{{ pve_edge_vm_state_dir }}/{{ pve_edge_vm_name }}/ssh_host_{{ item.0 }}_key{{ item.1 }}"
+  loop: "{{ pve_edge_vm_hostkey_types | product(['', '.pub']) | list }}"
+  register: pve_edge_vm_hostkeys
+  no_log: true
+
+# cloud-init's ssh_keys: <type>_private / <type>_public.
+- name: Hand the host keys to the user-data
+  ansible.builtin.set_fact:
+    pve_edge_vm_ssh_keys: >-
+      {{ dict(pve_edge_vm_hostkeys.results
+              | map(attribute='item')
+              | map('join', '|') | map('replace', '|.pub', '_public') | map('replace', '|', '_private')
+              | zip(pve_edge_vm_hostkeys.results | map(attribute='content') | map('b64decode'))) }}
+  no_log: true
+
+- name: Fingerprints of {{ pve_edge_vm_name }}'s host keys
+  ansible.builtin.command: ssh-keygen -lf {{ pve_edge_vm_state_dir }}/{{ pve_edge_vm_name }}/ssh_host_{{ item }}_key.pub
+  loop: "{{ pve_edge_vm_hostkey_types }}"
+  register: pve_edge_vm_hostkey_fingerprints
+  changed_when: false

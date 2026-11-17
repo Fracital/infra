@@ -1,0 +1,23 @@
+# Findings that predate this repository (2026-11-17). Remove lines as they are fixed; never add one.
+roles/abulxt_origin/tasks/main.yml no-changed-when
+roles/abulxt_origin/tasks/main.yml no-handler
+roles/edge_network/tasks/main.yml no-handler
+roles/edge_relay/tasks/main.yml risky-file-permissions
+roles/edge_warp/tasks/deadman_arm.yml command-instead-of-module
+roles/edge_warp/tasks/deadman_confirm.yml command-instead-of-module
+roles/edge_warp/tasks/kernel.yml no-changed-when
+roles/edge_warp/tasks/proxy.yml command-instead-of-module
+roles/edge_warp/tasks/proxy.yml no-changed-when
+roles/edge_warp/tasks/proxy.yml no-handler
+roles/edge_wisp/tasks/build.yml command-instead-of-module
+roles/edge_wisp/tasks/build.yml no-changed-when
+roles/edge_wisp/tasks/main.yml no-handler
+roles/fail2ban/tasks/main.yml command-instead-of-module
+roles/fail2ban/tasks/main.yml no-handler
+roles/fracital_origin/tasks/main.yml command-instead-of-module
+roles/fracital_origin/tasks/main.yml no-handler
+roles/openresty/tasks/main.yml no-changed-when
+roles/openresty/tasks/main.yml no-handler
+roles/proxmox_host/tasks/install.yml no-handler
+roles/proxmox_host/tasks/tuning.yml no-changed-when
+roles/proxmox_host/tasks/tuning.yml no-handler

@@ -1,0 +1,17 @@
+[Unit]
+Description=Mullvad SOCKS5 load-balancing pool (abulxt wisp egress)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/mullvad-pool/mullvad-pool.py
+Restart=always
+RestartSec=2
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

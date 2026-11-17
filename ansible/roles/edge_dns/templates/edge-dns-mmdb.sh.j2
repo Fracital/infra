@@ -1,0 +1,24 @@
+#!/bin/sh
+# {{ ansible_managed }}
+# roles/edge_dns: fetch DB-IP's free country mmdb (this month's, else last month's),
+# check it answers, swap it in and restart PowerDNS so the geoip backend reopens it.
+# Run by edge-dns-mmdb.timer monthly and by the role when the file is missing.
+set -eu
+dest={{ edge_dns_mmdb }}
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+for m in "$(date -u +%Y-%m)" "$(date -u -d "$(date -u +%Y-%m-01) -1 day" +%Y-%m)"; do
+  if curl -fsS --max-time 300 -o "$tmp/db.gz" "{{ edge_dns_mmdb_base_url }}/dbip-country-lite-$m.mmdb.gz"; then
+    gunzip -c "$tmp/db.gz" > "$tmp/db.mmdb"
+    # 8.8.8.8 must come back as US, or the file is not what we expect.
+    if mmdblookup -f "$tmp/db.mmdb" -i 8.8.8.8 country iso_code | grep -q '"US"'; then
+      if [ -f "$dest" ] && cmp -s "$tmp/db.mmdb" "$dest"; then exit 0; fi
+      install -m 0644 "$tmp/db.mmdb" "$dest.new" && mv -f "$dest.new" "$dest"
+      if systemctl is-active -q pdns; then systemctl restart pdns; fi
+      echo "edge-dns-mmdb: installed dbip-country-lite-$m"
+      exit 0
+    fi
+  fi
+done
+echo "edge-dns-mmdb: no usable database downloaded" >&2
+exit 1

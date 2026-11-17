@@ -1,0 +1,98 @@
+# terp origin vhosts. Managed by Ansible (fracital_origin role). README.md "Fracital routes".
+
+# Edge relay: only the edge fleet reaches :443 (ufw), and only with the pinned
+# cert's key and the shared X-FRX-Edge-Token.
+server {
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
+    http2 on;
+    server_name _;
+
+    ssl_certificate {{ fracital_tls_dir }}/origin.crt;
+    ssl_certificate_key {{ fracital_tls_dir }}/origin.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:fracital_tls:10m;
+
+    client_max_body_size {{ fracital_client_max_body_size }};
+
+    if ($http_x_frx_edge_token != "{{ fracital_origin_token }}") {
+        return 403;
+    }
+
+    location / {
+        proxy_pass http://fracital_app;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $ws_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        # Set by the edge from the end client; trusted only after the token check.
+        proxy_set_header X-Real-IP $http_x_real_ip;
+        proxy_set_header X-Forwarded-For $http_x_real_ip;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-FRX-Edge-Token "";
+        proxy_buffering off;
+        proxy_read_timeout {{ fracital_proxy_timeout }};
+        proxy_send_timeout {{ fracital_proxy_timeout }};
+    }
+}
+{% if fracital_origin_allow_cloudflare | bool %}
+
+# Pre-cutover: Cloudflare (flexible SSL) straight to terp :80, same as the old nginx site.
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+
+    client_max_body_size {{ fracital_client_max_body_size }};
+
+    location / {
+        proxy_pass http://fracital_app;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $ws_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_read_timeout {{ fracital_proxy_timeout }};
+        proxy_send_timeout {{ fracital_proxy_timeout }};
+    }
+}
+{% endif %}
+{% for app in fracital_origin_apps | default([]) %}
+
+# {{ app.name }}: same edge-only guard, routed by Host to its own pm2 app.
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name {{ app.hosts | join(' ') }};
+
+    ssl_certificate {{ fracital_tls_dir }}/origin.crt;
+    ssl_certificate_key {{ fracital_tls_dir }}/origin.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:fracital_tls:10m;
+
+    client_max_body_size {{ fracital_client_max_body_size }};
+
+    if ($http_x_frx_edge_token != "{{ fracital_origin_token }}") {
+        return 403;
+    }
+
+    location / {
+        proxy_pass http://{{ app.name }}_app;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $ws_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $http_x_real_ip;
+        proxy_set_header X-Forwarded-For $http_x_real_ip;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-FRX-Edge-Token "";
+        proxy_buffering off;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+}
+{% endfor %}

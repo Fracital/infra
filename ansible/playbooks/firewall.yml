@@ -1,0 +1,10 @@
+---
+# Host firewall only: the vendored edge_firewall role (edge-firewall-contract v1,
+# README.md "Edge firewall"). Inputs: inventory/group_vars/edge.yml.
+# Same playbook in abulxt (playbooks/firewall.yml) and KrunkNative (firewall.yml).
+#   ansible-playbook playbooks/firewall.yml --vault-password-file <file> --check --diff [--limit <host>]
+- name: Edge host firewall
+  hosts: edge
+  gather_facts: true
+  roles:
+    - { role: edge_firewall, tags: [firewall] }

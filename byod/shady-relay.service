@@ -1,0 +1,17 @@
+[Unit]
+Description=abulxt shady-traffic SOCKS5 relay for edges (-> mullvad-pool)
+After=network-online.target mullvad-pool.service
+Wants=network-online.target mullvad-pool.service
+
+[Service]
+Type=simple
+ExecStart=/opt/abulxt/shady-relay.py
+Restart=always
+RestartSec=2
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

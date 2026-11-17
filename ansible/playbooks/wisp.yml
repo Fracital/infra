@@ -1,0 +1,84 @@
+---
+# The wisp cloud (README.md "The wisp cloud (wisp.baby)"): bring wisp cloud
+# boxes up as abulxt edges that serve wisp.baby. Scoped to [wisp_edge] only, so
+# it never touches the byod edges.
+#   ansible-playbook playbooks/wisp.yml --limit edge --vault-password-file <file>
+# A wisp-<site> on a [wisp_pve] host is built first by playbooks/pve-vm.yml, which
+# imports this playbook for those VMs only (wisp_play_hosts; default [wisp_edge]).
+# Prerequisites in host_vars/wisp-<site>.yml (see an existing one), and for the
+# box to be useful: amph's firewall must include its edge_origin_source (or
+# edge_subnet) and the Cloudflare Gateway allowlist its edge_subnet, the egress
+# address (playbooks/origin.yml, playbooks/dns.yml --tags gateway), and amph's
+# config.js domains.loadBalancerIp its public addresses. The edge on divide has a
+# private ansible_host (172.16.5.10) and public_ip 91.199.82.174 (host_vars/edge.yml).
+
+- name: Debian 13 and the box's name
+  hosts: "{{ wisp_play_hosts | default('wisp_edge') }}"
+  gather_facts: true
+  roles:
+    - debian_release
+  tasks:
+    - name: Set the hostname to {{ inventory_hostname }}
+      ansible.builtin.hostname:
+        name: "{{ inventory_hostname }}"
+
+    - name: Drop lines for the box's old names from /etc/hosts
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        regexp: '^{{ ansible_host | regex_escape }}\s'
+        state: absent
+
+    - name: Map the main address to {{ wisp_site }}.{{ wisp_zone }}
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        line: "{{ ansible_host }} {{ wisp_site }}.{{ wisp_zone }} {{ inventory_hostname }}"
+        insertafter: '^127\.0\.0\.1'
+
+    - name: Drop the panel's example.com search domain
+      ansible.builtin.lineinfile:
+        path: /etc/network/interfaces
+        regexp: '^\s*dns-search\s+example\.com'
+        state: absent
+
+# The edge roles, as playbooks/edges.yml runs them (keep the two lists in step).
+- name: Edge roles on the wisp cloud
+  hosts: "{{ wisp_play_hosts | default('wisp_edge') }}"
+  gather_facts: true
+  pre_tasks:
+    # amph's key, so edge_network can revoke it (the removed watchdog's login), as
+    # site.yml passes it to the byod edges.
+    - name: Read amph's SSH public key (to revoke it)
+      ansible.builtin.slurp:
+        src: /root/.ssh/id_ed25519.pub
+      register: wisp_amph_pubkey
+      delegate_to: "{{ groups['origin'][0] }}"
+      run_once: true
+      tags: [always]
+
+    - name: Hand amph's key to edge_network
+      ansible.builtin.set_fact:
+        amph_ssh_pubkey: "{{ wisp_amph_pubkey.content | b64decode | trim }}"
+      tags: [always]
+  roles:
+    - edge_network
+    - openresty
+    - {
+        role: edge_warp,
+        tags: ["warp"],
+        when: edge_warp_enabled | default(false) | bool,
+      }
+    - { role: edge_wisp, tags: ["wisp"] }
+    - { role: edge_relay, tags: ["relay"] }
+    - { role: edge_firewall, tags: ["firewall"] }
+    - { role: fail2ban, tags: ["fail2ban"] }
+  post_tasks:
+    # After edge_wisp restarted the router onto the WARP config: retire warp-cli where
+    # kernel mode took over, then check from amph that the box's byod addresses still serve.
+    - name: WARP after the router moved (retire warp-cli, byod addresses still serve)
+      ansible.builtin.include_role:
+        name: edge_warp
+        tasks_from: after_router.yml
+        apply:
+          tags: ["warp"]
+      when: edge_warp_enabled | default(false) | bool
+      tags: ["warp"]

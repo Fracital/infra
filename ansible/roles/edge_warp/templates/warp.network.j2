@@ -1,0 +1,43 @@
+# Managed by Ansible (abulxt roles/edge_warp, kernel mode). Cloudflare WARP tunnel
+# {{ item.index }}. Mark {{ '0x%x' | format(item.mark) }} -> table {{ item.mark }} -> default via {{ item.name }}.
+# Nothing unmarked is routed here: inbound replies, SSH, :53, the relays to amph and kru
+# and the Gateway DoH lookups stay on the main table.
+[Match]
+Name={{ item.name }}
+
+[Link]
+# Never hold up network-online.target for a tunnel.
+RequiredForOnline=no
+
+[Network]
+# Every WARP identity gets 172.16.0.2/32; the same /32 on several tunnels is fine.
+Address={{ item.v4 }}
+Address={{ item.v6 }}
+DHCP=no
+LinkLocalAddressing=no
+IPv6AcceptRA=no
+# Replies arrive here from addresses the main table routes via eth0: loose, not strict.
+IPv4ReversePathFilter=loose
+
+[Route]
+Destination=0.0.0.0/0
+Table={{ item.mark }}
+
+[Route]
+Destination=::/0
+Table={{ item.mark }}
+
+[RoutingPolicyRule]
+Family=both
+FirewallMark={{ item.mark }}
+Table={{ item.mark }}
+Priority={{ item.mark }}
+
+# Fail closed: any WARP mark whose own rule is gone (its tunnel deleted) is unreachable
+# instead of falling through to the main table. Every tunnel carries the same rule, so it
+# stays while any tunnel is up.
+[RoutingPolicyRule]
+Family=both
+FirewallMark={{ edge_warp_mark_base | int }}/65280
+Type=unreachable
+Priority={{ edge_warp_failclosed_priority }}

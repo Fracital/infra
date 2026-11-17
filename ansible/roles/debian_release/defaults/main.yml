@@ -1,0 +1,7 @@
+---
+# Step a host up to debian_release_target, one release at a time (skipping a
+# release is unsupported): 11 -> 12 -> 13. Each step is a dist-upgrade and a reboot.
+debian_release_target: 13
+debian_release_steps:
+  11: bookworm
+  12: trixie

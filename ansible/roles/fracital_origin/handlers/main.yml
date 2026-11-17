@@ -1,0 +1,11 @@
+---
+- name: Test terp openresty configuration
+  ansible.builtin.command: "{{ fracital_openresty_prefix }}/nginx/sbin/nginx -t"
+  changed_when: false
+  listen: reload fracital openresty
+
+- name: Reload terp openresty
+  ansible.builtin.systemd:
+    name: openresty
+    state: reloaded
+  listen: reload fracital openresty

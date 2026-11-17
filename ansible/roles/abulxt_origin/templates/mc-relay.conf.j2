@@ -1,0 +1,130 @@
+# Eaglercraft / MC panel relay on amph. Managed by Ansible (abulxt_origin role).
+# The remote edges cannot route to the Eaglercraft backend (5.188.124.125 is on
+# amph's local subnet), so they forward the mc subdomains to amph, which relays
+# to the backend here. These server blocks match the original Host header.
+
+# EaglercraftXServer requires X-Real-IP to be the END CLIENT's address
+# (forward_ip: true). amph is the second proxy hop, so $remote_addr here is the
+# edge's IP, not the client's. Prefer the edge's forwarded X-Real-IP; fall back
+# to the direct peer for the ashburn direct route.
+map $http_x_real_ip $eagler_client_ip {
+    ''      $remote_addr;
+    default $http_x_real_ip;
+}
+
+# --- mcpanel.abstracteducation.loan → panel web UI (HTTPS backend :443) ---
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name mcpanel.abstracteducation.loan;
+
+    ssl_certificate_by_lua_block {
+        auto_ssl_instance:ssl_certificate()
+    }
+    ssl_certificate {{ openresty_auto_ssl_dir }}/fallback.crt;
+    ssl_certificate_key {{ openresty_auto_ssl_dir }}/fallback.key;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    location / {
+        proxy_pass https://{{ eaglercraft_backend_ip }};
+        proxy_http_version 1.1;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $eagler_client_ip;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $ws_upgrade;
+        proxy_set_header Connection "upgrade";
+
+        proxy_ssl_server_name on;
+        proxy_ssl_name $host;
+
+        proxy_read_timeout 1d;
+        proxy_send_timeout 1d;
+        proxy_connect_timeout 10s;
+        proxy_buffering off;
+    }
+}
+
+# --- mc.abstracteducation.loan → Eaglercraft WS listener (HTTP backend :25565) ---
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name mc.abstracteducation.loan;
+
+    ssl_certificate_by_lua_block {
+        auto_ssl_instance:ssl_certificate()
+    }
+    ssl_certificate {{ openresty_auto_ssl_dir }}/fallback.crt;
+    ssl_certificate_key {{ openresty_auto_ssl_dir }}/fallback.key;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    location / {
+        proxy_pass http://{{ eaglercraft_backend_ip }}:25565;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $eagler_client_ip;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $ws_upgrade;
+        proxy_set_header Connection "upgrade";
+
+        proxy_read_timeout 1d;
+        proxy_send_timeout 1d;
+        proxy_connect_timeout 10s;
+        proxy_buffering off;
+    }
+}
+
+# --- mcnode.abstracteducation.loan → Pterodactyl Wings daemon (HTTPS :8080) ---
+# Wings terminates its own TLS; amph relays through to it on the local subnet.
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name mcnode.abstracteducation.loan;
+    # Panel file uploads (mods, worlds) POST straight to Wings. No proxy cap here: Wings enforces its own
+    # api.upload_limit (MB, /etc/pterodactyl/config.yml on eagler, the node's "Upload limit" in the panel).
+    # nginx's 1 MB default answered 413 to every mod upload (2026-11-13).
+    client_max_body_size 0;
+
+    ssl_certificate_by_lua_block {
+        auto_ssl_instance:ssl_certificate()
+    }
+    ssl_certificate {{ openresty_auto_ssl_dir }}/fallback.crt;
+    ssl_certificate_key {{ openresty_auto_ssl_dir }}/fallback.key;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    location / {
+        proxy_pass https://{{ eaglercraft_backend_ip }}:8080;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $ws_upgrade;
+        proxy_set_header Connection "upgrade";
+
+        proxy_ssl_server_name on;
+        proxy_ssl_name $host;
+
+        proxy_read_timeout 1d;
+        proxy_send_timeout 1d;
+        proxy_connect_timeout 10s;
+        proxy_buffering off;
+        proxy_request_buffering off;
+    }
+}

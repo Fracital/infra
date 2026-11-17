@@ -1,0 +1,15 @@
+---
+# Arm the dead-man switch: a transient timer that runs edge_warp_deadman_command
+# edge_warp_deadman_seconds from now, unless deadman_confirm.yml cancels it after the
+# box answers from outside. Same pattern as edge_firewall's rollback timer.
+
+- name: Clear a dead-man timer left by an earlier run (systemd-run refuses a name in use)
+  ansible.builtin.command: systemctl stop edge-warp-deadman.timer edge-warp-deadman.service
+  changed_when: false
+  failed_when: false
+
+- name: Arm the dead-man timer ({{ edge_warp_deadman_command }} in {{ edge_warp_deadman_seconds }}s)
+  ansible.builtin.command: >-
+    systemd-run --unit=edge-warp-deadman --on-active={{ edge_warp_deadman_seconds | int }}
+    --timer-property=AccuracySec=1s {{ edge_warp_deadman_command }}
+  changed_when: false

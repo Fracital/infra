@@ -1,0 +1,45 @@
+#!/bin/sh
+# pve-nic-rings IFACE WANT   (installed by Ansible, roles/proxmox_host)
+#
+# Raise IFACE's RX/TX ring sizes to WANT, capped at the driver's maximum. Run from
+# post-up in /etc/network/interfaces. ifreload reruns every post-up, and a ring change
+# resets an ixgbe/i40e port (a short link flap the bond rides out), so it changes
+# nothing when the rings are already right. A driver without ring support is skipped.
+set -u
+dev=$1
+want=$2
+
+out=$(ethtool -g "$dev" 2>/dev/null) || exit 0
+
+# field max|cur RX|TX
+field() {
+	printf '%s\n' "$out" | awk -v sec="$1" -v key="$2:" '
+		/^Pre-set maximums/ { s = "max"; next }
+		/^Current hardware settings/ { s = "cur"; next }
+		s == sec && $1 == key { print $2; exit }'
+}
+
+num() {
+	case $1 in
+	'' | *[!0-9]*) return 1 ;;
+	esac
+}
+
+max_rx=$(field max RX)
+max_tx=$(field max TX)
+cur_rx=$(field cur RX)
+cur_tx=$(field cur TX)
+for v in "$want" "$max_rx" "$max_tx" "$cur_rx" "$cur_tx"; do
+	num "$v" || exit 0
+done
+
+rx=$want
+[ "$rx" -gt "$max_rx" ] && rx=$max_rx
+tx=$want
+[ "$tx" -gt "$max_tx" ] && tx=$max_tx
+if [ "$cur_rx" -eq "$rx" ] && [ "$cur_tx" -eq "$tx" ]; then
+	exit 0
+fi
+
+logger -t pve-nic-rings -- "$dev: rx $cur_rx -> $rx, tx $cur_tx -> $tx"
+exec ethtool -G "$dev" rx "$rx" tx "$tx"

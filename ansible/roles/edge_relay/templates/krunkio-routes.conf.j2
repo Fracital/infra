@@ -1,0 +1,165 @@
+# krunk.io (KrunkNative) service hosts. Managed by Ansible (edge_relay role, krunkio_enabled).
+# Host-specific server blocks, like 10-mc-routes.conf: they win over the 00-edge-relay
+# catch-all, so these names never reach amph. They are relayed straight to KrunkNative's
+# central node (kru) instead of through Cloudflare's proxy and tunnel:
+#
+#   client -> edge :443 (on-demand LE cert, shared Redis) -> https://{{ krunkio_origin_ip }}:{{ krunkio_origin_port }}
+#     (kru's nginx; the edge pins its self-signed cert, SNI {{ krunkio_origin_sni }}, and sends
+#      X-KN-Edge-Token; kru also only accepts the edge's addresses) -> kru OpenResty, routed by Host.
+#
+# kru and the edge are both guests of the Proxmox host divide (vmbr1 172.16.5.0/24): the edge
+# reaches kru's 443 straight on its private address, no tunnel, WireGuard or DNAT. DNS: each
+# name is a DNS-only CNAME to {{ abulxt_byod_fqdn }} (a Cloudflare A record to divide's public
+# address). Game servers
+# (<edge>-<n>.krunk.io, tcp/udp 21015..) and the front end (krunk.io, www., GitHub Pages) are
+# not here. README.md "krunk.io routes".
+
+upstream krunkio_origin {
+    server {{ krunkio_origin_ip }}:{{ krunkio_origin_port }};
+    keepalive 32;
+}
+
+# Keepalive to kru needs an empty Connection header except for a WebSocket upgrade.
+map $http_upgrade $krunkio_connection {
+    ~*^websocket$ upgrade;
+    default       "";
+}
+
+# Edge cache for assets.: replaces Cloudflare's cache rule. Only what kru marks cacheable is
+# stored (?v= assets and /updates/ objects are immutable for a year; unversioned assets and the
+# update manifests are no-cache and always go to kru). URLs change with the content: no purge.
+proxy_cache_path {{ krunkio_cache_dir }} levels=1:2 keys_zone=krunkio_assets:{{ krunkio_cache_keys_zone }}
+                 max_size={{ krunkio_cache_max_size }} inactive={{ krunkio_cache_inactive }} use_temp_path=off;
+
+# HTTP: ACME http-01 (any edge answers from the shared Redis), everything else to HTTPS.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name {{ (krunkio_proxy_hosts + krunkio_assets_hosts + krunkio_direct_hosts) | join(' ') }};
+
+    location /.well-known/acme-challenge/ {
+        content_by_lua_block {
+            auto_ssl_instance:challenge_server()
+        }
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# coordinator. (kn_brain auth/community/matchmaking, WebSockets incl. the game servers'
+# /mm/internal/ws), matchmaker. (finder), play. (net-bridge /native WebSocket, /rtc signaling).
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name {{ krunkio_proxy_hosts | join(' ') }};
+
+    ssl_certificate_by_lua_block {
+        auto_ssl_instance:ssl_certificate()
+    }
+    ssl_certificate {{ openresty_auto_ssl_dir }}/fallback.crt;
+    ssl_certificate_key {{ openresty_auto_ssl_dir }}/fallback.key;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    client_max_body_size {{ krunkio_client_max_body_size }};
+
+    location / {
+        include {{ openresty_conf_dir }}/snippets/krunkio-origin.conf;
+        proxy_buffering off;
+        proxy_read_timeout 1d;
+        proxy_send_timeout 1d;
+    }
+}
+
+# assets. (game content /assets/, client updates /updates/): cached here, CORS from kru
+# (Access-Control-Allow-Origin *), byte ranges served from the cache.
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name {{ krunkio_assets_hosts | join(' ') }};
+
+    ssl_certificate_by_lua_block {
+        auto_ssl_instance:ssl_certificate()
+    }
+    ssl_certificate {{ openresty_auto_ssl_dir }}/fallback.crt;
+    ssl_certificate_key {{ openresty_auto_ssl_dir }}/fallback.key;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    proxy_cache krunkio_assets;
+    proxy_cache_lock on;
+    proxy_cache_lock_timeout 60s;
+    proxy_cache_revalidate on;
+    proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;
+    proxy_cache_background_update on;
+    add_header X-Cache-Status $upstream_cache_status always;
+
+    # Content files (mostly small). The cache asks kru for the whole file (nginx drops Range
+    # and If-* upstream when caching) and serves ranges and 304s itself. kru is asked for
+    # identity encoding so one cached copy fits every client; this edge gzips text on the way out.
+    location / {
+        include {{ openresty_conf_dir }}/snippets/krunkio-origin.conf;
+        proxy_set_header Accept-Encoding "";
+        proxy_cache_key $host$uri$is_args$args;
+        proxy_read_timeout 120s;
+        proxy_send_timeout 120s;
+    }
+
+    # Update packages (tens of MB each): fetched and cached in slices, so a resumed or
+    # parallel range download never waits for the whole file.
+    location /updates/client/builds/ {
+        include {{ openresty_conf_dir }}/snippets/krunkio-origin.conf;
+        proxy_set_header Accept-Encoding "";
+        slice {{ krunkio_cache_slice }};
+        proxy_set_header Range $slice_range;
+        proxy_cache_key $host$uri$is_args$args$slice_range;
+        proxy_read_timeout 120s;
+        proxy_send_timeout 120s;
+    }
+}
+{% for h in krunkio_direct_hosts %}
+
+# {{ h }}: kru serves this name itself, with its own certificate (it was an A record to kru before
+# the move to divide; now it is an A record to divide's public address, DNATed here). The edge
+# terminates TLS with its on-demand certificate and passes the request to kru's nginx on
+# {{ krunkio_origin_ip }}:{{ krunkio_origin_port }} with SNI {{ h }}, so kru answers with that vhost,
+# not the pinned edge-origin one: no X-KN-Edge-Token, no pinned certificate (krunkio_direct_hosts).
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name {{ h }};
+
+    ssl_certificate_by_lua_block {
+        auto_ssl_instance:ssl_certificate()
+    }
+    ssl_certificate {{ openresty_auto_ssl_dir }}/fallback.crt;
+    ssl_certificate_key {{ openresty_auto_ssl_dir }}/fallback.key;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    location / {
+        proxy_pass https://{{ krunkio_origin_ip }}:{{ krunkio_origin_port }};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header Connection "";
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header CF-Connecting-IP "";
+        proxy_ssl_server_name on;
+        proxy_ssl_name {{ h }};
+        proxy_connect_timeout {{ edge_proxy_connect_timeout }};
+    }
+}
+{% endfor %}

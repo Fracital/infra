@@ -1,0 +1,217 @@
+From 74a93ec9d9539d9b7d36f099473dd3b80f93d6e3 Mon Sep 17 00:00:00 2001
+From: abulxt-local <local@abulxt.invalid>
+Date: Fri, 9 Oct 2026 14:30:52 -0400
+Subject: [PATCH 1/4] wisp: fix CONNECT flush race that drops DATA sent during
+ the flush
+
+handleConnect flushed handleDataPacket's pending buffer from one snapshot:
+it swapped pendingData out under pendingMutex, wrote the snapshot without
+the lock, then called signalConnReady. handleDataPacket keeps appending to
+pendingData while connReadyDone is false, so DATA that arrived during the
+flush was appended after the snapshot, nothing flushed it, and it was
+dropped once the stream became ready. A dropped TLS tail shows up in
+browsers as SSL connect / send / certificate errors.
+
+flushPendingAndMarkReady now loops until pendingData is empty. Each pass
+swaps the queue out under the lock and writes it unlocked. The final empty
+check sets connReadyDone (and ingressActive) under the same lock, so
+nothing can be appended after it.
+
+wisp/flush_test.go drives the real handleDataPacket from inside a Write
+during the flush and checks every byte arrives. It fails on the snapshot
+logic (4096 of 7168 bytes) and passes with the loop.
+
+---
+ wisp/flush_test.go  | 96 +++++++++++++++++++++++++++++++++++++++++++++
+ wisp/wisp-stream.go | 60 ++++++++++++++++++----------
+ 2 files changed, 136 insertions(+), 20 deletions(-)
+ create mode 100644 wisp/flush_test.go
+
+diff --git a/wisp/flush_test.go b/wisp/flush_test.go
+new file mode 100644
+index 0000000..96cc8ad
+--- /dev/null
++++ b/wisp/flush_test.go
+@@ -0,0 +1,96 @@
++package wisp
++
++import (
++	"bytes"
++	"io"
++	"net"
++	"sync"
++	"testing"
++	"time"
++)
++
++// flushTestConn is a net.Conn that records what is written. onWrite runs before
++// each Write, so a test can inject DATA the way the read loop does while the
++// pending-data flush is in flight.
++type flushTestConn struct {
++	onWrite func()
++
++	mu  sync.Mutex
++	buf bytes.Buffer
++}
++
++func (c *flushTestConn) Write(p []byte) (int, error) {
++	if c.onWrite != nil {
++		c.onWrite()
++	}
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	c.buf.Write(p)
++	return len(p), nil
++}
++
++func (c *flushTestConn) Read(p []byte) (int, error)         { return 0, io.EOF }
++func (c *flushTestConn) Close() error                       { return nil }
++func (c *flushTestConn) LocalAddr() net.Addr                { return &net.TCPAddr{} }
++func (c *flushTestConn) RemoteAddr() net.Addr               { return &net.TCPAddr{} }
++func (c *flushTestConn) SetDeadline(t time.Time) error      { return nil }
++func (c *flushTestConn) SetReadDeadline(t time.Time) error  { return nil }
++func (c *flushTestConn) SetWriteDeadline(t time.Time) error { return nil }
++
++// TestFlushPendingDataKeepsPacketsArrivingDuringFlush reproduces the CONNECT
++// flush race. DATA that arrives while the buffered packets are being written
++// (handleDataPacket still sees connReadyDone == false) must be written before
++// the stream is marked ready. Before the fix the flush took one snapshot, so
++// those packets were left in pendingData and never written.
++func TestFlushPendingDataKeepsPacketsArrivingDuringFlush(t *testing.T) {
++	pkt := func(b byte) []byte { return bytes.Repeat([]byte{b}, 1024) }
++
++	c := &wispConnection{}
++	s := &wispStream{wispConn: c, streamId: 1, streamType: streamTypeTCP, connReady: make(chan struct{})}
++	s.isOpen.Store(true)
++	c.streams.Store(s.streamId, s)
++
++	var want []byte
++	for _, b := range []byte("abcd") {
++		p := pkt(b)
++		want = append(want, p...)
++		if c.handleDataPacket(s.streamId, p, nil) {
++			t.Fatalf("pre-CONNECT DATA unexpectedly reported as consumed")
++		}
++	}
++
++	arrivals := [][]byte{pkt('x'), pkt('y'), pkt('z')}
++	for _, p := range arrivals {
++		want = append(want, p...)
++	}
++	conn := &flushTestConn{}
++	conn.onWrite = func() {
++		if len(arrivals) == 0 {
++			return
++		}
++		p := arrivals[0]
++		arrivals = arrivals[1:]
++		c.handleDataPacket(s.streamId, p, nil)
++	}
++	s.conn = conn
++
++	if err := s.flushPendingAndMarkReady(streamTypeTCP); err != nil {
++		t.Fatalf("flush: %v", err)
++	}
++
++	conn.mu.Lock()
++	got := conn.buf.Bytes()
++	conn.mu.Unlock()
++	if !bytes.Equal(got, want) {
++		t.Fatalf("flushed %d bytes, want %d: packets that arrived during the flush were dropped", len(got), len(want))
++	}
++	if !s.connReadyDone.Load() {
++		t.Fatalf("stream not marked ready after flush")
++	}
++	s.pendingMutex.Lock()
++	left := len(s.pendingData)
++	s.pendingMutex.Unlock()
++	if left != 0 {
++		t.Fatalf("%d packets still pending after the stream was marked ready", left)
++	}
++}
+diff --git a/wisp/wisp-stream.go b/wisp/wisp-stream.go
+index 5a3ebcb..600892f 100644
+--- a/wisp/wisp-stream.go
++++ b/wisp/wisp-stream.go
+@@ -2,6 +2,7 @@ package wisp
+ 
+ import (
+ 	"context"
++	"errors"
+ 	"io"
+ 	"net"
+ 	"strings"
+@@ -270,31 +271,50 @@ func (s *wispStream) handleConnect(streamType uint8, port string, hostname strin
+ 		s.wispConn.sendPacket(s.streamId, s.bufferRemaining)
+ 	}
+ 
+-	s.pendingMutex.Lock()
+-	pending := s.pendingData
+-	s.pendingData = nil
+-	s.pendingBytes = 0
+-	s.pendingMutex.Unlock()
+-
+-	for _, data := range pending {
+-		if !s.isOpen.Load() {
+-			return
+-		}
+-		if err := writeAll(s.conn, data); err != nil {
+-			s.close(closeReasonNetworkError)
+-			return
+-		}
+-	}
+-
+-	if streamType == streamTypeTCP {
+-		s.ingressActive.Store(true)
++	if err := s.flushPendingAndMarkReady(streamType); err != nil {
++		s.close(closeReasonNetworkError)
++		return
+ 	}
+ 
+-	s.signalConnReady()
+-
+ 	s.readFromConnection()
+ }
+ 
++// flushPendingAndMarkReady writes the DATA that handleDataPacket buffered while
++// CONNECT was still in progress, then marks the stream ready so the read path
++// takes over. handleDataPacket keeps appending to pendingData until
++// connReadyDone is set, and it can do so while the writes below are in flight.
++// So the flush re-checks under pendingMutex until the queue is empty, and sets
++// connReadyDone (and ingressActive) under that same lock. Nothing can be
++// appended after the final check.
++func (s *wispStream) flushPendingAndMarkReady(streamType uint8) error {
++	for {
++		s.pendingMutex.Lock()
++		if len(s.pendingData) == 0 {
++			if streamType == streamTypeTCP {
++				s.ingressActive.Store(true)
++			}
++			s.signalConnReady()
++			s.pendingMutex.Unlock()
++			return nil
++		}
++		pending := s.pendingData
++		s.pendingData = nil
++		s.pendingBytes = 0
++		s.pendingMutex.Unlock()
++
++		for _, data := range pending {
++			if !s.isOpen.Load() {
++				return errStreamClosedDuringFlush
++			}
++			if err := writeAll(s.conn, data); err != nil {
++				return err
++			}
++		}
++	}
++}
++
++var errStreamClosedDuringFlush = errors.New("wisp stream closed during pending-data flush")
++
+ func (s *wispStream) runIngressWriter() {
+ 	var bufs net.Buffers
+ 	var jobs []ingressJob
+-- 
+2.54.0
+

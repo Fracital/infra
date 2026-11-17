@@ -1,0 +1,62 @@
+{#- One byod name's zone (edge_dns_name: an entry of byod_names). Every box renders
+    the same file from the inventory; the serial is a hash of the content. -#}
+{%- set n = edge_dns_name -%}
+{%- set ttl = edge_dns_ttl -%}
+{%- set url = 'https://' ~ n.fqdn ~ (edge_dns_health_paths[n.fqdn] | default('/')) -%}
+{%- set geo = lookup('ansible.builtin.file', 'geo.lua').split('\n') | reject('match', '^\\s*--') | map('trim') | join(' ') -%}
+{%- macro boxes(var) -%}
+{%- set out = [] -%}
+{%- for h in groups[n.group | default('edge')] -%}
+{%- set ips = hostvars[h][var] | default([]) -%}
+{%- if ips | length > 0 -%}
+{%- set _ = out.append('{%s,%s,{%s}}' | format(hostvars[h].edge_geo.lat, hostvars[h].edge_geo.lon, ips | map('regex_replace', '^(.*)$', "'\\1'") | join(','))) -%}
+{%- endif -%}
+{%- endfor -%}
+{{ out | join(',') }}
+{%- endmacro -%}
+{%- set body -%}
+{% for h in edge_dns_hosts %}
+@ {{ ttl }} IN NS ns-{{ hostvars[h].wisp_site }}.{{ wisp_zone }}.
+{% endfor %}
+_geo {{ ttl }} IN LUA LUA "{{ geo }}"
+{% set v4 = boxes(n.ips_var) %}
+{% set v6 = boxes(n.ips_v6_var) %}
+{% if v4 %}
+@ {{ ttl }} IN LUA A ";include('_geo') return near('{{ url }}', { {{ v4 }} })"
+{% endif %}
+{% if v6 %}
+@ {{ ttl }} IN LUA AAAA ";include('_geo') return near('{{ url }}', { {{ v6 }} })"
+{% endif %}
+{% if n.sites | default(false) %}
+{% for h in groups[n.group | default('edge')] %}
+{% set site = hostvars[h].wisp_site | default(h | regex_replace(n.site_regex | default('^abulxt-'), '')) %}
+{% for ip in hostvars[h][n.site_ips_var | default(n.ips_var)] | default([]) %}
+{{ site }} {{ ttl }} IN A {{ ip }}
+{% endfor %}
+{% if n.site_ips_v6_var is defined %}
+{% for ip in hostvars[h][n.site_ips_v6_var] | default([]) %}
+{{ site }} {{ ttl }} IN AAAA {{ ip }}
+{% endfor %}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% for name, values in (n.txt | default({})).items() %}
+{% for v in ([values] if values is string else values) %}
+{{ name }} {{ ttl }} IN TXT "{{ v }}"
+{% endfor %}
+{% endfor %}
+{% if n.zone == wisp_zone %}
+{% for h in edge_dns_hosts %}
+ns-{{ hostvars[h].wisp_site }} {{ ttl }} IN A {{ hostvars[h].edge_dns_ipv4 | default(hostvars[h].ansible_host) }}
+{% set v6ns = hostvars[h].edge_dns_ipv6 | default((hostvars[h].edge_advertise_ips_v6 | default([]))[0] | default('')) %}
+{% if v6ns %}
+ns-{{ hostvars[h].wisp_site }} {{ ttl }} IN AAAA {{ v6ns }}
+{% endif %}
+{% endfor %}
+{% endif %}
+{%- endset -%}
+; {{ ansible_managed }}
+; roles/edge_dns (README.md "Edge DNS"): {{ n.fqdn }}, generated from the inventory.
+$ORIGIN {{ n.zone }}.
+@ {{ ttl }} IN SOA ns-{{ hostvars[edge_dns_hosts[0]].wisp_site }}.{{ wisp_zone }}. {{ edge_dns_hostmaster }}. {{ (body | hash('sha1'))[:7] | int(base=16) }} 3600 600 604800 {{ ttl }}
+{{ body }}

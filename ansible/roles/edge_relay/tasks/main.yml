@@ -1,0 +1,478 @@
+---
+# Configure an edge as a shared-storage BYOD relay to amph.
+#
+# Decision 1 (per-edge HTTP-01 on-demand issuance) is made multi-edge-safe by
+# pointing lua-resty-auto-ssl at a central Redis on amph:
+#   - every edge reads/writes certs + ACME http-01 challenge tokens in the same
+#     Redis namespace ("auto-ssl"), so whichever edge happens to receive the LE
+#     validation request can answer it, and a cert issued on one edge is
+#     immediately usable by all four.
+#   - domain approval is delegated to amph's abulxt-domains validator
+#     (target=edge), which only approves names whose DNS already resolves to one
+#     of this edge's IPs (bogus SNIs never burn CA rate limits).
+
+# The cloak names are not in the public repo. Rendering the edge without them would drop
+# their routes, so a run without the private file stops here (README.md "Private values").
+- name: The private values are loaded (inventory/group_vars/all/private.yml)
+  ansible.builtin.assert:
+    that:
+      - fracital_cloak_hosts is defined
+      - cloudflare_zt_gateway_locations is defined
+    fail_msg: >-
+      inventory/group_vars/all/private.yml is missing (gitignored; CI writes it from the
+      ANSIBLE_PRIVATE_VARS secret). Copy private.example/private.yml there and fill it in.
+    quiet: true
+
+- name: Create openresty config directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ openresty_conf_dir }}"
+    - "{{ openresty_conf_dir }}/conf.d"
+    - "{{ openresty_conf_dir }}/snippets"
+    - "{{ openresty_conf_dir }}/lua"
+    - "{{ openresty_prefix }}/nginx/logs"
+
+# Legacy per-edge catch-alls (from deploy/openresty-ashburn) declare their own
+# :80/:443 default servers and conflict with the unified 00-edge-relay.conf.
+# Move them aside (keep a .disabled backup) rather than deleting, so nothing is
+# lost. Only the byod catch-all conflicts; internal/loopback confs are kept.
+- name: Disable legacy configs that conflict with the unified relay
+  ansible.builtin.command: >
+    mv {{ openresty_conf_dir }}/conf.d/{{ item }} {{ openresty_conf_dir }}/conf.d/{{ item }}.disabled
+  args:
+    removes: "{{ openresty_conf_dir }}/conf.d/{{ item }}"
+  loop:
+    # 20-byod-catchall: duplicate default_server (superseded by 00-edge-relay).
+    # 01-acme-internal: duplicate 127.0.0.1:8999 hook server (now in byod-edge.conf.j2).
+    - 20-byod-catchall.conf
+    - 01-acme-internal.conf
+  notify: reload openresty
+
+# wisp.baby live usage stats (files/wispstats.lua, wispbaby/README.md "Live stats"): the
+# box pushes its counters to amph's Redis and serves /live, /live/history and /you. The Lua and its
+# config come before nginx.conf, whose validate step runs init_by_lua and so loads them.
+- name: wisp.baby live stats
+  when: wispstats_on | bool
+  block:
+    - name: Live stats facts are set
+      ansible.builtin.assert:
+        that:
+          - wisp_site is defined and wisp_site is match('^[a-z0-9-]+$')
+          - auto_ssl_redis_password is defined and auto_ssl_redis_password | length > 0
+        fail_msg: "wisp_site (host_vars) and auto_ssl_redis_password (vault) must be set."
+        quiet: true
+      no_log: true
+
+    # libmaxminddb is loaded by the Lua through LuaJIT FFI; mmdb-bin checks the download.
+    - name: GeoIP library and tools
+      ansible.builtin.apt:
+        name: [libmaxminddb0, mmdb-bin, curl]
+        state: present
+
+    - name: Live stats Lua module
+      ansible.builtin.copy:
+        src: wispstats.lua
+        dest: "{{ openresty_conf_dir }}/lua/wispstats.lua"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: reload openresty
+
+    # Read as root by init_by_lua; holds the Redis password and the client-hash salt.
+    - name: Live stats config
+      ansible.builtin.template:
+        src: wispstats.json.j2
+        dest: "{{ openresty_conf_dir }}/wispstats.json"
+        owner: root
+        group: root
+        mode: "0600"
+      diff: false
+      notify: reload openresty
+
+    - name: GeoIP refresh script
+      ansible.builtin.template:
+        src: wispbaby-geoip.sh.j2
+        dest: /usr/local/sbin/wispbaby-geoip
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: GeoIP refresh units
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/{{ item.name }}"
+        content: "{{ item.content }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop:
+        - name: wispbaby-geoip.service
+          content: |
+            # roles/edge_relay
+            [Unit]
+            Description=Refresh the DB-IP City Lite database for wisp.baby /you
+            After=network-online.target
+            Wants=network-online.target
+            [Service]
+            Type=oneshot
+            ExecStart=/usr/local/sbin/wispbaby-geoip
+        - name: wispbaby-geoip.timer
+          content: |
+            # roles/edge_relay: DB-IP publishes on the 1st; the 3rd leaves room.
+            [Unit]
+            Description=Monthly DB-IP City Lite refresh
+            [Timer]
+            OnCalendar=*-*-03 05:00:00
+            RandomizedDelaySec=6h
+            Persistent=true
+            [Install]
+            WantedBy=timers.target
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Enable the GeoIP refresh timer
+      ansible.builtin.systemd:
+        name: wispbaby-geoip.timer
+        enabled: true
+        state: started
+        daemon_reload: true
+      # In --check the unit file was never written, so there is nothing to enable yet.
+      ignore_errors: "{{ ansible_check_mode }}"
+
+    # Without the file /you answers city and country as null; nothing else depends on it.
+    - name: Fetch the GeoIP database when missing
+      ansible.builtin.command: /usr/local/sbin/wispbaby-geoip
+      args:
+        creates: "{{ wispstats_mmdb }}"
+      register: wispstats_geoip
+      failed_when: false
+
+    - name: GeoIP download failed (the timer retries monthly; run wispbaby-geoip by hand)
+      ansible.builtin.debug:
+        msg: "{{ wispstats_geoip.stderr | default('') }}"
+      when: wispstats_geoip.rc is defined and wispstats_geoip.rc != 0
+
+- name: wisp.baby live stats absent (not enabled)
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ openresty_conf_dir }}/lua/wispstats.lua"
+    - "{{ openresty_conf_dir }}/wispstats.json"
+  when: not (wispstats_on | bool)
+  notify: reload openresty
+
+# New and renewed certificates get a P-256 key: an RSA-4096 signature cost 1.03 ms of CPU per
+# full handshake (2026-11-16) and a 6.2 KB server flight. dehydrated sources conf.d/*.sh; the
+# certificates already issued stay RSA until they renew.
+- name: dehydrated config directory (auto-ssl's, so www-data's; it sets the modes itself)
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: www-data
+    group: www-data
+  loop:
+    - "{{ openresty_auto_ssl_dir }}/letsencrypt"
+    - "{{ openresty_auto_ssl_dir }}/letsencrypt/conf.d"
+
+- name: dehydrated issues ECDSA keys
+  ansible.builtin.copy:
+    dest: "{{ openresty_auto_ssl_dir }}/letsencrypt/conf.d/ecdsa.sh"
+    content: "KEY_ALGO=prime256v1\n"
+    owner: root
+    group: root
+    mode: "0644"
+
+# conf.d/ first, nginx.conf last: nginx.conf's validate step tests the whole
+# include tree, so the server blocks it includes must already be current.
+- name: Render edge relay server config
+  ansible.builtin.template:
+    src: byod-edge.conf.j2
+    dest: "{{ openresty_conf_dir }}/conf.d/00-edge-relay.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: reload openresty
+
+# Other boxes' HTTP-01 on the shared public address (defaults edge_acme_forwards).
+- name: Render the ACME forwards
+  ansible.builtin.template:
+    src: acme-forwards.conf.j2
+    dest: "{{ openresty_conf_dir }}/conf.d/{{ edge_acme_forwards_conf }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: edge_acme_forwards | length > 0
+  notify: reload openresty
+
+- name: ACME forwards absent (edge_acme_forwards is empty)
+  ansible.builtin.file:
+    path: "{{ openresty_conf_dir }}/conf.d/{{ edge_acme_forwards_conf }}"
+    state: absent
+  when: edge_acme_forwards | length == 0
+  notify: reload openresty
+
+- name: Render Eaglercraft / MC panel subdomain routes
+  ansible.builtin.template:
+    src: mc-routes.conf.j2
+    dest: "{{ openresty_conf_dir }}/conf.d/10-mc-routes.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: reload openresty
+
+# krunk.io (KrunkNative) service hosts relayed straight to kru (README.md
+# "krunk.io routes"). krunkio_enabled false removes them again.
+- name: krunk.io routes
+  when: krunkio_enabled | bool
+  block:
+    - name: krunk.io origin token is set (vault, group_vars/all/krunkio_secrets.yml)
+      ansible.builtin.assert:
+        that: krunkio_origin_token is defined and krunkio_origin_token is match('^[0-9a-f]{32,}$')
+        fail_msg: "krunkio_origin_token is missing (same value as /etc/krunknative/edge-origin/token on kru)."
+        quiet: true
+      no_log: true
+
+    - name: krunk.io pinned origin certificate
+      ansible.builtin.copy:
+        src: krunkio-origin.crt
+        dest: "{{ openresty_conf_dir }}/krunkio-origin.crt"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: reload openresty
+
+    - name: krunk.io asset cache directory
+      ansible.builtin.file:
+        path: "{{ krunkio_cache_dir }}"
+        state: directory
+        owner: www-data
+        group: root
+        mode: "0700"
+
+    - name: krunk.io origin proxy snippet
+      ansible.builtin.template:
+        src: krunkio-origin.conf.j2
+        dest: "{{ openresty_conf_dir }}/snippets/krunkio-origin.conf"
+        owner: root
+        group: root
+        mode: "0640"
+      diff: false # holds the token
+      notify: reload openresty
+
+    - name: Render krunk.io routes
+      ansible.builtin.template:
+        src: krunkio-routes.conf.j2
+        dest: "{{ openresty_conf_dir }}/conf.d/20-krunkio.conf"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: reload openresty
+
+- name: krunk.io routes absent (krunkio_enabled is false)
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ openresty_conf_dir }}/conf.d/20-krunkio.conf"
+    - "{{ openresty_conf_dir }}/snippets/krunkio-origin.conf"
+  when: not (krunkio_enabled | bool)
+  notify: reload openresty
+
+# Fracital hosts relayed to terp (README.md "Fracital routes").
+- name: Fracital routes
+  when: fracital_enabled | bool
+  block:
+    - name: Fracital secrets are set (vault, group_vars/all/fracital_secrets.yml)
+      ansible.builtin.assert:
+        that:
+          - fracital_origin_token is defined and fracital_origin_token is match('^[0-9a-f]{32,}$')
+          - fracital_wisp_gate_key is defined and fracital_wisp_gate_key is match('^[0-9a-f]{16,}$')
+        fail_msg: "fracital_origin_token / fracital_wisp_gate_key missing or malformed."
+        quiet: true
+      no_log: true
+
+    - name: Fracital pinned origin certificate
+      ansible.builtin.copy:
+        src: fracital-origin.crt
+        dest: "{{ openresty_conf_dir }}/fracital-origin.crt"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: reload openresty
+
+    - name: Fracital asset cache directory
+      ansible.builtin.file:
+        path: "{{ fracital_cache_dir }}"
+        state: directory
+        owner: www-data
+        group: root
+        mode: "0700"
+
+    - name: Fracital origin proxy snippet
+      ansible.builtin.template:
+        src: fracital-origin.conf.j2
+        dest: "{{ openresty_conf_dir }}/snippets/fracital-origin.conf"
+        owner: root
+        group: root
+        mode: "0640"
+      diff: false # holds the token
+      notify: reload openresty
+
+    - name: Render Fracital routes
+      ansible.builtin.template:
+        src: fracital-routes.conf.j2
+        dest: "{{ openresty_conf_dir }}/conf.d/30-fracital.conf"
+        owner: root
+        group: root
+        mode: "0640"
+      diff: false # holds the gate key
+      notify: reload openresty
+
+- name: Fracital routes absent (fracital_enabled is false)
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ openresty_conf_dir }}/conf.d/30-fracital.conf"
+    - "{{ openresty_conf_dir }}/snippets/fracital-origin.conf"
+  when: not (fracital_enabled | bool)
+  notify: reload openresty
+
+# Holy Unblocker hosts (README.md "holyunb routes"): wisp boxes only (holyunb_on).
+- name: holyunb routes
+  when: holyunb_on | bool
+  block:
+    - name: holyunb gate key is set (vault, group_vars/all/holyunb_secrets.yml)
+      ansible.builtin.assert:
+        that: holyunb_wisp_gate_key is defined and holyunb_wisp_gate_key is match('^[0-9a-f]{16,}$')
+        fail_msg: "holyunb_wisp_gate_key missing or malformed."
+        quiet: true
+      no_log: true
+
+    - name: Render holyunb routes
+      ansible.builtin.template:
+        src: holyunb-routes.conf.j2
+        dest: "{{ openresty_conf_dir }}/conf.d/35-holyunb.conf"
+        owner: root
+        group: root
+        mode: "0640"
+      diff: false # holds the gate key
+      notify: reload openresty
+
+- name: holyunb routes absent (holyunb_enabled is false, or not a wisp box)
+  ansible.builtin.file:
+    path: "{{ openresty_conf_dir }}/conf.d/35-holyunb.conf"
+    state: absent
+  when: not (holyunb_on | bool)
+  notify: reload openresty
+
+# blockshooter.io (blockshooter/README.md): the mirrored frontend from disk, the tower
+# defense backend proxied to blockshooter.club. Wisp boxes only (blockshooter_on).
+- name: blockshooter.io site
+  when: blockshooter_on | bool
+  block:
+    - name: blockshooter.io page directory
+      ansible.builtin.file:
+        path: /var/www/blockshooter
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    # Served straight from disk: a refreshed mirror needs no reload.
+    - name: Install the blockshooter.io files (blockshooter/site/)
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../blockshooter/site/"
+        dest: /var/www/blockshooter/
+        owner: root
+        group: root
+        mode: "0644"
+        directory_mode: "0755"
+
+    - name: Render blockshooter.io routes
+      ansible.builtin.template:
+        src: blockshooter-routes.conf.j2
+        dest: "{{ openresty_conf_dir }}/conf.d/36-blockshooter.conf"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: reload openresty
+
+- name: blockshooter.io routes absent (blockshooter_enabled is false, or not a wisp box)
+  ansible.builtin.file:
+    path: "{{ openresty_conf_dir }}/conf.d/36-blockshooter.conf"
+    state: absent
+  when: not (blockshooter_on | bool)
+  notify: reload openresty
+
+# wisp.baby (README.md "The wisp cloud (wisp.baby)", wispbaby/README.md): the speed test
+# page, the public relay on / and the box's own :80 speed test endpoint. Wisp boxes only; any other
+# edge has no 40-wispbaby.conf.
+- name: wisp.baby site
+  when: "'wisp_edge' in group_names"
+  block:
+    - name: wisp.baby host facts are set (host_vars/wisp-<site>.yml)
+      ansible.builtin.assert:
+        that:
+          - wisp_site is defined and wisp_site is match('^[a-z0-9-]+$')
+          - wisp_ips is defined and wisp_ips | length > 0
+          - edge_country is defined
+        fail_msg: "wisp_site, wisp_ips and edge_country must be set in host_vars/{{ inventory_hostname }}.yml."
+        quiet: true
+
+    - name: wisp.baby page directory
+      ansible.builtin.file:
+        path: /var/www/wispbaby
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    # Served straight from disk: a page change needs no reload. Files dropped from site/ stay on
+    # the box (harmless, but delete them by hand if they matter).
+    - name: Install the wisp.baby page (wispbaby/site/)
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../wispbaby/site/"
+        dest: /var/www/wispbaby/
+        owner: root
+        group: root
+        mode: "0644"
+        directory_mode: "0755"
+
+    - name: Render wisp.baby server config
+      ansible.builtin.template:
+        src: wispbaby.conf.j2
+        dest: "{{ openresty_conf_dir }}/conf.d/40-wispbaby.conf"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: reload openresty
+
+- name: wisp.baby server config absent (not a wisp box)
+  ansible.builtin.file:
+    path: "{{ openresty_conf_dir }}/conf.d/40-wispbaby.conf"
+    state: absent
+  when: "'wisp_edge' not in group_names"
+  notify: reload openresty
+
+- name: Render main nginx.conf
+  ansible.builtin.template:
+    src: nginx.conf.j2
+    dest: "{{ openresty_conf_dir }}/nginx.conf"
+    owner: root
+    group: root
+    mode: "0644"
+    validate: "{{ openresty_prefix }}/nginx/sbin/nginx -t -c %s"
+  notify: reload openresty
+
+- name: Ensure openresty is enabled and started
+  ansible.builtin.systemd:
+    name: openresty
+    state: started
+    enabled: true
+# The host firewall moved to the edge_firewall role (tag: firewall).

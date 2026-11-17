@@ -1,0 +1,45 @@
+---
+# The golden Debian 13 template on a wisp cloud Proxmox VE host (README.md "The
+# wisp cloud", "Edge VM on Proxmox"). pve_edge_vm full-clones it into the box's
+# one edge VM. The template is rebuilt only when pve_template_image_release
+# changes: the image it was built from is recorded in its description
+# (abulxt-pve-template.<image>), and any other value (or a half-built VM at this
+# id that carries the marker) is destroyed and rebuilt. A VM at this id without
+# the marker stops the play.
+pve_template_vmid: 9000
+pve_template_name: debian13-genericcloud
+
+# The image: Debian's official "genericcloud" amd64 qcow2 from one dated release
+# directory (https://cloud.debian.org/images/cloud/trixie/, never latest/ or
+# daily/), checked against that directory's SHA512SUMS fetched over HTTPS.
+# Bump this to update every box (then rebuild the edge VMs, README).
+# 20261103-2651: the image built 2026-11-03 (pinned 2026-11-11).
+pve_template_image_release: "20261103-2651"
+pve_template_image_base_url: https://cloud.debian.org/images/cloud/trixie
+pve_template_image_file: "debian-13-genericcloud-amd64-{{ pve_template_image_release }}.qcow2"
+# Downloaded images are kept here (the current one only; older ones are removed
+# once the template is rebuilt), so a re-run never downloads twice.
+pve_template_image_dir: /var/lib/vz/abulxt-images
+
+# Storage for the template's disks, and so (by default) the edge VM's: "" picks
+# the first active storage of pve_storage_preference (local-lvm on a Proxmox ISO
+# install, local on Proxmox installed on top of Debian).
+pve_storage: ""
+pve_storage_preference: [local-lvm, local-zfs, local]
+# Add a content type a storage lacks to its storage.cfg entry (`images` on the
+# chosen storage, `snippets` on pve_edge_vm_snippets_storage). Never removes one.
+# false: the play stops instead and names the pvesm command.
+pve_storage_manage_content: true
+
+# Hardware shared by the template and its clone (pve_edge_vm sets them again on
+# the VM, so a change here reaches an existing VM on the next run).
+# q35: PCIe machine, the current default for Linux guests. Unpinned (the newest
+# q35 the host's QEMU has at each VM start).
+pve_vm_machine: q35
+# SeaBIOS, not OVMF: the Debian cloud image boots both (hybrid GPT, BIOS + EFI
+# GRUB), and nothing on an edge needs UEFI (no Secure Boot, no passthrough). OVMF
+# would add an efidisk0 per VM whose NVRAM boot entries a re-clone or a disk swap
+# can leave stale, a second disk to keep identical, and a slower boot. ovmf
+# is supported (an efidisk0 is added) but not the default.
+pve_vm_bios: seabios
+pve_vm_cpu: host

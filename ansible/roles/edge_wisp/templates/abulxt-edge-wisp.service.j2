@@ -1,0 +1,90 @@
+# abulxt-edge-wisp.service: managed by Ansible (roles/edge_wisp). holyWisp with the sandbox from
+# its own deploy/systemd/holywisp.service: the process parses attacker-controlled bytes and opens
+# sockets to attacker-chosen hosts, so a bug in it must not become a foothold on the host.
+[Unit]
+{% if edge_wisp_manage_router %}
+Description=abulxt edge Wisp server (holyWisp, egress via edge router)
+Documentation=https://github.com/Fracital/holyWisp
+After=network-online.target abulxt-edge-router.service
+Wants=network-online.target
+Requires=abulxt-edge-router.service
+{% else %}
+Description=abulxt Wisp server (holyWisp, egress via {{ holywisp_proxy }})
+Documentation=https://github.com/Fracital/holyWisp
+After=network-online.target
+Wants=network-online.target
+{% endif %}
+
+[Service]
+Type=exec
+User={{ edge_wisp_user }}
+Group={{ edge_wisp_user }}
+WorkingDirectory={{ edge_wisp_dir }}
+# Config is root:{{ edge_wisp_user }} 0640; the bind address lives in it (`host =`).
+ExecStart={{ edge_wisp_dir }}/holywisp --config /etc/abulxt/holywisp.conf
+Restart=always
+RestartSec=2
+# A relay legitimately opens many sockets; keep the ceiling finite.
+LimitNOFILE=262144
+# Threads: one worker per CPU, the resolver pool and maintenance; a fork bomb cannot go further.
+TasksMax=512
+
+# ---- Sandbox (holyWisp upstream unit). Each line is load-bearing; review before relaxing. ----
+NoNewPrivileges=yes
+{% if holywisp_udp_warp | bool and edge_wisp_manage_router and edge_warp_enabled | default(false) | bool and edge_warp_mode | default('kernel') == 'kernel' %}
+# UDP on WARP (holywisp_udp_warp), and with holywisp_tcp_direct the TCP dialled here (tcp-warp):
+# SO_MARK on each stream's socket picks a WARP tunnel. Nothing else; without it holyWisp logs an
+# ERROR, sends UDP unmarked and follows tcp-warp-fallback for TCP.
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+{% else %}
+# The port is >= 1024, so the server needs no capability at all.
+CapabilityBoundingSet=
+AmbientCapabilities=
+{% endif %}
+# Read-only hierarchy, hidden homes, private /tmp; the only writable path is the state dir.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths={{ edge_wisp_dir }}/data
+# Kernel and device surface.
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RemoveIPC=yes
+KeyringMode=private
+# TCP and UDP over IPv4/IPv6 only: the listener, the SOCKS5 hop to 127.0.0.1 ({{ holywisp_proxy }}),
+# direct egress and the DNS client are all AF_INET/AF_INET6. Logging is stderr to the journal
+# and the resolver is holyWisp's own, so AF_UNIX is not needed.
+RestrictAddressFamilies=AF_INET AF_INET6
+{% if edge_wisp_manage_router and edge_router_dns_port | int > 0 %}
+# edge-router.py's name gate resolves a hostname that goes through the relay (shady) to the
+# relay's address, the relay_host of edge-router.json. holyWisp never has to send there itself
+# (its TCP streams reach the relay through the router, a different unit), so this makes a UDP
+# stream to such a name fail on its first datagram (EPERM) instead of leaving from this host.
+IPAddressDeny={{ abulxt_origin_ip }}
+{% endif %}
+# System calls: the common service set minus the dangerous groups, native ABI only.
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @obsolete @cpu-emulation @swap @reboot @mount @debug @raw-io
+SystemCallErrorNumber=EPERM
+# Files the process creates (the reputation store) are owner-only.
+UMask=0077
+{% for line in edge_wisp_service_extra %}
+{{ line }}
+{% endfor %}
+
+[Install]
+WantedBy=multi-user.target

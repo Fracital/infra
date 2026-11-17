@@ -1,0 +1,28 @@
+---
+# terp (Fracital origin): OpenResty in front of the Node app, admitting only the edges.
+fracital_openresty_prefix: /usr/local/openresty
+fracital_openresty_conf_dir: "{{ fracital_openresty_prefix }}/nginx/conf"
+fracital_tls_dir: /etc/fracital-edge
+# Same pinned bookworm build as the Debian 13 edges (openresty role, install_method debs):
+# apt's sqv rejects OpenResty's SHA1-signed repo on trixie.
+fracital_openresty_debs:
+  - {
+      pkg: openresty-openssl3,
+      file: "openresty-openssl3_3.5.7-1~bookworm1_amd64.deb",
+    }
+  - {
+      pkg: openresty-pcre2,
+      file: "openresty-pcre2_10.48-1~bookworm1_amd64.deb",
+    }
+  - { pkg: openresty-zlib, file: "openresty-zlib_1.3.2-1~bookworm1_amd64.deb" }
+  - { pkg: openresty, file: "openresty_1.31.1.1-1~bookworm1_amd64.deb" }
+# Host used for the local health checks (any name the app serves).
+fracital_health_host: fracital.xyz
+# TCP on terp's long legs to the edges (LA and Santa Clara: 57-80 ms, bursty loss). Under cubic
+# the first loss burst collapses the window to 6-12 segments, about 150 KB/s per pull (2026-11-10).
+# BBR paces to the measured bottleneck rate and does not treat isolated loss as congestion; no
+# slow-start restart on the edges' idle keepalive connections. Written to
+# /etc/sysctl.d/90-fracital-tcp.conf; tcp_bbr is loaded at boot (modules-load.d).
+fracital_origin_sysctl:
+  net.ipv4.tcp_congestion_control: bbr
+  net.ipv4.tcp_slow_start_after_idle: 0

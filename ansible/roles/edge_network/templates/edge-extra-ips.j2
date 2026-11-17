@@ -1,0 +1,15 @@
+# Additional abulxt edge IPs. Managed by Ansible (edge_network role).
+# Applied with: ifup --read-environment (or on next boot via ifupdown).
+# Primary address stays in /etc/network/interfaces; these are secondaries.
+
+{% for ip in edge_extra_interface_ips | default([]) %}
+iface {{ edge_primary_if }} inet static
+    address {{ ip }}/{{ edge_ipv4_prefix | default(24) }}
+{% endfor %}
+{% for ip in edge_extra_interface_ips_v6 | default([]) %}
+iface {{ edge_primary_if }} inet6 static
+    address {{ ip }}
+{% if loop.first and edge_ipv6_gateway is defined %}
+    gateway {{ edge_ipv6_gateway }}
+{% endif %}
+{% endfor %}

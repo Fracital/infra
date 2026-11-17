@@ -1,0 +1,10 @@
+---
+# The unprivileged user CI deploys as (README.md "Deploy user").
+deploy_user_name: deploy
+# authorized_keys lines, each with its own restrict + forced command. Public keys only.
+deploy_user_keys: []
+# Exact command lines (with arguments) deploy may run as root, without a password.
+deploy_user_sudo_commands: []
+# Checkouts deploy owns that root also runs git in by hand: listed in /etc/gitconfig
+# safe.directory so root's git does not refuse them as owned by someone else.
+deploy_user_git_safe_dirs: []

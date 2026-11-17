@@ -1,0 +1,80 @@
+---
+# amph: origin VM, Manassas, Virginia, US. On divide since 2026-11-16 (from meal): private
+# only, 172.16.5.3/24 on vmbr1, gateway 172.16.5.1; reached by ProxyJump through divide
+# (group_vars/divide_guests.yml). Its old public addresses on meal are gone.
+# Debian 13 (trixie). OpenResty front; app, Postgres, mullvad-pool, shady-relay.
+
+# --- Firewall (abulxt_origin: /etc/abulxt/firewall.env EDGE_SUBNETS) ---
+# 9080/8822/6379/1082 are open to divide's whole vmbr1, as live: the edge (172.16.5.10) is the
+# only guest divide's bridge firewall lets reach those ports (docs/divide-host.md), so the /24
+# adds nothing beyond the edge. Without this the role computes the edge's edge_origin_source.
+abulxt_edge_subnets_override:
+  - "172.16.5.0/24"
+# abulxt-domains (/ask) is reached on 172.16.5.3:8822 (abulxt deploy/openresty/conf.d/60-domains-proxy.conf).
+
+# --- Wisp relay (role edge_wisp via playbooks/origin.yml) -------------------
+# Replaces the hand-managed npm wrapper `abulxt-wisp.service` (node server.mjs
+# + 8 Go workers on 6011-6018 behind a 127.0.0.1:6001 front) with the same
+# controller-built holyWisp the edges run. OpenResty's `abulxt_wisp_backend`
+# upstream (127.0.0.1:6001) is unchanged.
+#
+# Install dir differs from the edges on purpose: /opt/abulxt-wisp is the old
+# npm install (server.mjs, node_modules, config.json) and is left untouched so
+# rollback is just `systemctl disable --now abulxt-edge-wisp && systemctl
+# enable --now abulxt-wisp`. The wispurr binary this role installed before
+# holyWisp (/opt/abulxt-wispurr/wispurr + /etc/abulxt/wispurr.json) also stays
+# until edge_wisp_remove_wispurr is set (RUNBOOK "Rollback to wispurr").
+edge_wisp_dir: /opt/abulxt-wispurr
+# No edge-router.py on amph: streams egress straight into mullvad-pool.
+edge_wisp_manage_router: false
+# /etc/abulxt is owned by abulxt_origin (root:root 0755) and holds other
+# services' env files; edge_wisp must not re-mode it.
+edge_wisp_manage_conf_dir: false
+# Values carried over from the old /opt/abulxt-wisp/config.json.
+mullvad_pool_port: 1080
+holywisp_proxy: "socks5h://127.0.0.1:{{ mullvad_pool_port }}"
+holywisp_allow_udp: true
+# mullvad-pool is TCP-only: UDP streams go out directly (holyWisp `proxy-udp = direct`).
+holywisp_proxy_udp_direct: true
+holywisp_dns_servers: ["1.1.1.3", "1.0.0.3"]
+# 10.203.0.2:6001 is held by the proton-socks wisp.server; bind loopback only
+# (the old node front also bound 127.0.0.1).
+holywisp_bind_host: "127.0.0.1"
+# Memory guard the old unit carried in a drop-in (one process now, not nine).
+edge_wisp_service_extra:
+  - MemoryHigh=5G
+  - MemoryMax=6G
+# Stopped + disabled before abulxt-edge-wisp.service first binds :6001.
+edge_wisp_retire_units:
+  - abulxt-wisp.service
+
+# --- estro.help (abulxt_origin: conf.d/57-estro.conf) ---
+# Backend on divide's vmbr1 (amph 172.16.5.3/24; chat 172.16.5.64 moved with it).
+estro_upstream: "172.16.5.64:80"
+estro_hosts: [estro.help, www.estro.help]
+
+# --- fail2ban (contract vars: group_vars/abulxt.yml) ---
+# The base replaces the hand-installed fail2ban/ jail.local (iptables
+# actions: their f2b-* jumps sat after ABULXT_INPUT, which accepts tcp/22 and
+# drops the rest, so no ban ever applied). The register jail never matched
+# (systemd backend, OpenResty logs to files), and HTTP here arrives via
+# Cloudflare and the edges, so an HTTP ban would hit their addresses.
+fail2ban_retire_files:
+  - /etc/fail2ban/jail.d/openresty-register.local
+  - /etc/fail2ban/filter.d/openresty-register.conf
+
+# --- Deploy user (role deploy_user via playbooks/origin.yml) ----------------
+# abulxt's (site, singlefile), y9x/cloaks' and holt's CI log in as `deploy`, each key forced through
+# its gate (abulxt deploy/abulxt-deploy-gate.sh, holt deploy/holt-deploy-gate.sh, installed by hand).
+# Root's part is only the fixed commands below (deploy/*-deploy-root.sh in those repos).
+deploy_user_keys:
+  - restrict,command="/usr/local/sbin/abulxt-deploy-gate site" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIVrApMEST+6qI7hiuoG6y2GFb6Zy0AruCoW4VZSaRtv abulxt-ci-vps@y9x/abulxt
+  - restrict,command="/usr/local/sbin/abulxt-deploy-gate singlefile" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINgHxnoxMvLRF/kMOrGScSgXtDOaxFv+zVHatpOHOC5k abulxt-ci-singlefile@y9x/abulxt
+  - restrict,command="/usr/local/sbin/abulxt-deploy-gate cloaks" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIjSWpr+NgHwcJepl0SAMRoF/GqCGM2BmO9xliKufrhJ abulxt-cloaks-ci@y9x/cloaks
+  - restrict,command="/usr/local/sbin/holt-deploy-gate" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPDPDdIZ7vlMRBgR69N7HFvmlt2JXDb/JOCEidfHuefS holt-ci@y9x/holt
+deploy_user_sudo_commands:
+  - /usr/local/sbin/abulxt-deploy-root prepare
+  - /usr/local/sbin/abulxt-deploy-root activate
+  - /usr/local/sbin/abulxt-deploy-root reload-cloaks
+  - /usr/local/sbin/holt-deploy-root prepare
+  - /usr/local/sbin/holt-deploy-root activate

@@ -1,0 +1,85 @@
+---
+# The fleet's host firewall, reused as is: the vendored edge_firewall role renders its
+# edge-firewall-contract v1 base (input drop except lo, established, ICMP/ICMPv6, SSH
+# 22; forward drop; output accept) with abulxt as the owner (no other repo runs on
+# these hosts) and no port drop-ins. On top, one drop-in of this role's own,
+# /etc/nftables.d/<prio>-abulxt-pve-admin.nft, opens the Proxmox web UI and
+# spiceproxy to pve_admin_sources only. The contract's port drop-ins can only open a
+# port to everyone, so this one adds its own chain + `jump`, which the contract allows,
+# and is applied through edge_firewall's own apply.yml (check, rollback timer,
+# fresh-SSH login).
+#
+# The host's nftables never sees bridged VM traffic: frames that cross vmbr0 between a
+# VM and the wire do not reach the inet hooks unless br_netfilter is loaded, which
+# tuning.yml keeps neutral. The forward drop only stops the host routing, which it
+# does not do.
+
+# pve-firewall would load br_netfilter, switch bridge-nf-call-iptables on and write
+# iptables rules that the base's `flush ruleset` wipes on every nftables reload.
+- name: Look for an enabled Proxmox datacenter firewall
+  ansible.builtin.command: grep -Eq '^[[:space:]]*enable:[[:space:]]*1' /etc/pve/firewall/cluster.fw
+  register: pve_dc_firewall
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Refuse to run next to the Proxmox firewall
+  ansible.builtin.assert:
+    that: pve_dc_firewall.rc != 0
+    fail_msg: >-
+      The Proxmox datacenter firewall is enabled (/etc/pve/firewall/cluster.fw). It cannot
+      share the host with the edge_firewall base, and with it bridged VM traffic would hit the
+      base's forward drop. Disable it, or set pve_firewall_manage: false and own the firewall there.
+    quiet: true
+
+- name: Base ruleset (vendored edge_firewall, contract v1)
+  ansible.builtin.include_role:
+    name: edge_firewall
+  vars:
+    edge_firewall_manage: true
+    edge_firewall_own_base: true
+    edge_firewall_owner: "abulxt (inputs: ansible roles/proxmox_host defaults/main.yml)"
+    edge_firewall_ssh_port: 22
+    edge_firewall_rollback_seconds: "{{ pve_firewall_rollback_seconds }}"
+    edge_firewall_dropins: []
+
+# Restored by edge_firewall's apply.yml (and its rollback timer) if the new file fails.
+# Creates an archive (lint mistakes tar for an unarchive candidate).
+- name: Snapshot current firewall files for rollback
+  ansible.builtin.command: tar -C / -czf /etc/nftables.rollback.tgz etc/nftables.conf etc/nftables.d # noqa: command-instead-of-module
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Render the Proxmox admin drop-in
+  ansible.builtin.template:
+    src: pve-admin.nft.j2
+    dest: "/etc/nftables.d/{{ '%02d' | format(pve_firewall_dropin_priority | int) }}-abulxt-pve-admin.nft"
+    owner: root
+    group: root
+    mode: "0644"
+  register: pve_admin_dropin
+
+- name: Is /etc/nftables.conf a contract base?
+  ansible.builtin.command: grep -q 'edge-firewall-contract v1' /etc/nftables.conf
+  register: pve_fw_contract
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Load the admin drop-in safely (edge_firewall's apply.yml)
+  ansible.builtin.include_role:
+    name: edge_firewall
+    tasks_from: apply.yml
+  vars:
+    edge_firewall_rollback_seconds: "{{ pve_firewall_rollback_seconds }}"
+  when:
+    - pve_admin_dropin is changed
+    - pve_fw_contract.rc == 0
+    - not ansible_check_mode
+
+- name: Confirm the admin chain is live
+  ansible.builtin.command: nft list chain inet filter abulxt_pve_admin
+  changed_when: false
+  when:
+    - pve_fw_contract.rc == 0
+    - not ansible_check_mode

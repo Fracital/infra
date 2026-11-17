@@ -1,0 +1,122 @@
+---
+# Authoritative geo DNS for the byod names (defaults/main.yml, README.md "Edge DNS").
+# Config, zones and the GeoIP database go in place before the package, so PowerDNS
+# never starts on Debian's default config (a wildcard listener that collides with
+# systemd-resolved on 127.0.0.53).
+
+- name: Directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - /etc/powerdns
+    - /etc/powerdns/pdns.d
+    - /etc/powerdns/zones
+    - /var/lib/powerdns
+
+- name: PowerDNS settings (pdns.d/zz-abulxt.conf)
+  ansible.builtin.template:
+    src: pdns-abulxt.conf.j2
+    dest: /etc/powerdns/pdns.d/zz-abulxt.conf
+    mode: "0644"
+  notify: Restart pdns
+
+- name: The geoip backend serves no zones of its own
+  ansible.builtin.copy:
+    dest: /etc/powerdns/geoip-zones.yaml
+    content: "domains: []\n"
+    mode: "0644"
+  notify: Restart pdns
+
+- name: Zone list (named.conf)
+  ansible.builtin.template:
+    src: named.conf.j2
+    dest: /etc/powerdns/named.conf
+    mode: "0644"
+  notify: Restart pdns
+
+- name: Zones
+  ansible.builtin.template:
+    src: zone.j2
+    dest: "/etc/powerdns/zones/{{ edge_dns_name.zone }}.zone"
+    mode: "0644"
+  loop: "{{ byod_names }}"
+  loop_control:
+    loop_var: edge_dns_name
+    label: "{{ edge_dns_name.zone }}"
+  notify: Reload zones
+
+- name: Tools for the GeoIP refresh and the self-check
+  ansible.builtin.apt:
+    name: [curl, mmdb-bin, bind9-dnsutils]
+    state: present
+
+- name: GeoIP refresh script
+  ansible.builtin.template:
+    src: edge-dns-mmdb.sh.j2
+    dest: /usr/local/sbin/edge-dns-mmdb
+    mode: "0755"
+
+- name: GeoIP refresh units
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/{{ item.name }}"
+    content: "{{ item.content }}"
+    mode: "0644"
+  loop:
+    - name: edge-dns-mmdb.service
+      content: |
+        # roles/edge_dns
+        [Unit]
+        Description=Refresh the DB-IP country database for PowerDNS
+        After=network-online.target
+        Wants=network-online.target
+        [Service]
+        Type=oneshot
+        ExecStart=/usr/local/sbin/edge-dns-mmdb
+    - name: edge-dns-mmdb.timer
+      content: |
+        # roles/edge_dns: DB-IP publishes on the 1st; the 3rd leaves room.
+        [Unit]
+        Description=Monthly DB-IP country database refresh
+        [Timer]
+        OnCalendar=*-*-03 04:00:00
+        RandomizedDelaySec=6h
+        Persistent=true
+        [Install]
+        WantedBy=timers.target
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Enable the refresh timer
+  ansible.builtin.systemd:
+    name: edge-dns-mmdb.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Fetch the GeoIP database when missing
+  ansible.builtin.command: /usr/local/sbin/edge-dns-mmdb
+  args:
+    creates: "{{ edge_dns_mmdb }}"
+
+- name: PowerDNS with the bind and geoip backends
+  ansible.builtin.apt:
+    name: [pdns-server, pdns-backend-bind, pdns-backend-geoip]
+    state: present
+
+- name: PowerDNS running
+  ansible.builtin.systemd:
+    name: pdns
+    enabled: true
+    state: started
+
+- name: Apply config changes now
+  ansible.builtin.meta: flush_handlers
+
+- name: The box answers its own name
+  ansible.builtin.command: >-
+    dig +short +time=2 +tries=2 @{{ edge_dns_ipv4 }} ns-{{ wisp_site }}.{{ wisp_zone }} A
+  register: edge_dns_selfcheck
+  changed_when: false
+  failed_when: edge_dns_ipv4 not in edge_dns_selfcheck.stdout_lines

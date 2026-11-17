@@ -1,0 +1,93 @@
+---
+# Fracital tenant on the edge fleet (README.md "Fracital routes").
+# Edges terminate TLS for fracital_hosts (and www.) and relay to terp's OpenResty
+# over pinned TLS + X-FRX-Edge-Token; the keyed relay path is served by the edge's
+# own holyWisp. Secrets: group_vars/all/fracital_secrets.yml (vault).
+# false: edge_relay removes the routes again.
+fracital_enabled: true
+
+# Apex names; www.<name> is added automatically. Cloudflare: proxied CNAMEs to
+# byod.fracit.al (fracital_byod_fqdn, all/main.yml), SSL mode full
+# (cloaks-fracital point-edge script).
+fracital_direct_hosts:
+  - fracit.al
+  - fracital.xyz
+# The cloak decoy names are not published: they are fracital_cloak_hosts in the gitignored
+# group_vars/all/private.yml (README.md "Private values"). Without it this fails on purpose,
+# instead of rendering the edge without them.
+fracital_hosts: "{{ fracital_direct_hosts + fracital_cloak_hosts }}"
+# Full names served as-is (no www.): other apps on terp behind the same relay.
+# Terp routes them by Host (fracital_origin role, fracital_origin_apps).
+fracital_extra_hosts:
+  - stomp.fracit.al
+# byod.fracit.al itself is served like the app names (relayed to terp, certificate
+# approved locally): the edge nameservers probe https://byod.fracit.al/ on each of its
+# addresses and needs a real certificate and a 2xx/3xx behind it.
+fracital_server_names: "{{ fracital_hosts + (fracital_hosts | map('regex_replace', '^', 'www.') | list) + fracital_extra_hosts + [fracital_byod_fqdn] }}"
+
+# Dedicated public relay names: served by every edge. GET / is holyWisp's
+# built-in browser client and a WebSocket upgrade on / is the relay itself
+# (wss://holywisp.fracit.al/, the public demo endpoint, no key); the keyed relay
+# path (/<fracital_wisp_path>/<fracital_wisp_gate_key>/) still works, and
+# GET /health proxies to the edge's holyWisp so monitoring can hit
+# https://holywisp.fracit.al/health. Everything else is 403 on the edge: no terp
+# relay, no /stats. Cloudflare: proxied CNAME to byod, SSL Full (exists).
+# Certificates are approved locally like fracital_server_names.
+fracital_wisp_hosts:
+  - holywisp.fracit.al
+
+# Other Node apps on terp, reached through the same edge relay: terp's OpenResty
+# routes each host list to its port; everything else is the Fracital app.
+fracital_origin_apps:
+  - name: stomp
+    hosts: [stomp.fracit.al]
+    port: 8081
+
+# terp: the OpenResty :443 the edges relay to, on terp's private address on the 172.16.5.0/24
+# VLAN (the edge on divide reaches it there since 2026-11-16; divide's guest firewall admits
+# edge -> terp tcp 443/8443, docs/divide-host.md). terp's public 5.188.124.62 stays its SSH
+# address (hosts.ini).
+fracital_origin_ip: 172.16.5.62
+fracital_origin_port: 443
+# SAN of the pinned self-signed cert (roles/edge_relay/files/fracital-origin.crt).
+fracital_origin_sni: fracital-origin
+# Sources terp's ufw admits on fracital_edge_ports: each edge's edge_origin_source when it reaches
+# terp privately (the edge on divide: 172.16.5.10/32), else its edge_subnet. The old public-IP
+# edge ranges (the byod /24s, wisp-mnz's 5.188.124.0/24) are obsolete: delete their leftover
+# "abulxt edge" rules on terp by hand, the role only adds.
+fracital_edge_subnets: >-
+  {%- set out = [] -%}
+  {%- for h in groups['edge'] -%}
+  {%-   set _ = out.append(hostvars[h].edge_origin_source | default(hostvars[h].edge_subnet)) -%}
+  {%- endfor -%}
+  {{ out }}
+# The edge relay (:443) and dev.fracit.al (:8443). dev.fracit.al does not go through the edge:
+# a Cloudflare origin rule sends it to divide's tcp 8443, which divide DNATs to terp's 8443; the
+# edge is admitted there too.
+fracital_edge_ports: [443, 8443]
+# Cloudflare reaches dev.fracit.al on these ports (ufw rules commented "Cloudflare dev", from
+# fracital_cloudflare_ip_ranges). They are kept when fracital_origin_allow_cloudflare is false:
+# that switch only closes the old proxied :80/:443 path.
+fracital_cloudflare_ports: [8443]
+fracital_cloudflare_ip_ranges: "{{ hostvars[groups['edge'][0]].cloudflare_ip_ranges }}"
+# Fracital's Node server (pm2 `fracital`, PORT in /opt/fracital/repo/.env).
+fracital_app_port: 8080
+# Relay segment before WISP_GATE_KEY (Fracital src/server/relay-gate.ts RELAY_SEGMENT).
+fracital_wisp_path: pipe
+fracital_client_max_body_size: 100m
+fracital_proxy_timeout: 300s
+
+# Edge cache for Fracital's content-hashed bundles (edge_relay, 30-fracital.conf): only
+# /assets/<hash>.<ext> (no .html: the per-host app page lives there too), only on the
+# Fracital app names (fracital_hosts, www., byod; never fracital_extra_hosts such as stomp),
+# only responses terp marks immutable (backend.ts: public, max-age=31536000, immutable).
+# Decoy-site files, /api/, /vendor/ (incl. vendor/rt/), sw.js, HTML, /epoxy/, /libcurl/ are
+# never stored. Bundle names change with their content: no purge needed after a deploy.
+fracital_cache_dir: /var/cache/openresty/fracital
+fracital_cache_keys_zone: 16m
+fracital_cache_max_size: 2g
+fracital_cache_inactive: 30d
+
+# true: terp keeps its Cloudflare-facing :80 vhost and ufw rules (pre-cutover).
+# Set false once every name is on the edges, then rerun playbooks/fracital-origin.yml.
+fracital_origin_allow_cloudflare: false

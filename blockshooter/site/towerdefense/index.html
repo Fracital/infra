@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Block Defense</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8'%3E%3Crect width='8' height='8' fill='%235fba3c'/%3E%3Crect x='1' y='2' width='2' height='2' fill='%23000'/%3E%3Crect x='5' y='2' width='2' height='2' fill='%23000'/%3E%3Crect x='3' y='4' width='2' height='2' fill='%23000'/%3E%3Crect x='2' y='5' width='1' height='2' fill='%23000'/%3E%3Crect x='5' y='5' width='1' height='2' fill='%23000'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/base.css?v=mp16">
+<link rel="stylesheet" href="css/menu.css?v=mp16">
+<link rel="stylesheet" href="css/mapselect.css?v=mp16">
+<link rel="stylesheet" href="css/hud.css?v=mp16">
+<link rel="stylesheet" href="css/panels.css?v=mp16">
+<link rel="stylesheet" href="css/overlays.css?v=mp16">
+<link rel="stylesheet" href="css/codex.css?v=mp16">
+<link rel="stylesheet" href="css/mp.css?v=mp16">
+<link rel="stylesheet" href="css/mpgame.css?v=mp16">
+<link rel="stylesheet" href="css/pvp.css?v=mp16">
+<script>
+// Global error overlay -- must be installed before any module loads so that
+// module resolution failures are visible on screen, not just in the console.
+window.addEventListener('error', function (e) {
+    var ov = document.getElementById('error-overlay');
+    var tx = document.getElementById('error-text');
+    if (!ov || !tx) return;
+    ov.hidden = false;
+    tx.textContent += (e.message || 'Error') + '\n' +
+        (e.filename ? e.filename + ':' + e.lineno : '') + '\n' +
+        (e.error && e.error.stack ? e.error.stack : '') + '\n\n';
+});
+window.addEventListener('unhandledrejection', function (e) {
+    var ov = document.getElementById('error-overlay');
+    var tx = document.getElementById('error-text');
+    if (!ov || !tx) return;
+    ov.hidden = false;
+    tx.textContent += 'Unhandled rejection: ' +
+        (e.reason && e.reason.stack ? e.reason.stack : e.reason) + '\n\n';
+});
+</script>
+</head>
+<body>
+<div id="app">
+    <div id="game-stage">
+        <canvas id="game-canvas" width="1280" height="720"></canvas>
+        <div id="screen-root"></div>
+        <div id="tooltip-root"></div>
+        <div id="toast-root"></div>
+        <div id="boot-screen">
+            <div class="boot-logo">
+                <span class="boot-logo-block">B</span>LOCK
+                <span class="boot-logo-block">D</span>EFENSE
+            </div>
+            <div class="boot-bar"><div class="boot-fill" id="boot-fill"></div></div>
+            <div class="boot-label" id="boot-label">Generating world...</div>
+        </div>
+    </div>
+</div>
+<div id="error-overlay" hidden>
+    <div class="error-title">Something broke (screenshot this):</div>
+    <pre id="error-text"></pre>
+    <button onclick="document.getElementById('error-overlay').hidden = true; document.getElementById('error-text').textContent = '';">dismiss</button>
+</div>
+<script type="module" src="src/main.js?v=mp16"></script>
+</body>
+</html>

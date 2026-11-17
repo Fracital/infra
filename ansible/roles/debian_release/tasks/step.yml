@@ -1,0 +1,52 @@
+---
+# One Debian release step (11 -> 12 or 12 -> 13), skipped once on the target.
+
+- name: Read the OS version
+  ansible.builtin.setup:
+    gather_subset: [min]
+
+- name: Fix this step's source and target release
+  ansible.builtin.set_fact:
+    debian_release_major: "{{ ansible_facts.distribution_major_version | int }}"
+    debian_release_to: "{{ debian_release_steps[ansible_facts.distribution_major_version | int] | default('') }}"
+
+- name: Upgrade one Debian release
+  when: debian_release_to | length > 0 and (debian_release_major | int) < (debian_release_target | int)
+  block:
+    - name: Bring the current release fully up to date first
+      ansible.builtin.apt:
+        update_cache: true
+        upgrade: dist
+      environment:
+        DEBIAN_FRONTEND: noninteractive
+
+    # G-Core's images point at whatever mirror was current when they were built
+    # (bullseye at archive.debian.org, with no security suite), so the target
+    # release gets a plain, complete sources.list instead of a suite rename.
+    - name: Point apt at the next release
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list
+        mode: "0644"
+        backup: true
+        content: |
+          deb http://deb.debian.org/debian {{ debian_release_to }} main contrib non-free-firmware
+          deb http://deb.debian.org/debian {{ debian_release_to }}-updates main contrib non-free-firmware
+          deb http://security.debian.org/debian-security {{ debian_release_to }}-security main contrib non-free-firmware
+
+    - name: Upgrade to the next release
+      ansible.builtin.apt:
+        update_cache: true
+        upgrade: dist
+        dpkg_options: force-confdef,force-confold
+      environment:
+        DEBIAN_FRONTEND: noninteractive
+
+    - name: Remove packages the upgrade left behind
+      ansible.builtin.apt:
+        autoremove: true
+      environment:
+        DEBIAN_FRONTEND: noninteractive
+
+    - name: Reboot into the next release
+      ansible.builtin.reboot:
+        reboot_timeout: 900

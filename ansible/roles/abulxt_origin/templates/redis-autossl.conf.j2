@@ -1,0 +1,24 @@
+# Redis configuration for the shared lua-resty-auto-ssl store.
+# Managed by Ansible (abulxt_origin role).
+#
+# Bound to every interface so the edges can reach it (since the move to divide: the edge CT over
+# vmbr1); access is restricted to the edge subnets by the abulxt firewall and protected by
+# requirepass.
+
+bind 0.0.0.0
+port {{ auto_ssl_redis_port }}
+protected-mode yes
+requirepass {{ auto_ssl_redis_password }}
+
+# Persistent (AOF): this Redis is the only copy of the edges' auto-ssl certificates. Without
+# persistence they were lost when amph rebooted (on divide, 2026-11) and every name had to be
+# issued again. No RDB snapshots; the AOF is enough.
+dir /var/lib/redis
+save ""
+appendonly yes
+
+maxmemory 256mb
+maxmemory-policy allkeys-lru
+
+daemonize no
+supervised systemd

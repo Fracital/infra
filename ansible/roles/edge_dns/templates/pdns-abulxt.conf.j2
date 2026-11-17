@@ -1,0 +1,16 @@
+# {{ ansible_managed }}
+# roles/edge_dns: authoritative only, zones from named.conf (bind backend), the
+# geoip backend only to give LUA records countryCode()/continentCode().
+launch+=geoip
+geoip-database-files=mmdb:{{ edge_dns_mmdb }}
+geoip-zones-file=/etc/powerdns/geoip-zones.yaml
+enable-lua-records=yes
+edns-subnet-processing=yes
+lua-records-exec-limit=100000
+lua-health-checks-interval={{ edge_dns_health_interval }}
+local-address={{ edge_dns_ipv4 }}{% if edge_dns_ipv6 %}, {{ edge_dns_ipv6 }}{% endif %}
+
+# No secondaries: every box renders the same zones itself.
+disable-axfr=yes
+version-string=anonymous
+any-to-tcp=yes

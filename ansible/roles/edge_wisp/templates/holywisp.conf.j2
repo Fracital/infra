@@ -1,0 +1,162 @@
+# /etc/abulxt/holywisp.conf: managed by Ansible (roles/edge_wisp/templates/holywisp.conf.j2).
+# Every key is also a --key flag; abulxt-edge-wisp.service passes only --config. Reference:
+# holywisp.conf.example in https://github.com/Fracital/holyWisp. Anything not set here keeps
+# holyWisp's default.
+
+# ---------------------------------------------------------------- listening
+# Empty host = every interface (the host firewall keeps :{{ edge_wisp_port }} loopback-only);
+# amph binds 127.0.0.1 because 10.203.0.2:{{ edge_wisp_port }} is taken by proton-socks.
+host = {{ holywisp_bind_host }}
+port = {{ edge_wisp_port }}
+{% if holywisp_workers_note | length > 0 %}
+# {{ holywisp_workers_note }}
+{% endif %}
+workers = {{ holywisp_workers }}
+log-level = {{ holywisp_log_level }}
+
+# ---------------------------------------------------------------- what clients may reach
+allow-tcp = on
+{% if edge_wisp_manage_router and holywisp_allow_udp | bool %}
+# UDP streams never reach edge-router.py (its SOCKS5 is CONNECT only): holyWisp sends them itself,
+# see proxy-udp and dns-server below.
+{% endif %}
+allow-udp = {{ 'on' if holywisp_allow_udp | bool else 'off' }}
+# Streams may only reach public unicast addresses; the check runs on the resolved addresses.
+# allow-direct-ip: off = every CONNECT must carry a hostname (the router classifies by name);
+# on = literal IPs are allowed too and skip the name classification (edge-router.py treats them
+# as clean). The edges run on for the v86 guests in vibeOS (holywisp_allow_direct_ip).
+allow-direct-ip = {{ 'on' if holywisp_allow_direct_ip | bool else 'off' }}
+allow-private = off
+allow-loopback = off
+allow-link-local = off
+
+# ---------------------------------------------------------------- protocol
+enable-v2 = on
+enable-twisp = off
+password-required = off
+# CONTINUE window in packets (wispurr: 128). holyWisp caps what it advertises to
+# stream-queue-max / (max-message-size - 5), so with the two tuning values below the full 128
+# goes through. A refill CONTINUE may carry less: the per-client in-flight budget
+# (ws-write-high-water) is shared between that client's streams, never under 4 packets.
+buffer-remaining = {{ holywisp_buffer_remaining }}
+
+# ---------------------------------------------------------------- who the client is
+# OpenResty on this host is the only peer and sets X-Real-IP and X-Forwarded-For to the end
+# client. Trust only what OpenResty sets: the list is reset first, so a header OpenResty passes
+# through unchanged (CF-Connecting-IP, which older holyWisp builds trusted by default) never
+# names the client.
+parse-real-ip = on
+trusted-proxy = 127.0.0.1
+trusted-proxy = ::1
+trusted-headers-reset = on
+trusted-header = X-Real-IP
+trusted-header = X-Forwarded-For
+
+# ---------------------------------------------------------------- flood protection
+# {{ 'off' if not holywisp_flood_protection | bool else 'on' }} for parity with the wispurr config this replaced, which never set
+# floodProtection and so ran with the limiter disarmed. holyWisp's limiter defaults to
+# max-connects-per-dest-per-second = 100 and closes the 101st stream per second to one origin
+# with THROTTLED, which a browser bursting to one origin can hit. Raise the per-dest limits before
+# switching this on (holywisp_flood_protection).
+flood-protection = {{ 'on' if holywisp_flood_protection | bool else 'off' }}
+
+# ---------------------------------------------------------------- reputation
+reputation = on
+reputation-store = {{ edge_wisp_dir }}/data/reputation.json
+
+# ---------------------------------------------------------------- where streams go
+# TCP streams go through this SOCKS5 endpoint (socks5h: it gets the hostname). With
+# holywisp_tcp_direct only those that resolved to proxy-only-to (below) do; the rest are dialled here.
+proxy = {{ holywisp_proxy }}
+{% if holywisp_proxy | length > 0 %}
+# UDP while a proxy is set: direct = bypass the TCP-only proxy (still subject to the egress
+# policy above); refuse = close UDP streams.
+proxy-udp = {{ 'direct' if holywisp_proxy_udp_direct | bool else 'refuse' }}
+{% endif %}
+{% if holywisp_udp_warp | bool and edge_wisp_manage_router and edge_warp_enabled | default(false) | bool and edge_warp_mode | default('kernel') == 'kernel' %}
+# UDP on WARP: each direct UDP stream is marked for the tunnel edge-router.py would pick for its
+# site, from the router's state file (tunnels up per family; older than 60 s = stale). The marks
+# are the router's warp_tunnels. No tunnel up, or a stale file: the fallback, following
+# warp_fallback_direct.
+udp-warp-marks = {% for i in range(edge_warp_tunnel_count | default(4) | int) %}{{ '0x%x' | format(edge_warp_mark_base | default(30464) | int + 1 + i) }}{{ ',' if not loop.last else '' }}{% endfor %}
+
+udp-warp-state = /run/abulxt-edge-router/warp.json
+udp-warp-fallback = {{ 'direct' if edge_warp_fallback_direct | default(true) | bool else 'refuse' }}
+{%   if edge_warp_bypass_hosts | length > 0 %}
+# Kept off WARP (edge_warp_bypass_hosts; the router's warp_bypass is the same list).
+{%     for h in edge_warp_bypass_hosts %}
+warp-bypass-host = {{ h }}
+{%     endfor %}
+{%   endif %}
+{% endif %}
+{% if holywisp_tcp_direct_on | bool %}
+# Clean TCP is dialled here, not by edge-router.py: only a stream whose name the router's gate
+# answered with the relay address ({{ abulxt_origin_ip }}: shady and adult names) goes through the
+# router, by name; every other one is dialled here, spliced, and marked for the tunnel the router
+# would pick (tcp-warp). No usable warp.json follows the router's warp_fallback_direct.
+proxy-only-to = {{ abulxt_origin_ip }}
+tcp-warp = on
+tcp-warp-fallback = {{ 'direct' if edge_warp_fallback_direct | default(true) | bool else 'refuse' }}
+{% endif %}
+{% if holywisp_proxy_client_key | bool and holywisp_proxy | length > 0 %}
+# Per-client exits: the client's key (keyed by this box's secret) goes to the proxy as the
+# SOCKS5 username, and edge-router.py and the UDP pick above use "<key>/<site>".
+proxy-client-key = on
+proxy-client-key-secret = {{ holywisp_proxy_client_key_secret }}
+{% endif %}
+{% if edge_wisp_manage_router and edge_router_dns_port | int > 0 %}
+# The first resolver is edge-router.py's name gate on this host. It answers a hostname the router
+# sends through the relay (shady) with the relay's own address, which this unit may not send to
+# (IPAddressDeny in abulxt-edge-wisp.service): a UDP stream to that name closes on its first
+# datagram, while its TCP stream reaches the router by name and takes the relay. Every other
+# question it passes to the resolvers below, which holyWisp asks itself when the gate is silent.
+dns-server = 127.0.0.1:{{ edge_router_dns_port | int }}
+{% endif %}
+{% if holywisp_tcp_direct_on | bool %}
+# Only the gate: TCP is dialled by its answer (proxy-only-to), so a name it did not answer must
+# not be asked of a resolver that knows nothing of shady or adult names. The gate asks
+# {{ holywisp_dns_servers | join(', ') }} itself; with the router down, names do not resolve, and
+# TCP fails as it did when every stream went through the router.
+{% else %}
+{% for server in holywisp_dns_servers %}
+dns-server = {{ server }}
+{% endfor %}
+{% endif %}
+{# The family dialled first for a name with A and AAAA records, for the streams holyWisp dials
+   itself (direct UDP; TCP only without a proxy). The proxy dials proxied TCP in its own order,
+   so holywisp_dns_order is the family the proxy leaves by: one egress address for a client's
+   TCP and UDP. A template comment, not a rendered one, so a host whose value stays ipv4first
+   gets a byte-identical file and no relay restart. #}
+dns-order = {{ holywisp_dns_order }}
+
+# ---------------------------------------------------------------- tuning
+# max-message-size: largest WebSocket message accepted from a client = wispurr's maxPayloadSize
+# (256 KiB) plus the 5-byte Wisp header. Together with stream-queue-max it sets the advertised
+# CONTINUE window (see buffer-remaining): 64 MiB / 256 KiB = 256, so buffer-remaining (128) rules.
+max-message-size = {{ holywisp_max_message_size }}
+# stream-queue-max: bytes queued toward one remote before the stream is closed as THROTTLED =
+# wispurr's PendingQueueSize (64 MiB). A client that honours the CONTINUE window never reaches it.
+stream-queue-max = {{ holywisp_stream_queue_max }}
+# ws-write-high-water: bytes queued toward one client before holyWisp pauses reading from that
+# client's remotes (resumes at a quarter). Back-pressure, not a close: 8 MiB by default, lower where
+# tcp_notsent_lowat keeps the kernel queue short (host_vars); wispurr had no equivalent (it dropped the WebSocket at 64 MiB, patch 0003 in
+# edge-wisp/patches).
+ws-write-high-water = {{ holywisp_ws_write_high_water }}
+# A connect that has an address of the other family left waits this long before trying it; the
+# last address waits connect-timeout-ms (edge_wisp defaults: a lost SYN on WARP).
+family-fallback-ms = {{ holywisp_family_fallback_ms }}
+connect-timeout-ms = {{ holywisp_connect_timeout_ms }}
+tcp-nodelay = on
+# holyWisp negotiates no WebSocket extensions, so there is no permessage-deflate to turn off
+# (wispurr: websocketPermessageDeflate false).
+# Plain HTTP on the relay port that is neither /health nor /stats.
+non-ws-response = "Upgrade Required"
+# GET / returns the built-in browser client (served publicly on holywisp.fracit.al /; the keyed
+# paths reach it too, behind the key). Its only same-origin request is the WebSocket the user
+# points it at; the stylesheets come from jsDelivr.
+serve-webclient = {{ 'on' if holywisp_serve_webclient | bool else 'off' }}
+{% if holywisp_webclient_wisp_url | length > 0 %}
+# The page's default "Wisp server URL": the public relay root (its own origin would be the same
+# name, but spelled out so the field is right wherever the page is opened from).
+webclient-wisp-url = {{ holywisp_webclient_wisp_url }}
+{% endif %}

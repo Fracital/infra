@@ -1,0 +1,64 @@
+{
+	email {$ACME_EMAIL}
+	servers {
+		protocols h1 h2 h3
+	}
+	# BYOD: any domain whose DNS A/AAAA → 45.82.161.87 is approved, then an
+	# on-demand cert is issued and traffic is proxied DIRECTLY to amph (the
+	# origin). The legacy reverse SSH tunnel is gone: this box talks to amph's
+	# abulxt-domains validator (:8822) and origin-internal proxy (:9080) over the
+	# public network, restricted to this box's IP by amph's firewall.
+	# No Cloudflare required. Caddy defaults = Let's Encrypt then ZeroSSL
+	# (do NOT pin a single issuer: that kills the ZeroSSL rate-limit escape).
+	# The ask endpoint verifies the domain actually resolves to 45.82.161.87
+	# (target=ashburn) so bogus SNIs never burn CA rate limits.
+	# ABULXT_ORIGIN is the amph origin address (set in the Caddy environment).
+	# Since 2026-11-16 amph is private only (172.16.5.3 on divide's vmbr1): only a
+	# box on that bridge can reach it, so a Caddy edge elsewhere must override it.
+	on_demand_tls {
+		ask http://{$ABULXT_ORIGIN:172.16.5.3}:8822/ask?target=ashburn
+	}
+	grace_period 15s
+}
+
+(common_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Via
+		-Server
+	}
+}
+
+(proxy_standard) {
+	transport http {
+		dial_timeout 1s
+		response_header_timeout 15s
+		read_timeout {args[0]}
+		write_timeout {args[0]}
+		keepalive {args[1]}
+	}
+}
+
+# Linkgen / raw-IP helper (HTTP only)
+http://45.82.161.87 {
+	reverse_proxy 127.0.0.1:3030
+}
+
+# Bring-your-own domain catch-all. Proxies DIRECTLY to amph's origin-internal
+# listener (:9080) with the shared token: no SSH tunnel hop.
+:443 {
+	import common_headers
+
+	tls {
+		on_demand
+	}
+
+	encode zstd gzip
+
+	reverse_proxy {$ABULXT_ORIGIN:172.16.5.3}:9080 {
+		header_up X-BYOD-Token {env.BYOD_PROXY_TOKEN}
+		import proxy_standard 120s 5m
+	}
+}

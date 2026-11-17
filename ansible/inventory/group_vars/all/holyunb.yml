@@ -1,0 +1,22 @@
+# Holy Unblocker (holyunb.locker) on the wisp boxes (README.md "holyunb routes").
+# Cloudflare: holyunb.locker is a proxied CNAME to wisp.baby, SSL mode full. The edges serve
+# the keyed relay path (/<holyunb_wisp_path>/<holyunb_wisp_gate_key>/) from their own holyWisp
+# and pass everything else to the site on holy (website2 under pm2, :8080). holy runs no Wisp
+# of its own: its config.js separateWispServer points the client at the keyed path.
+# Secret: group_vars/all/holyunb_secrets.yml (vault). false: edge_relay removes the routes.
+# Only [wisp_edge] hosts get them, whatever this says (holyunb_on, roles/edge_relay/defaults).
+holyunb_enabled: true
+
+# Names served as-is. Certificates are approved on the edge itself (nginx.conf allow_domain):
+# a proxied Cloudflare name resolves to Cloudflare, so the validator's DNS match can't.
+holyunb_hosts:
+  - holyunb.locker
+
+# holy (VM 110 on run): its private address on the 172.16.5.0/24 VLAN and the website2 port.
+# The edge on divide reaches it there (divide's guest firewall admits edge -> holy tcp 8080,
+# docs/divide-host.md); its public 5.188.124.65 is no longer the upstream.
+holyunb_origin_ip: 172.16.5.79
+holyunb_origin_port: 8080
+holyunb_wisp_path: wisp
+holyunb_client_max_body_size: 100m
+holyunb_proxy_timeout: 300s

@@ -1,0 +1,199 @@
+---
+# The one edge VM on a wisp cloud Proxmox VE host (README.md "The wisp cloud",
+# "Edge VM on Proxmox"). Runs on hv-<site>; the VM is wisp-<site> and its
+# addresses come from that host's host_vars (hostvars['wisp-' + pve_site]):
+#   ansible_host                 the VM's first IPv4 (never the hv's own address,
+#                                pve_main_ip, nor its pve_ipv6 among the IPv6s)
+#   edge_subnet                  the box's IPv4 subnet ("a.b.c.d/n"); every IPv4
+#                                and the gateway must be in it
+#   edge_ipv4_prefix             (optional, default edge_subnet's) must equal
+#                                edge_subnet's; edge_network uses it too
+#   edge_ipv4_gateway            the box's IPv4 gateway (default: pve_gateway, the
+#                                hv's, from roles/proxmox_host)
+#   edge_primary_if              must be pve_edge_vm_guest_if (eth0)
+#   edge_extra_interface_ips     every other IPv4 of the VM
+#   edge_extra_interface_ips_v6  every IPv6 of the VM, "<addr>/<prefix>"
+#   edge_ipv6_gateway            the IPv6 gateway (when there are IPv6 addresses)
+#   wisp_site                    (optional) for the fqdn <wisp_site>.<wisp_zone>
+# Updating = rebuild the template (bump pve_template_image_release), then rebuild
+# this VM (pve_edge_vm_rebuild below), one box at a time.
+#
+# A host can also run fixed-size VMs: the KrunkNative game-server VM kn-<site>
+# (pve_kn_vm_* below, README.md "KrunkNative VM next to the edge VM") and the
+# blockshooter game-server VM bs-<site> (pve_bs_vm_*, the same scheme with bs_ keys).
+# tasks/main.yml runs tasks/vm.yml once for wisp-<site> with the pve_edge_vm_*
+# values here, then, only when kn-<site> is in [kn_vm], once more for kn-<site>
+# with the pve_edge_vm_* values overridden from pve_kn_vm_*. With no kn-<site>
+# in [kn_vm] the role does exactly what it did before kn VMs existed.
+
+# hv-<site> -> <site> (host_vars/hv-<site>.yml also sets it; the role asserts
+# they agree, so hv-<site> only ever builds wisp-<site>).
+pve_site: "{{ inventory_hostname | regex_replace('^hv-', '') }}"
+pve_edge_vm_name: "wisp-{{ pve_site }}"
+pve_edge_vm_vmid: 100
+pve_edge_vm_template_vmid: "{{ pve_template_vmid | default(9000) }}"
+# "" = the storage the template's disk is on.
+pve_edge_vm_storage: ""
+pve_edge_vm_bridge: vmbr0
+pve_edge_vm_tags: "abulxt;wisp-edge"
+
+# Per-VM identity (the kn pass overrides every one of these):
+#   _group           the inventory group the VM must be in
+#   _hostvar_prefix  its addressing keys in host_vars/<vm>.yml: <prefix>subnet,
+#                    <prefix>ipv4_prefix, <prefix>ipv4_gateway, <prefix>primary_if,
+#                    <prefix>extra_interface_ips, <prefix>extra_interface_ips_v6,
+#                    <prefix>ipv6_gateway (plus ansible_host, its first IPv4)
+#   _description     "<this>.<template image>" marks the VM as made by this role
+#   _fqdn            cloud-init's fqdn
+#   _next_step       what the summary says to run next
+pve_edge_vm_group: wisp_edge
+pve_edge_vm_hostvar_prefix: edge_
+pve_edge_vm_description: abulxt-pve-edge-vm
+pve_edge_vm_fqdn: "{{ hostvars[pve_edge_vm_name].wisp_site | default(pve_site) }}.{{ wisp_zone | default('wisp.baby') }}"
+pve_edge_vm_next_step: "ansible-playbook playbooks/wisp.yml --limit {{ pve_edge_vm_name }}"
+#   _etc_hosts_owner who writes the VM's /etc/hosts (cloud-init leaves it alone)
+pve_edge_vm_etc_hosts_owner: playbooks/wisp.yml
+
+# Size from the host: cores = host threads - reserve (at least _min), memory =
+# host RAM - reserve (at least _min). Set pve_edge_vm_cores / pve_edge_vm_memory_mb
+# in host_vars/hv-<site>.yml to pin a size instead. net0 gets one queue per core
+# up to _queues_max (virtio-net multiqueue; the guest enables them all).
+# With a kn VM on the host, its pinned cores and memory (pve_edge_vm_cores_others,
+# pve_edge_vm_memory_others_mb) come off too, so the two VMs never overcommit the
+# host. Adding a kn VM to a box with a running wisp VM therefore SHRINKS the wisp
+# VM: Proxmox applies a smaller size only at the VM's next start, so the run
+# reports a restart as due. Restart one box at a time (geo DNS fails that box's
+# names over to the others while its edge VM is down). Until the wisp VM has
+# restarted, the run builds the kn VM but does not start it (the two would
+# overcommit the host); re-run after the restart, or pass
+# -e pve_edge_vm_reboot_for_pending=true to restart the wisp VM in the run.
+pve_edge_vm_cores_reserve: 2
+pve_edge_vm_cores_min: 2
+pve_edge_vm_queues_max: 16
+# What the host keeps for itself (Proxmox services, page cache for the disk).
+# Raise it if the host's storage is ZFS (the ARC).
+pve_edge_vm_memory_reserve_mb: 4096
+pve_edge_vm_memory_min_mb: 2048
+pve_edge_vm_host_threads: "{{ ansible_facts['processor_vcpus'] }}"
+pve_edge_vm_host_memory_mb: "{{ ansible_facts['memtotal_mb'] }}"
+# What the host's other VMs (its kn and bs VMs) take: 0 when it has none.
+pve_edge_vm_cores_others: >-
+  {{ (pve_kn_vm_cores | int if pve_kn_vm_enabled | bool else 0) + (pve_bs_vm_cores | int if pve_bs_vm_enabled | bool else 0) }}
+pve_edge_vm_memory_others_mb: >-
+  {{ (pve_kn_vm_memory_mb | int if pve_kn_vm_enabled | bool else 0) + (pve_bs_vm_memory_mb | int if pve_bs_vm_enabled | bool else 0) }}
+# Grown (never shrunk) to this on every run.
+pve_edge_vm_disk_size: 64G
+
+# net0's MAC is fixed per site, so a rebuilt VM keeps it: G-Core's switches, the
+# gateway's ARP / NDP caches and any MAC filter on the port never see a new one.
+# 02:<first 5 bytes of sha256("abulxt-edge-vm:<site>")>, a locally administered
+# unicast address. Set pve_edge_vm_mac in host_vars/hv-<site>.yml to use one
+# G-Core assigns instead. (kn-<site>: the same scheme with "abulxt-kn-vm:<site>",
+# pve_kn_vm_mac below.)
+pve_edge_vm_mac: >-
+  {%- set h = ('abulxt-edge-vm:' ~ pve_site) | hash('sha256') -%}
+  02:{{ h[0:2] }}:{{ h[2:4] }}:{{ h[4:6] }}:{{ h[6:8] }}:{{ h[8:10] }}
+
+# Inside the VM. Cloud-init names the NIC by MAC, so it is eth0 whatever PCI
+# slot q35 gives it (ens18 / enp6s18 otherwise); host_vars edge_primary_if must
+# match (asserted).
+pve_edge_vm_guest_if: eth0
+pve_edge_vm_nameservers: [1.1.1.1, 1.0.0.1]
+# Cloud-init writes the VM's whole address set into netplan (persistent), not
+# only the first address. The Debian cloud image has no ifupdown, so
+# edge_network's interfaces.d file would not bring the others back after a
+# reboot. false: only ansible_host and the first IPv6 (edge_network then adds the
+# rest live, lost on reboot).
+pve_edge_vm_cloudinit_all_addresses: true
+# root's authorized_keys: these files on the controller, plus literal keys.
+pve_edge_vm_ssh_pubkey_files:
+  - "{{ lookup('ansible.builtin.env', 'HOME') }}/.ssh/id_ed25519.pub"
+pve_edge_vm_ssh_authorized_keys: []
+# More literal keys for this VM only (the kn pass: kn_ssh_authorized_keys).
+pve_edge_vm_ssh_authorized_keys_extra: []
+# First-boot `apt-get upgrade` (cloud-init package_upgrade). The play waits for
+# cloud-init to finish before it hands the VM to wisp.yml.
+pve_edge_vm_package_upgrade: true
+
+# Cloud-init user-data and network-config are snippets on this (dir) storage
+# (qm --cicustom), so the VM gets fixed SSH host keys and no cloud-init
+# /etc/hosts rewrite. `snippets` is added to its content when missing
+# (pve_storage_manage_content).
+pve_edge_vm_snippets_storage: local
+# Per-VM state on the host, root-only: the VM's SSH host keys, generated once
+# and given to every rebuild, so ~/.ssh/known_hosts on the controller never
+# sees a new key.
+pve_edge_vm_state_dir: /var/lib/abulxt-pve
+pve_edge_vm_hostkey_types: [ed25519, ecdsa, rsa]
+
+# Destroy and re-clone the VM from the current template. Never on by default.
+# Needs all three:
+#   -e pve_edge_vm_rebuild=true -e pve_edge_vm_rebuild_confirm=wisp-<site>
+#   --limit hv-<site>[,wisp-<site>]   (one Proxmox host per run)
+# The box's addresses go dark until wisp.yml has run on the new VM; the
+# edge nameservers' health checks drop them from answers within seconds.
+# The confirm names the one VM rebuilt: =kn-<site> rebuilds the kn VM (--limit
+# hv-<site>) and leaves wisp-<site> alone, and the other way round.
+pve_edge_vm_rebuild: false
+pve_edge_vm_rebuild_confirm: ""
+# The host's VMs other than the one being built (vm.yml skips the rebuild of a
+# VM when the confirm names one of these).
+pve_edge_vm_rebuild_others: >-
+  {{ ([pve_kn_vm_name] if pve_kn_vm_enabled | bool else []) + ([pve_bs_vm_name] if pve_bs_vm_enabled | bool else []) }}
+# A running VM whose settings or cloud-init data changed only picks them up at
+# its next start. false: say so and leave it running; true: `qm reboot` it.
+pve_edge_vm_reboot_for_pending: false
+# false: configure the VM but leave it stopped (the kn pass, while the wisp VM
+# still has to restart into its smaller size).
+pve_edge_vm_start: true
+# How long to wait for the VM's SSH (first boot) and for cloud-init.
+pve_edge_vm_ssh_timeout: 600
+
+# --- The KrunkNative VM, kn-<site> (optional, fixed size) ---
+# Built only when kn-<site> is in [kn_vm] (inventory/hosts.ini); a host without
+# one is left exactly as before. host_vars/kn-<site>.yml holds:
+#   ansible_host                 the VM's first IPv4 (in the box's subnet)
+#   kn_subnet                    the box's IPv4 subnet ("a.b.c.d/n"), as edge_subnet
+#   kn_ipv4_prefix               (optional, default kn_subnet's)
+#   kn_ipv4_gateway              (optional, default pve_gateway, the hv's)
+#   kn_primary_if                must be pve_edge_vm_guest_if (eth0)
+#   kn_extra_interface_ips       (optional) its other IPv4s
+#   kn_extra_interface_ips_v6    (optional) its IPv6s, "<addr>/<prefix>"
+#   kn_ipv6_gateway              (needed with IPv6 addresses)
+#   kn_cores, kn_memory_mb       its fixed size (required; the wisp VM gets that much less)
+#   kn_disk_size                 (optional, default 64G; only ever grown)
+#   kn_ssh_authorized_keys       (optional) more root keys, e.g. KrunkNative's CI key
+#   kn_mac                       (optional) a MAC to use instead of the derived one
+#   kn_fqdn                      (optional, default kn-<site>.<wisp_zone>)
+# None of its addresses may be the wisp VM's (asserted). It is not an edge: never
+# in [edge] / [wisp_edge], never in DNS.
+pve_kn_vm_name: "kn-{{ pve_site }}"
+pve_kn_vm_enabled: "{{ pve_kn_vm_name in groups.get('kn_vm', []) }}"
+pve_kn_vm_vmid: 110
+pve_kn_vm_tags: "abulxt;krunknative"
+pve_kn_vm_cores: "{{ hostvars[pve_kn_vm_name].kn_cores | default(0) }}"
+pve_kn_vm_memory_mb: "{{ hostvars[pve_kn_vm_name].kn_memory_mb | default(0) }}"
+pve_kn_vm_disk_size: "{{ hostvars[pve_kn_vm_name].kn_disk_size | default('64G') }}"
+pve_kn_vm_mac: >-
+  {%- set h = ('abulxt-kn-vm:' ~ pve_site) | hash('sha256') -%}
+  {{ hostvars[pve_kn_vm_name].kn_mac | default('02:' ~ h[0:2] ~ ':' ~ h[2:4] ~ ':' ~ h[4:6] ~ ':' ~ h[6:8] ~ ':' ~ h[8:10]) }}
+pve_kn_vm_ssh_authorized_keys: "{{ hostvars[pve_kn_vm_name].kn_ssh_authorized_keys | default([]) }}"
+pve_kn_vm_fqdn: "{{ hostvars[pve_kn_vm_name].kn_fqdn | default(pve_kn_vm_name ~ '.' ~ (wisp_zone | default('wisp.baby'))) }}"
+
+# --- The blockshooter VM, bs-<site> (optional, fixed size) ---
+# Built only when bs-<site> is in [bs_vm], exactly like kn-<site> (VM 120, same
+# checks, sizing and rebuild rules). host_vars/bs-<site>.yml holds the same keys
+# with a bs_ prefix (bs_subnet, bs_primary_if, bs_cores, bs_memory_mb, bs_disk_size,
+# bs_ssh_authorized_keys, ...). Default fqdn bs-<site>.<wisp_zone>.
+pve_bs_vm_name: "bs-{{ pve_site }}"
+pve_bs_vm_enabled: "{{ pve_bs_vm_name in groups.get('bs_vm', []) }}"
+pve_bs_vm_vmid: 120
+pve_bs_vm_tags: "abulxt;blockshooter"
+pve_bs_vm_cores: "{{ hostvars[pve_bs_vm_name].bs_cores | default(0) }}"
+pve_bs_vm_memory_mb: "{{ hostvars[pve_bs_vm_name].bs_memory_mb | default(0) }}"
+pve_bs_vm_disk_size: "{{ hostvars[pve_bs_vm_name].bs_disk_size | default('20G') }}"
+pve_bs_vm_mac: >-
+  {%- set h = ('abulxt-bs-vm:' ~ pve_site) | hash('sha256') -%}
+  {{ hostvars[pve_bs_vm_name].bs_mac | default('02:' ~ h[0:2] ~ ':' ~ h[2:4] ~ ':' ~ h[4:6] ~ ':' ~ h[6:8] ~ ':' ~ h[8:10]) }}
+pve_bs_vm_ssh_authorized_keys: "{{ hostvars[pve_bs_vm_name].bs_ssh_authorized_keys | default([]) }}"
+pve_bs_vm_fqdn: "{{ hostvars[pve_bs_vm_name].bs_fqdn | default(pve_bs_vm_name ~ '.' ~ (wisp_zone | default('wisp.baby'))) }}"

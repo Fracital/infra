@@ -1,0 +1,343 @@
+---
+# Cloudflare WARP, kernel mode (edge_warp_mode: kernel; defaults/main.yml, README.md
+# "Cloudflare WARP"). One kernel WireGuard interface per free WARP identity, set up by
+# systemd-networkd (the wisp VMs run it under netplan already):
+#   /etc/systemd/network/50-warp<i>.netdev   the interface and its peer (RouteTable=off)
+#   /etc/systemd/network/50-warp<i>.network  its addresses, a default route in table
+#                                            base+1+i, `fwmark base+1+i lookup` that
+#                                            table, and the fail-closed rule
+#   /etc/systemd/network/50-warp<i>.key      its private key (root:systemd-network 0640)
+#   /etc/systemd/network/50-warp<i>.network.d/90-own-address-unmarked.conf
+#                                            only behind NAT (edge_public_ip_on_box false):
+#                                            `to public_ip tcp dport 80 lookup main`, ahead of the marks
+# Only sockets carrying a tunnel's mark use it. edge-router.py marks clean TCP dials;
+# nothing unmarked changes route, so inbound replies, SSH, :53, the relays to amph and
+# kru and the Gateway DoH lookups stay on the main table.
+# The identities (wgcf accounts) live in /etc/abulxt/warp/warp<i>/ and are kept when
+# the tunnels are turned off.
+
+- name: Name the tunnels, their marks and routing tables
+  ansible.builtin.set_fact:
+    edge_warp_tunnels: >-
+      {%- set out = [] -%}
+      {%- for i in range(edge_warp_tunnel_count | int) -%}
+      {%-   set _ = out.append({'index': i, 'name': 'warp' ~ i, 'mark': edge_warp_mark_base | int + 1 + i}) -%}
+      {%- endfor -%}
+      {{ out }}
+    edge_warp_failclosed_priority: "{{ edge_warp_mark_base | int + 128 }}"
+
+- name: The marks fit the scheme (low byte of the base 0, 1-127 tunnels, below main's priority)
+  ansible.builtin.assert:
+    that:
+      - edge_warp_mark_base | int % 256 == 0
+      - edge_warp_tunnel_count | int >= 1
+      - edge_warp_tunnel_count | int <= 127
+      - edge_warp_mark_base | int + 128 < 32766
+      - edge_warp_own_address_priority | int < edge_warp_mark_base | int + 1
+      - edge_public_ip_on_box | bool or (public_ip is defined and public_ip | length > 0)
+    fail_msg: >-
+      edge_warp_mark_base / edge_warp_tunnel_count don't fit, edge_warp_own_address_priority is not
+      below the first mark rule, or edge_public_ip_on_box is false without public_ip (defaults/main.yml).
+    quiet: true
+
+- name: Install wireguard-tools (wg, for checks and edge-warp-off)
+  ansible.builtin.apt:
+    name: wireguard-tools
+    state: present
+
+- name: Install wgcf {{ edge_warp_wgcf_version }} (registers the WARP identities)
+  ansible.builtin.get_url:
+    url: "https://github.com/ViRb3/wgcf/releases/download/v{{ edge_warp_wgcf_version }}/wgcf_{{ edge_warp_wgcf_version }}_linux_amd64"
+    dest: /usr/local/bin/wgcf
+    checksum: "sha256:{{ edge_warp_wgcf_sha256 }}"
+    owner: root
+    group: root
+    mode: "0755"
+  # A one-off DNS failure on the box (seen on wisp-iev) mustn't stop a rollout.
+  register: edge_warp_wgcf
+  retries: 4
+  delay: 10
+  until: edge_warp_wgcf is succeeded
+
+- name: Identity directories (one wgcf account per tunnel)
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  loop: "{{ ['/etc/abulxt/warp'] + edge_warp_tunnels | map(attribute='name') | map('regex_replace', '^', '/etc/abulxt/warp/') | list }}"
+
+# ---- identities
+
+- name: Look for identities to adopt (edge_warp_adopt_dir)
+  ansible.builtin.stat:
+    path: "{{ edge_warp_adopt_dir }}/profile-{{ item.index + 1 }}.conf"
+  loop: "{{ edge_warp_tunnels }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: edge_warp_adopt
+  when: edge_warp_adopt_dir | length > 0
+
+- name: Adopt an earlier identity where a tunnel has none (account + profile)
+  ansible.builtin.copy:
+    src: "{{ edge_warp_adopt_dir }}/{{ item.1 }}-{{ item.0.item.index + 1 }}.{{ 'toml' if item.1 == 'account' else 'conf' }}"
+    dest: "/etc/abulxt/warp/{{ item.0.item.name }}/wgcf-{{ item.1 }}.{{ 'toml' if item.1 == 'account' else 'conf' }}"
+    remote_src: true
+    force: false
+    owner: root
+    group: root
+    mode: "0600"
+  loop: "{{ (edge_warp_adopt.results | default([]) | selectattr('stat', 'defined') | selectattr('stat.exists') | list) | product(['account', 'profile']) | list }}"
+  loop_control:
+    label: "{{ item.0.item.name }} {{ item.1 }}"
+  no_log: true
+  # In check mode the directories don't exist yet; the profiles are read from the
+  # adopt directory below instead.
+  when: not ansible_check_mode
+
+# Each registration is a new free WARP identity (accepts Cloudflare's WARP terms:
+# edge_warp_accept_tos). Cloudflare rate-limits registrations, hence the retries.
+- name: Register a WARP identity for each tunnel that has none
+  ansible.builtin.command:
+    argv: [timeout, "60", /usr/local/bin/wgcf, register, --accept-tos]
+    chdir: "/etc/abulxt/warp/{{ item.name }}"
+    creates: "/etc/abulxt/warp/{{ item.name }}/wgcf-account.toml"
+  loop: "{{ edge_warp_tunnels }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: edge_warp_register
+  retries: 3
+  delay: 30
+  until: edge_warp_register.rc == 0
+  when: not ansible_check_mode # nothing to register in check mode; retries would just wait
+
+- name: Write each identity's WireGuard profile
+  ansible.builtin.command:
+    argv: [timeout, "60", /usr/local/bin/wgcf, generate]
+    chdir: "/etc/abulxt/warp/{{ item.name }}"
+    creates: "/etc/abulxt/warp/{{ item.name }}/wgcf-profile.conf"
+  loop: "{{ edge_warp_tunnels }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: edge_warp_generate
+  retries: 3
+  delay: 30
+  until: edge_warp_generate.rc == 0
+  when: not ansible_check_mode # nothing to register in check mode; retries would just wait
+
+- name: Find each tunnel's profile
+  ansible.builtin.stat:
+    path: "/etc/abulxt/warp/{{ item.name }}/wgcf-profile.conf"
+  loop: "{{ edge_warp_tunnels }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: edge_warp_profile_stat
+
+# In check mode nothing above has run, so a box that is about to adopt identities is
+# rendered from the adopt directory instead. A box with no identity at all yet renders
+# nothing in check mode (the registration hasn't happened).
+- name: Read each tunnel's profile
+  ansible.builtin.slurp:
+    src: >-
+      {{ ('/etc/abulxt/warp/' ~ item.name ~ '/wgcf-profile.conf')
+         if edge_warp_profile_stat.results[item.index].stat.exists
+         else (edge_warp_adopt_dir ~ '/profile-' ~ (item.index + 1) ~ '.conf') }}
+  loop: "{{ edge_warp_tunnels }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: edge_warp_profiles
+  no_log: true
+  when: >-
+    edge_warp_profile_stat.results[item.index].stat.exists
+    or (ansible_check_mode and edge_warp_adopt_dir | length > 0
+        and (edge_warp_adopt.results | default([]))[item.index].stat.exists | default(false))
+
+- name: Parse the profiles (addresses and Cloudflare's peer key; no secrets)
+  ansible.builtin.set_fact:
+    edge_warp_conf: >-
+      {%- set out = [] -%}
+      {%- for t in edge_warp_tunnels -%}
+      {%-   set r = edge_warp_profiles.results[t.index] -%}
+      {%-   if r.content is defined -%}
+      {%-     set text = r.content | b64decode -%}
+      {%-     set addrs = text | regex_findall('(?m)^[ \t]*Address[ \t]*=[ \t]*([^\r\n]+)') | join(',') | split(',') | map('trim') | list -%}
+      {%-     set _ = out.append(t | combine({
+                'v4': addrs | select('search', '^[0-9.]+/32$') | first | default(''),
+                'v6': addrs | select('search', ':') | first | default(''),
+                'peer': text | regex_findall('(?m)^[ \t]*PublicKey[ \t]*=[ \t]*([^ \t\r\n]+)') | first | default('')
+              })) -%}
+      {%-   endif -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Every profile gave an IPv4 /32, an IPv6 address and a peer key
+  ansible.builtin.assert:
+    that:
+      - item.v4 | length > 0
+      - item.v6 | length > 0
+      - item.peer | length == 44
+    fail_msg: "{{ item.name }}: the wgcf profile has no usable Address/PublicKey lines."
+    quiet: true
+  loop: "{{ edge_warp_conf }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Note a check-mode run with nothing to render yet
+  ansible.builtin.debug:
+    msg: >-
+      {{ edge_warp_tunnels | length - edge_warp_conf | length }} tunnel(s) have no identity yet.
+      They register on the real run; check mode can't show their networkd files.
+  when: edge_warp_conf | length < edge_warp_tunnels | length
+
+# ---- networkd
+
+- name: Private keys for networkd (root:systemd-network 0640)
+  ansible.builtin.copy:
+    # The regexes here use no backslashes: escaping differs between Jinja contexts in
+    # ansible-core 2.19+. The literal block keeps the line's newline.
+    content: |
+      {{ edge_warp_profiles.results[item.index].content | b64decode | regex_findall('(?m)^[ \t]*PrivateKey[ \t]*=[ \t]*([^ \t\r\n]+)') | first }}
+    dest: "/etc/systemd/network/50-{{ item.name }}.key"
+    owner: root
+    group: systemd-network
+    mode: "0640"
+  loop: "{{ edge_warp_conf }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: edge_warp_keys
+  no_log: true
+
+- name: Tunnel interfaces (.netdev)
+  ansible.builtin.template:
+    src: warp.netdev.j2
+    dest: "/etc/systemd/network/50-{{ item.name }}.netdev"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ edge_warp_conf }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: edge_warp_netdevs
+
+- name: Tunnel addresses, routing tables and fwmark rules (.network)
+  ansible.builtin.template:
+    src: warp.network.j2
+    dest: "/etc/systemd/network/50-{{ item.name }}.network"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ edge_warp_conf }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: edge_warp_networks
+
+# A box behind NAT (edge_public_ip_on_box false): its own streams to public_ip stay off WARP.
+- name: Drop-in directories for the tunnels' .network
+  ansible.builtin.file:
+    path: "/etc/systemd/network/50-{{ item.name }}.network.d"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop: "{{ edge_warp_conf }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: not (edge_public_ip_on_box | bool)
+
+- name: Keep streams to the box's own public address off WARP (90-own-address-unmarked.conf)
+  ansible.builtin.template:
+    src: warp-own-address.conf.j2
+    dest: "/etc/systemd/network/50-{{ item.name }}.network.d/90-own-address-unmarked.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ edge_warp_conf }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: not (edge_public_ip_on_box | bool)
+  register: edge_warp_own_address
+
+- name: No own-address rule where the box holds its public address
+  ansible.builtin.file:
+    path: "/etc/systemd/network/50-{{ item.name }}.network.d/90-own-address-unmarked.conf"
+    state: absent
+  loop: "{{ edge_warp_conf }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: edge_public_ip_on_box | bool
+  register: edge_warp_own_address_absent
+
+- name: Install edge-warp-off (turns the tunnels off; the dead-man switch runs it)
+  ansible.builtin.template:
+    src: edge-warp-off.j2
+    dest: /usr/local/sbin/edge-warp-off
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install edge-warp-check (probes each tunnel by its mark)
+  ansible.builtin.copy:
+    src: edge-warp-check.py
+    dest: /usr/local/sbin/edge-warp-check
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Work out what changed
+  ansible.builtin.set_fact:
+    edge_warp_kernel_changed: >-
+      {{ edge_warp_keys.changed or edge_warp_netdevs.changed or edge_warp_networks.changed
+         or edge_warp_own_address.changed | default(false) or edge_warp_own_address_absent.changed | default(false) }}
+    # networkd doesn't apply a changed .netdev to a link that exists, so those links are
+    # deleted and come back from the new file on reload.
+    edge_warp_recreate: >-
+      {{ ((edge_warp_keys.results | default([]) | selectattr('changed') | map(attribute='item.name') | list)
+          + (edge_warp_netdevs.results | default([]) | selectattr('changed') | map(attribute='item.name') | list))
+         | unique }}
+
+- name: List the links that exist
+  ansible.builtin.command: ip -o link show
+  register: edge_warp_links
+  changed_when: false
+  check_mode: false
+
+# ---- apply, behind the dead-man switch
+
+- name: Apply the tunnels behind the dead-man switch
+  when: edge_warp_kernel_changed | bool and not ansible_check_mode
+  block:
+    - name: Arm the dead-man switch (edge-warp-off in {{ edge_warp_deadman_seconds }}s)
+      ansible.builtin.include_tasks: deadman_arm.yml
+      vars:
+        edge_warp_deadman_command: /usr/local/sbin/edge-warp-off
+
+    - name: Delete tunnel links whose .netdev or key changed (reload recreates them)
+      ansible.builtin.command: networkctl delete {{ item }}
+      loop: "{{ edge_warp_recreate }}"
+      when: "(': ' ~ item ~ ':') in edge_warp_links.stdout"
+
+    - name: Reload networkd (creates the tunnels, reconfigures changed .network files)
+      ansible.builtin.command: networkctl reload
+
+# Read-only and bounded (every probe has a timeout), so it also runs on a no-change run.
+- name: Every tunnel carries its mark to WARP, and unmarked traffic still leaves directly
+  ansible.builtin.command:
+    argv: >-
+      {{ ['timeout', '90', '/usr/local/sbin/edge-warp-check']
+         + (edge_warp_conf | map(attribute='name') | zip(edge_warp_conf | map(attribute='mark')) | map('join', ':') | list) }}
+  register: edge_warp_check
+  changed_when: false
+  retries: 12
+  delay: 5
+  until: edge_warp_check.rc == 0
+  when: not ansible_check_mode
+
+- name: Show the tunnel check
+  ansible.builtin.debug:
+    var: edge_warp_check.stdout_lines
+  when: not ansible_check_mode
+
+- name: Confirm the box from outside, then disarm the dead-man switch
+  ansible.builtin.include_tasks: deadman_confirm.yml
+  when: edge_warp_kernel_changed | bool and not ansible_check_mode

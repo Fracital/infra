@@ -1,0 +1,69 @@
+# Managed by Ansible (roles/proxmox_host, inputs: host_vars/{{ inventory_hostname }}.yml).
+# Applied with `ifreload -a` (ifupdown2). The Proxmox GUI can edit this file too, but
+# the next run of playbooks/pve.yml puts this version back.
+#
+# bond0 = {{ pve_bond_slaves | join(' + ') }}, {{ pve_bond_mode }}{{ (', primary ' ~ pve_10g_ifs[0]) if pve_bond_mode == 'active-backup' else '' }}.
+# vmbr0 = the bridge on bond0: the host's addresses, and where the VMs plug in.
+# The bond and the bridge keep {{ pve_uplink_if }}'s MAC, the one G-Core already has for {{ pve_main_ip }}.
+
+auto lo
+iface lo inet loopback
+
+{% for port in pve_bond_slaves %}
+auto {{ port }}
+iface {{ port }} inet manual
+{% if port in pve_10g_ifs %}
+	post-up /usr/local/sbin/pve-nic-rings {{ port }} {{ pve_nic_ring_size }} || true
+{% endif %}
+
+{% endfor %}
+{% if pve_uplink_if not in pve_bond_slaves %}
+# Not in the 802.3ad bond and left down (it carries the bond's MAC).
+iface {{ pve_uplink_if }} inet manual
+
+{% endif %}
+# bond0 is a bridge port and carries no addresses: an RA on it would add a default
+# route around vmbr0, so it ignores them.
+auto bond0
+iface bond0 inet manual
+	bond-slaves {{ pve_bond_slaves | join(' ') }}
+	bond-mode {{ pve_bond_mode }}
+	bond-miimon {{ pve_bond_miimon }}
+{% if pve_bond_mode == 'active-backup' %}
+	bond-primary {{ pve_10g_ifs[0] }}
+{% else %}
+	bond-xmit-hash-policy {{ pve_bond_xmit_hash_policy }}
+	bond-lacp-rate {{ pve_bond_lacp_rate }}
+{% endif %}
+	hwaddress {{ pve_bond_mac }}
+	mtu {{ pve_mtu }}
+	post-up /usr/sbin/sysctl -q -w net.ipv6.conf.bond0.accept_ra=0 || true
+
+auto vmbr0
+iface vmbr0 inet static
+	address {{ pve_main_ip }}/{{ pve_main_prefix }}
+	gateway {{ pve_gateway }}
+	bridge-ports bond0
+	bridge-stp off
+{# No bridge-fd (ifupdown2 only takes 2-255, and with stp off there is no forward
+   delay) and no mtu (the bridge takes bond0's): ifup -s warns on either, and a
+   warning fails the template's validate. #}
+	hwaddress {{ pve_bond_mac }}
+{% if pve_dns_nameservers_effective | length > 0 %}
+	dns-nameservers {{ pve_dns_nameservers_effective | join(' ') }}
+{% endif %}
+{% if pve_dns_search | length > 0 %}
+	dns-search {{ pve_dns_search }}
+{% endif %}
+{% if pve_ipv6 | length > 0 %}
+
+{% if pve_ipv6_gateway | length > 0 %}
+# Static IPv6 gateway: vmbr0 ignores router adverts (anyone on a shared L2 can send one).
+{% endif %}
+iface vmbr0 inet6 static
+	address {{ pve_ipv6 }}
+{% if pve_ipv6_gateway | length > 0 %}
+	gateway {{ pve_ipv6_gateway }}
+	post-up /usr/sbin/sysctl -q -w net.ipv6.conf.vmbr0.accept_ra=0 net.ipv6.conf.vmbr0.autoconf=0 || true
+{% endif %}
+{% endif %}

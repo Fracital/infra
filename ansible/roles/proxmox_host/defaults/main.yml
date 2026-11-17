@@ -1,0 +1,113 @@
+---
+# proxmox_host: turn a fresh G-Core dedi on Debian 13 into a Proxmox VE 9 host of
+# the wisp cloud (README.md "The wisp cloud", "Proxmox hosts"; playbooks/pve.yml).
+#
+# Per host, in host_vars/hv-<site>.yml (no defaults, the role asserts them):
+#   pve_main_ip: "92.38.186.16"       the box's main IPv4 (the panel's address). It moves
+#                                     from the uplink to vmbr0; nothing else stays on the host.
+#   pve_main_prefix: 24
+#   pve_gateway: "92.38.186.1"
+#   pve_uplink_if: eno1               the 1 GbE port that carries pve_main_ip today
+#   pve_10g_ifs: [ens2f0, ens2f1]     the 10GbE SFP+ ports; the first is the bond's primary
+# Optional:
+#   pve_ipv6: "2a03:90c0:16::34/48"   the host's own IPv6 on vmbr0 (address/prefix)
+#   pve_ipv6_gateway: "2a03:90c0:16::1"  unset = take the v6 default route from router adverts
+pve_ipv6: ""
+pve_ipv6_gateway: ""
+
+# /etc/hosts maps pve_main_ip to <inventory_hostname>.<pve_domain>: pve-cluster refuses a
+# node name that resolves to loopback (Debian's 127.0.1.1 line). The inventory name is
+# the Proxmox node name, and renaming a node later is a manual job: pick it once.
+pve_domain: "{{ wisp_zone }}"
+
+# --- Packages (pve.proxmox.com/wiki/Install_Proxmox_VE_on_Debian_13_Trixie) ---
+pve_keyring_url: https://enterprise.proxmox.com/debian/proxmox-archive-keyring-trixie.gpg
+# The wiki publishes sha256 136673be77aba35dcce385b28737689ad64fd785a797e57897589aed08db6e45
+# (and md5 77c8b1166d15ce8350102ab1bca2fcbf). The file fetched 2026-11-11 matched both;
+# this is its sha512. Only used until proxmox-archive-keyring (pulled in by proxmox-ve)
+# owns the file; the role never overwrites the packaged one.
+pve_keyring_checksum: "sha512:90eb7f053a54ba0d57f67838a522151449a02e6db245b2becb3338dd7f812b516ff77f95a2ade433f8d90f183570be7efade93b23211d2091eeb7ef21fdc918a"
+pve_repo_uri: http://download.proxmox.com/debian/pve
+pve_repo_suite: trixie
+# No subscription: the enterprise repos (pve-enterprise, Ceph enterprise) that the
+# packages drop in answer 401 without a key and break every `apt update`, so the role
+# deletes any sources file that points at enterprise.proxmox.com, on every run.
+pve_repo_component: pve-no-subscription
+pve_packages: [proxmox-ve, postfix, open-iscsi, chrony]
+# Debian kernels removed once the host runs the Proxmox one (the wiki: keeping them
+# breaks later upgrades). Broader than the wiki's 'linux-image-6.12*' so a box that
+# came up from Debian 11 (debian_release) also loses its 5.10 / 6.1 leftovers. The
+# Proxmox kernels are proxmox-kernel-*, never matched here.
+pve_remove_kernels: [linux-image-amd64, "linux-image-[0-9]*"]
+# postfix "Local only": cron and the PVE daemons can mail root, nothing leaves the box
+# and postfix listens on loopback only.
+pve_postfix_mailname: "{{ inventory_hostname }}.{{ pve_domain }}"
+# The no-subscription nag is left alone: the usual fix seds proxmoxlib.js, every
+# proxmox-widget-toolkit upgrade undoes it and the pattern moves between releases.
+
+# --- Network: bond0 (ports) -> vmbr0 (bridge, host addresses, VMs) ---
+# active-backup: every 10GbE port plus the 1 GbE uplink, one carrying traffic at a time,
+# the first 10GbE port preferred; works with no switch config. Once G-Core sets up LACP
+# on the 10GbE ports, set 802.3ad: the bond becomes those ports only (the 1 GbE uplink
+# is left unconfigured and down) and hashes flows across them by pve_bond_xmit_hash_policy.
+pve_bond_mode: active-backup
+pve_bond_miimon: 100
+pve_bond_xmit_hash_policy: layer3+4
+pve_bond_lacp_rate: fast
+# The bond's (and vmbr0's) MAC. Empty = the uplink's permanent MAC, the one G-Core's
+# router (and any MAC binding on their side) already has for pve_main_ip.
+pve_bond_hwaddress: ""
+pve_mtu: 1500
+# Empty = keep the dns-nameservers the current /etc/network/interfaces has (they only
+# matter with resolvconf; /etc/resolv.conf itself is not touched).
+pve_dns_nameservers: []
+pve_dns_search: "{{ pve_domain }}"
+# Seconds before the armed rollback puts the old /etc/network/interfaces back (>= 120;
+# Ansible must log in again within this minus 60). The rescue covers the ifupdown2
+# install, which can take the network down on the old config (>= 180).
+pve_net_rollback_seconds: 180
+pve_net_rescue_seconds: 300
+# What the rescue pings to decide the network is alive (any one answering is enough;
+# a gateway that drops ICMP alone must not trigger a reboot).
+pve_net_probes: ["{{ pve_gateway }}", 1.1.1.1]
+
+# --- Tuning (10 GbE in, bridged to VMs) ---
+# RX/TX ring size for the 10GbE ports, capped at the driver's maximum (ixgbe 82599 and
+# i40e X710: 4096; default 512). Longer rings absorb bursts the CPU has not polled yet.
+pve_nic_ring_size: 4096
+# Kernel parameters, in /etc/default/grub.d/abulxt-pve.cfg (tasks/tuning.yml). iommu=pt:
+# the megaraid_sas DMA-mapping hang (hv-jnb, 2026-11-12). They apply at the next boot;
+# pve_kernel_reboot=true lets the play reboot the host when the running kernel lacks them
+# (the VM goes down with it: onboot brings it back).
+pve_kernel_cmdline: [iommu=pt]
+pve_kernel_reboot: false
+
+pve_sysctl_file: /etc/sysctl.d/90-abulxt-pve.conf
+pve_sysctl:
+  # Per-CPU queue of received packets waiting for the stack; tap devices feed VM
+  # traffic through it. The default 1000 drops under 10 GbE bursts.
+  net.core.netdev_max_backlog: 16384
+  # How much one NAPI round may do before yielding (default 300 packets / 2000 us).
+  net.core.netdev_budget: 600
+  net.core.netdev_budget_usecs: 4000
+  # Socket buffer ceilings for the host's own TCP (migrations, backups, apt); bridged
+  # VM frames never touch them. 16 MiB = 10 Gb/s at ~13 ms RTT.
+  net.core.rmem_max: 16777216
+  net.core.wmem_max: 16777216
+  net.ipv4.tcp_rmem: "4096 131072 16777216"
+  net.ipv4.tcp_wmem: "4096 65536 16777216"
+
+# --- Host firewall: the fleet's edge_firewall base + one admin drop-in ---
+# The base (vendored edge-firewall-contract v1) opens SSH 22 to everyone, as on every
+# abulxt host (key-only logins, fail2ban). The drop-in opens the Proxmox web UI (8006,
+# also the VNC/xterm.js consoles) and spiceproxy (3128) to these sources only. Default:
+# amph's egress, divide_public_ip (amph is a NATed guest of divide). The role cannot know
+# the admins' own egress addresses: put them in pve_admin_sources_extra (host_vars or group_vars), or reach the UI over SSH
+# (`ssh -L 8006:127.0.0.1:8006 hv-<site>`, loopback is always open). IPv4 and IPv6,
+# addresses or CIDRs.
+pve_firewall_manage: true
+pve_admin_sources: ["{{ divide_public_ip }}"]
+pve_admin_sources_extra: []
+pve_admin_tcp_ports: [8006, 3128]
+pve_firewall_dropin_priority: 55
+pve_firewall_rollback_seconds: 120

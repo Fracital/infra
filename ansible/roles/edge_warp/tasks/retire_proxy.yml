@@ -1,0 +1,48 @@
+---
+# warp-cli's proxy is unused once the router dials through the tunnels. Remove it: its
+# registration (one fewer WARP identity), the package and its apt repository.
+
+- name: Is warp-cli installed
+  ansible.builtin.stat:
+    path: /usr/bin/warp-cli
+  register: edge_warp_cli
+
+- name: Disconnect warp-cli and delete its registration
+  ansible.builtin.command: timeout 30 warp-cli --accept-tos {{ item }}
+  loop:
+    - disconnect
+    - registration delete
+  register: edge_warp_cli_off
+  changed_when: edge_warp_cli_off.rc == 0
+  failed_when: false
+  when: edge_warp_cli.stat.exists
+
+- name: Stop warp-svc
+  ansible.builtin.systemd:
+    name: warp-svc.service
+    state: stopped
+    enabled: false
+  when: edge_warp_cli.stat.exists
+
+- name: Purge cloudflare-warp
+  ansible.builtin.apt:
+    name: cloudflare-warp
+    state: absent
+    purge: true
+
+- name: Remove the Cloudflare WARP apt repository and key
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/apt/sources.list.d/cloudflare-client.sources
+    - /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+
+# warp-svc's `not fwmark 0x100cf lookup 65743` (v4 and v6). It goes with the service;
+# this catches one left behind. A fixed number of tries, never an open loop.
+- name: Remove warp-svc's ip rule if it stayed behind
+  ansible.builtin.shell: |
+    for fam in -4 -6; do
+      for _ in 1 2 3; do ip "$fam" rule del table 65743 2>/dev/null || break; done
+    done
+  changed_when: false

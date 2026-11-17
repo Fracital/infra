@@ -1,0 +1,143 @@
+# Checks on every push and pull request. Nothing here reaches a server; applying
+# playbooks is apply.yml.
+#
+#   prose    Prettier (npm run format:check) and scripts/check-prose.mjs on the tree
+#            and on the pushed commit messages
+#   ansible  yamllint, inventory, syntax-check of every playbook, ansible-lint
+#            (baseline: ansible/.ansible-lint-ignore), the vendored roles' VERSION,
+#            and scripts/check-public.py against the private values (ANSIBLE_PRIVATE_VARS;
+#            a fork's pull request gets no secrets and skips that step)
+#   scripts  shellcheck, Python and Node tests, infra.js
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  prose:
+    name: Format and prose
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install Prettier
+        run: npm ci --ignore-scripts
+
+      - name: Prettier
+        run: npm run format:check
+
+      - name: Tracked files
+        run: node scripts/check-prose.mjs
+
+      - name: Commit messages
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [ -z "$BASE" ]; then
+            echo "No commit range for this event; skipped."
+            exit 0
+          fi
+          node scripts/check-prose.mjs --commits "$BASE" "$HEAD"
+
+  ansible:
+    name: Ansible
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.ansible/collections
+          key: ansible-${{ hashFiles('ansible/requirements.txt', 'ansible/requirements.yml') }}
+
+      - name: Install Ansible
+        run: |
+          python3 -m venv ~/venv
+          ~/venv/bin/pip install -q -r ansible/requirements.txt
+          echo "$HOME/venv/bin" >> "$GITHUB_PATH"
+
+      - name: Install collections
+        working-directory: ansible
+        run: ansible-galaxy collection install -r requirements.yml
+
+      - name: yamllint
+        run: yamllint -f github .
+
+      - name: Inventory parses
+        working-directory: ansible
+        run: ansible-inventory --graph
+
+      - name: Syntax-check every playbook
+        working-directory: ansible
+        run: |
+          for pb in playbooks/*.yml; do
+            echo "::group::$pb"
+            ansible-playbook --syntax-check "$pb"
+            echo "::endgroup::"
+          done
+
+      - name: ansible-lint
+        working-directory: ansible
+        run: ansible-lint --nocolor
+
+      - name: Vendored roles match their VERSION
+        working-directory: ansible
+        run: |
+          roles/edge_firewall/check-vendored.sh
+          roles/fail2ban/check-vendored.sh
+
+      - name: No private value in a published file
+        env:
+          ANSIBLE_PRIVATE_VARS: ${{ secrets.ANSIBLE_PRIVATE_VARS }}
+        run: |
+          if [ -z "$ANSIBLE_PRIVATE_VARS" ]; then
+            echo "::notice::ANSIBLE_PRIVATE_VARS is not available to this run (fork pull request); skipped."
+            exit 0
+          fi
+          python3 scripts/write-ci-vars.py --private
+          python3 scripts/check-public.py
+          rm -f ansible/inventory/group_vars/all/private.yml
+
+  scripts:
+    name: Scripts and tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: shellcheck
+        run: git ls-files -z '*.sh' | xargs -0 shellcheck
+
+      - name: Python compiles
+        run: git ls-files -z '*.py' | xargs -0 python3 -m py_compile
+
+      - name: edge-router tests
+        run: python3 -m unittest discover -s edge-wisp -p 'test_*.py'
+
+      - name: wisp.baby tests
+        run: node --test wispbaby/test/*.test.mjs
+
+      - name: infra.js runs
+        run: node infra.js

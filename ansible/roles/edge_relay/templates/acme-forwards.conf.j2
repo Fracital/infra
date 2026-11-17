@@ -1,0 +1,31 @@
+# Plain-HTTP ACME forwards. Managed by Ansible (edge_relay role, edge_acme_forwards).
+# Hosts behind the same NAT as this edge that get their own Let's Encrypt certificate over
+# HTTP-01 on the shared public address: the edge owns :80 there, so it hands each name's
+# /.well-known/acme-challenge/ to the box that runs the ACME client. Everything else on the name
+# is a 301 to `redirect` when the entry has one, else 404. Host-specific servers, so they win
+# over the 00-edge-relay catch-all.
+{% for f in edge_acme_forwards %}
+
+# {{ f.host }} -> http://{{ f.upstream }}{% if f.comment is defined %} ({{ f.comment }}){% endif %}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name {{ f.host }};
+
+    location /.well-known/acme-challenge/ {
+        proxy_pass http://{{ f.upstream }};
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_connect_timeout {{ edge_proxy_connect_timeout }};
+    }
+
+    location / {
+{% if f.redirect is defined %}
+        return 301 {{ f.redirect }};
+{% else %}
+        return 404;
+{% endif %}
+    }
+}
+{% endfor %}

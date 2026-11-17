@@ -1,0 +1,47 @@
+---
+# After the router moved onto the new WARP config: every address this box advertises for a
+# byod name (group_vars/all/main.yml byod_names) still serves that name over HTTPS, checked
+# from amph the way the edge nameservers' health checks do it (roles/edge_dns: the name as
+# SNI and Host, its health path, any 2xx, a valid certificate). Two clean rounds in a row
+# are required; an address that fails both rounds of the last attempt is named. Read-only.
+# (Until 2026-11-16 this read abulxt-watchdog's log; the watchdog is gone, README "Edge DNS".)
+
+- name: The box's byod addresses, per name
+  ansible.builtin.set_fact:
+    edge_warp_probes: >-
+      {%- set out = [] -%}
+      {%- for n in byod_names -%}
+      {%-   if inventory_hostname in groups[n.group | default('edge')] -%}
+      {%-     for ip in hostvars[inventory_hostname][n.ips_var] | default([]) -%}
+      {%-       set _ = out.append(n.fqdn ~ ' ' ~ ip ~ ' ' ~ (edge_dns_health_paths[n.fqdn] | default('/'))) -%}
+      {%-     endfor -%}
+      {%-   endif -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Every byod address of the box serves its name, two rounds in a row
+  ansible.builtin.shell: |
+    set -u
+    clean=0
+    for attempt in $(seq 1 30); do
+      bad=""
+      while read -r fqdn ip path; do
+        code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 6 \
+          --resolve "$fqdn:443:$ip" "https://$fqdn$path" 2>/dev/null || true)
+        case "$code" in 2??) ;; *) bad="$bad $fqdn@$ip=$code" ;; esac
+      done <<'PROBES'
+    {{ edge_warp_probes | join('\n') }}
+    PROBES
+      if [ -z "$bad" ]; then clean=$((clean + 1)); else clean=0; fi
+      if [ "$clean" -ge 2 ]; then echo "ok: {{ edge_warp_probes | length }} address(es), 2 clean rounds"; exit 0; fi
+      last="$bad"
+      sleep 10
+    done
+    echo "failing:${last:-}"
+    exit 1
+  args:
+    executable: /bin/bash
+  register: edge_warp_serving
+  changed_when: false
+  delegate_to: "{{ groups['origin'][0] }}"
+  when: edge_warp_probes | length > 0

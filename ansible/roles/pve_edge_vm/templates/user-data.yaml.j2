@@ -1,0 +1,36 @@
+#cloud-config
+# {{ pve_edge_vm_name }}: cloud-init user-data. Managed by Ansible (pve_edge_vm,
+# README.md "Edge VM on Proxmox"); holds the VM's SSH host keys (root 0600).
+hostname: {{ pve_edge_vm_name }}
+fqdn: {{ pve_edge_vm_fqdn }}
+prefer_fqdn_over_hostname: false
+preserve_hostname: false
+# {{ pve_edge_vm_etc_hosts_owner }} owns /etc/hosts (its main-address line).
+manage_etc_hosts: false
+
+# root by key only, no default (debian) user.
+disable_root: false
+ssh_pwauth: false
+users:
+  - name: root
+    lock_passwd: true
+    ssh_authorized_keys:
+{% for key in pve_edge_vm_authorized_keys %}
+      - {{ key | to_json }}
+{% endfor %}
+
+# The same host keys on every clone (tasks/hostkeys.yml), each with its trailing
+# newline (OpenSSH rejects a private key without it).
+ssh_deletekeys: true
+ssh_genkeytypes: []
+ssh_keys:
+{% for name, value in pve_edge_vm_ssh_keys | dictsort %}
+  {{ name }}: {{ value | to_json }}
+{% endfor %}
+
+package_update: true
+package_upgrade: {{ pve_edge_vm_package_upgrade | bool | lower }}
+packages:
+  - qemu-guest-agent
+runcmd:
+  - [systemctl, start, qemu-guest-agent]

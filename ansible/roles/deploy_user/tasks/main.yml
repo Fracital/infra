@@ -1,0 +1,67 @@
+---
+# The unprivileged deploy user (README.md "Deploy user"). CI logs in as it, forced through each
+# app's deploy gate; root's part of a deploy is only the fixed sudo commands below. The gate
+# scripts themselves belong to the app repos and are installed by hand from there.
+
+- name: Inputs are set
+  ansible.builtin.assert:
+    that:
+      - deploy_user_keys | length > 0
+      - deploy_user_keys | reject('match', '^restrict,(port-forwarding,)?command="[^"]+" ssh-ed25519 ') | list | length == 0
+      - deploy_user_sudo_commands | reject('match', '^/usr/local/sbin/[a-z-]+( [a-z-]+)*$') | list | length == 0
+    fail_msg: "deploy_user_keys must each be restricted with a forced command, and sudo commands must be fixed /usr/local/sbin lines."
+    quiet: true
+
+- name: Deploy group
+  ansible.builtin.group:
+    name: "{{ deploy_user_name }}"
+    state: present
+
+# A password of '*' matches nothing, unlike a '!' lock, which sshd treats as a locked account.
+- name: Deploy user
+  ansible.builtin.user:
+    name: "{{ deploy_user_name }}"
+    group: "{{ deploy_user_name }}"
+    shell: /bin/bash
+    password: "*"
+    create_home: true
+    home: "/home/{{ deploy_user_name }}"
+
+# Root owns the key file, so deploy cannot loosen its own restrictions.
+- name: SSH directory
+  ansible.builtin.file:
+    path: "/home/{{ deploy_user_name }}/.ssh"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Authorized keys
+  ansible.builtin.copy:
+    dest: "/home/{{ deploy_user_name }}/.ssh/authorized_keys"
+    content: "{{ deploy_user_keys | join('\n') }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Sudo rules
+  ansible.builtin.template:
+    src: sudoers.j2
+    dest: "/etc/sudoers.d/{{ deploy_user_name }}"
+    owner: root
+    group: root
+    mode: "0440"
+    validate: /usr/sbin/visudo -cf %s
+
+# One `directory =` line per checkout in [safe]; exclusive: false keeps the others.
+- name: Root's git trusts deploy's checkouts
+  community.general.ini_file:
+    path: /etc/gitconfig
+    section: safe
+    option: directory
+    value: "{{ item }}"
+    exclusive: false
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ deploy_user_git_safe_dirs }}"

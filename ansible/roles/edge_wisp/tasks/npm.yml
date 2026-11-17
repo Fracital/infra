@@ -1,0 +1,57 @@
+---
+# holywisp_source: npm. Fetch bin/<holywisp_npm_platform>/holywisp from the npm package
+# holywisp@<holywisp_npm_version> on the controller. Output: holywisp_binary (path on the
+# controller), which tasks/verify.yml checks and main.yml pushes exactly as a source build.
+#
+# files/holywisp-npm-fetch.py does the work: registry manifest -> dist.tarball (same registry) ->
+# sha512 against dist.integrity (and holywisp_npm_integrity when pinned) -> with
+# holywisp_npm_verify_provenance, `npm audit signatures` over the same version in a scratch project
+# and the SLSA provenance's subject, repository, workflow, ref and commit -> the one binary,
+# extracted as a regular file and renamed into place. The output name carries the version, so an
+# unchanged version is a no-op (`creates:`) and a bump fetches a new file.
+#
+# Controller-only, and real in check mode too (check_mode: false), like tasks/build.yml, so
+# `--check --diff` shows the binary and config diff on the hosts. Nothing on the hosts is touched here.
+
+- name: Check holywisp_npm_version is one exact version
+  ansible.builtin.assert:
+    that:
+      - holywisp_npm_version is string
+      - holywisp_npm_version is match('^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$')
+    fail_msg: >-
+      holywisp_source is npm, so holywisp_npm_version must be one exact published version of the
+      `holywisp` package (e.g. 0.1.0-nightly.202611101200.g1234abc; `npm view holywisp versions`),
+      never a range or a dist-tag; it is '{{ holywisp_npm_version }}'. To stay on the source
+      build, set holywisp_source: build.
+    quiet: true
+  run_once: true
+
+- name: Set the npm binary path
+  ansible.builtin.set_fact:
+    holywisp_binary: "{{ holywisp_build_dir }}/holywisp-npm-{{ holywisp_npm_version }}-{{ holywisp_npm_platform }}"
+  run_once: true
+
+- name: Fetch and verify holyWisp from npm
+  ansible.builtin.command:
+    argv: >-
+      {{ ['python3', '-I', role_path ~ '/files/holywisp-npm-fetch.py',
+          '--registry', holywisp_npm_registry,
+          '--package', holywisp_npm_package,
+          '--version', holywisp_npm_version,
+          '--platform', holywisp_npm_platform,
+          '--out', holywisp_binary,
+          '--integrity', holywisp_npm_integrity]
+         + (['--provenance-repo', holywisp_npm_provenance_repo,
+             '--provenance-workflow', holywisp_npm_provenance_workflow,
+             '--provenance-ref', holywisp_npm_provenance_ref]
+            if holywisp_npm_verify_provenance | bool else []) }}
+    creates: "{{ holywisp_binary }}"
+  register: holywisp_npm_fetch
+  check_mode: false
+  delegate_to: localhost
+  run_once: true
+
+- name: Show what the npm check found
+  ansible.builtin.debug:
+    msg: "{{ (holywisp_npm_fetch.stdout | from_json) if holywisp_npm_fetch is changed else 'fetched and verified earlier: ' ~ holywisp_binary }}"
+  run_once: true

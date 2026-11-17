@@ -1,0 +1,87 @@
+---
+# Check the holyWisp binary the relays are about to get (holywisp_binary, from tasks/build.yml or
+# tasks/npm.yml), on the controller, before any host is touched. Real in check mode too.
+
+# `file` must say statically linked x86-64: the binary must run on every relay (Debian 11's glibc
+# 2.31 included) with nothing installed. ldd on a static binary exits 1 ("not a dynamic
+# executable") and is left out of the gate for that reason.
+- name: Verify the holyWisp binary is static x86-64
+  ansible.builtin.shell: |
+    set -euo pipefail
+    desc=$(file -b {{ holywisp_binary | quote }})
+    echo "$desc"
+    echo "$desc" | grep -q 'statically linked'
+    echo "$desc" | grep -q 'x86-64'
+  args:
+    executable: /bin/bash
+  register: holywisp_file
+  changed_when: false
+  check_mode: false
+  delegate_to: localhost
+  run_once: true
+
+# It runs here (same kernel ABI as the hosts) and names the version it should: the npm package's
+# base version, or the commit the source build was given (HW_VERSION_SUFFIX).
+- name: Run the holyWisp binary (--version)
+  ansible.builtin.command:
+    argv: ["{{ holywisp_binary }}", --version]
+  register: holywisp_version
+  changed_when: false
+  failed_when: >-
+    holywisp_version.rc != 0
+    or not holywisp_version.stdout.startswith('holywisp ')
+    or (holywisp_source == 'npm'
+        and holywisp_version.stdout.split(' ')[1].split('+')[0] != holywisp_npm_version.split('-')[0])
+    or (holywisp_source == 'build'
+        and not holywisp_version.stdout.endswith('+' ~ holywisp_commit.stdout | default('')))
+  check_mode: false
+  delegate_to: localhost
+  run_once: true
+
+# Every key this role renders must be one the binary knows: holyWisp parses --config before it
+# looks at --version, and an unknown key or a bad value exits 2 with the reason. Each host's own
+# config is rendered here, on the controller (no secrets in it), and checked with the exact binary
+# the hosts will get. The flags after it name keys the role relies on at their defaults
+# (client-recv-buffer, conn-queue-max, connections-limit-per-ip and friends): only the parse
+# matters, the values never reach a running server.
+- name: Create the controller's config-check directory
+  ansible.builtin.file:
+    path: "{{ holywisp_build_dir }}/conf-check"
+    state: directory
+    mode: "0700"
+  diff: false
+  check_mode: false
+  delegate_to: localhost
+  run_once: true
+
+- name: Render each host's holyWisp config on the controller for the check
+  ansible.builtin.template:
+    src: holywisp.conf.j2
+    dest: "{{ holywisp_build_dir }}/conf-check/{{ inventory_hostname }}.conf"
+    mode: "0600"
+  changed_when: false
+  diff: false
+  check_mode: false
+  delegate_to: localhost
+
+- name: Check the holyWisp binary accepts each host's config
+  ansible.builtin.command:
+    argv:
+      - "{{ holywisp_binary }}"
+      - --config
+      - "{{ holywisp_build_dir }}/conf-check/{{ inventory_hostname }}.conf"
+      - --client-recv-buffer=8388608
+      - --conn-queue-max=268435456
+      - --connections-limit-per-ip=200
+      - --connection-window-s=10
+      - --busy-poll-us=0
+      - --stop-on-stdin-eof=off
+      - --version
+  changed_when: false
+  check_mode: false
+  delegate_to: localhost
+
+- name: Show which holyWisp the relays get
+  ansible.builtin.debug:
+    msg: "{{ holywisp_version.stdout }} ({{ holywisp_source }}) -> {{ holywisp_binary }}: {{ holywisp_file.stdout_lines[0] }}"
+  run_once: true

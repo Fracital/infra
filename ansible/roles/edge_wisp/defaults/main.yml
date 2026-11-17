@@ -1,0 +1,283 @@
+---
+# Wisp server (holyWisp, C11: https://github.com/Fracital/holyWisp) + classifying
+# SOCKS5 router. The relays run one fully static x86_64 holyWisp binary, which
+# the controller obtains, checks and pushes to the hosts, so it runs unchanged
+# on Debian 11 (glibc 2.31), 12 and 13. Where it comes from is holywisp_source:
+#
+#   npm    bin/linux-x64/holywisp from the published npm package
+#          `holywisp`, at the exact version holywisp_npm_version (tasks/npm.yml):
+#          checked against the registry's dist.integrity (sha512) and, while
+#          holywisp_npm_verify_provenance is on, against its npm provenance
+#          (`npm audit signatures`, plus the repository and workflow below).
+#          Static against musl, built by zig (clang) in holyWisp's GitHub Actions.
+#   build  (current) holyWisp built from source at holywisp_repo/holywisp_ref in a Debian 12
+#          container on the controller (tasks/build.yml), static against glibc,
+#          gcc 12. In use since 2026-11-12 (npm has no build past 0.5.2), and the
+#          rollback from npm when npm is back (README "holyWisp from npm").
+#
+# Either way tasks/verify.yml then checks the binary (static x86-64, --version)
+# and runs it over every host's rendered holywisp.conf, so a binary that lacks a
+# key this role sets fails the play on the controller before any host is touched.
+holywisp_source: build # 2026-11-12: npm has no build past 0.5.2/a262092; see holywisp_ref
+
+# npm: an exact version, never a range or a dist-tag (releases are X.Y.Z from
+# holyWisp's release.yml on tag vX.Y.Z; nightlies are
+# <package.json version>-nightly.<UTC yyyymmddhhmm>.g<sha>, e.g. 0.5.3-nightly...; `npm view holywisp versions` lists
+# them). "" stops the play with a message.
+# 0.5.2 (2026-11-10): release.yml on tag v0.5.2 = commit 1008eef.
+holywisp_npm_version: "0.5.2"
+# The version's dist.integrity ("sha512-..."), as in a lockfile: a registry that
+# answers with any other tarball for that version fails the play. "" trusts the
+# registry's manifest (the tarball is still checked against it). Bump it with
+# the version (`npm view holywisp@<version> dist.integrity`).
+holywisp_npm_integrity: "sha512-mJ0hRpSDh9JJ16+0ERXg9/DOFPJbPKKw+14cmUYP16XLQ/9+u6I2qdIgpxHHrRRohtulsP3NwepZmVvJsVl2WQ=="
+holywisp_npm_registry: https://registry.npmjs.org
+holywisp_npm_package: holywisp
+# The bin/<platform>-<arch>/ directory of the package the relays run.
+holywisp_npm_platform: linux-x64
+# Provenance: the version must carry an npm provenance attestation that
+# `npm audit signatures` verifies (Sigstore), built by this repository and
+# workflow from this ref (a branch or a tag ref), and from the right commit: the
+# one a nightly's .g<sha> suffix names, or the one a tag ref names in the
+# repository now (`git ls-remote`, so the controller needs git and GitHub). Needs
+# npm >= 9.5 on the controller. Off only for a local registry in development.
+# A release: release.yml + refs/tags/v<version>. A nightly: its own workflow +
+# refs/heads/master (set both when switching between the two).
+holywisp_npm_verify_provenance: true
+holywisp_npm_provenance_repo: https://github.com/Fracital/holyWisp
+holywisp_npm_provenance_workflow: .github/workflows/release.yml
+holywisp_npm_provenance_ref: "refs/tags/v{{ holywisp_npm_version }}"
+
+# build: what the source build checks out. Whatever the source, the config below
+# needs a holyWisp that knows `proxy-udp`, sends the hostname to the SOCKS5 proxy (2026-11 audit fixes),
+# echoes any offered WebSocket subprotocol (epoxy sends a random UUID; without
+# the echo a browser fails the handshake) and knows `webclient-wisp-url`, so
+# holywisp_ref must be at or after 2026-11-06 b8aca7c (every holywisp npm
+# version is: the package first appeared at fcbf0b6, 2026-11-10).
+# fc9cd24 (pinned 2026-11-09) brought per-stream relay pipes (splice), batched
+# uploads, the advertised window bounded by the whole of stream-queue-max, and
+# two keys this role leaves at their defaults: conn-queue-max (256 MiB queued
+# toward slow remotes per client before its reads pause) and client-recv-buffer
+# (8 MiB, applied only where net.core.rmem_max grants at least 4 MiB).
+# Pinned 2026-11-10 to a262092: small frames toward a client leave once per loop
+# iteration instead of one send each, a 429 for connections-limit-per-ip carries
+# Retry-After, and the platform calls sit behind a portability layer (macOS and
+# Windows builds exist; the Linux build is still epoll and splice). Two new keys
+# stay at their defaults here: busy-poll-us (0, off) and stop-on-stdin-eof (off;
+# it must stay off under systemd, where stdin is /dev/null).
+holywisp_repo: https://github.com/Fracital/holyWisp.git
+# 2026-11-16 bumped to 978e1d1: a UDP stream to a closed port closes as unreachable (0x42) at
+# once (6a2dcb1, stream.c). The send path used to drop the port unreachable a second datagram
+# collected, so a QUIC client's two-datagram Initial to a closed port never closed: proxied
+# WebTransport and HTTP/3 to a closed port failed after 0.3 to 4 s instead of a few ms. No new keys.
+# 2026-11-15 bumped to 7cd7675: warp-bypass-host (edge_warp_bypass_hosts below; an older build
+# doesn't know the key and would not start where the list is set). Also 1758e6a: proxy-only-to,
+# tcp-warp, tcp-warp-fallback (holywisp_tcp_direct, off by default, so not rendered) and
+# family-fallback-ms (3000: a direct dial waits that long on one family while the other has an
+# address left, as the router's V6_WAIT does).
+# 2026-11-13 bumped to af8a6d9: proxy-client-key (holywisp_proxy_client_key below). With it on,
+# holyWisp offers SOCKS5 username auth and sends each client's key as the username, so the
+# router picks one exit per client and site; without its two keys nothing changes.
+# Before that, 71b0f31: UDP on WARP. With udp-warp-marks/-state/-fallback
+# (holywisp_udp_warp below) a direct UDP stream is marked for the WARP tunnel
+# edge-router.py would pick for its site, from the router's warp.json; without those
+# keys nothing changes. Also 3048970: a pipe the kernel won't resize for this user is
+# ENOBUFS (sys). Deployed via build.
+# Earlier, 369a4b3 (2026-11-12): exceeding a connection's per-ws stream cap is now
+# throttled, not counted as a protocol violation (conn.c). A throttled client's
+# normal concurrency (a Cloudflare challenge fans out dozens of XHRs) no longer
+# closes the whole wisp connection past ws-close-after-violations (which took every
+# in-flight stream with it: epoxy Wisp(MuxTaskEnded)) nor drives the source to the
+# STRICT 403 block. Builds on 09b75bd's privateEgress source-weight 0 (reputation.c),
+# so a page asking the browser for a private address still does not score the client.
+# Deployed via build (npm has no version past 0.5.2 yet). Clear data/reputation.json
+# after, old scores persist.
+holywisp_ref: 978e1d10ea465ce228d9c140196aabc909030734
+# Controller cache for both sources: built binaries, npm downloads, and the
+# per-host configs tasks/verify.yml checks.
+holywisp_build_dir: "{{ lookup('env', 'HOME') }}/.cache/abulxt/holywisp"
+# Container engine for the build. "" = the first of podman, docker whose
+# daemon answers on the controller.
+holywisp_container_tool: ""
+# Local tag of the build image (roles/edge_wisp/files/holywisp-build.Containerfile).
+holywisp_build_image: abulxt-holywisp-build:bookworm
+
+# Relay URL path segment that precedes the gate key in the public route, so it
+# is not literally /wisp/ (used by roles/edge_relay/templates/byod-edge.conf.j2).
+# Defaults to "wisp" = no change. Set the real opaque token in group_vars/vault
+# alongside wisp_gate_key, and keep it in sync with gateKeys.wispPath in
+# abulxt main/config.js and the origin snippet (__WISP_PATH__).
+wisp_path: stream
+
+edge_wisp_dir: /opt/abulxt-wisp
+edge_wisp_user: abulxt-wisp
+# holyWisp listens here; OpenResty proxies /<wisp_path>/<key>/ to it. It also
+# answers GET /health and GET /stats on this port (loopback only).
+edge_wisp_port: 6001
+# edge-router.py listens here; holyWisp's `proxy` points at it.
+edge_router_port: 1081
+# shady_relay_port / shady_relay_user come from group_vars/all (shared with amph).
+
+# --- Origin (amph) knobs. The defaults below are the edge behaviour; only
+# inventory/host_vars/amph.yml overrides them.
+#
+# Install edge-router.py + abulxt-edge-router.service and make holyWisp
+# Require= it. amph sets false: its relay egresses straight into
+# mullvad-pool, there is no classifier hop.
+edge_wisp_manage_router: true
+# Own /etc/abulxt (root:<edge_wisp_user> 0750). amph sets false: abulxt_origin
+# already owns that directory as root:root 0755 and other services keep their
+# files there, so this role must not re-mode it.
+edge_wisp_manage_conf_dir: true
+# holyWisp `proxy`: TCP streams egress through this SOCKS5 endpoint (with holywisp_tcp_direct,
+# only those the name gate sent to the relay; the rest are dialled by holyWisp).
+# socks5h: the proxy receives the destination hostname (edge-router.py
+# classifies by name, so it must never see only an IP).
+holywisp_proxy: "socks5h://127.0.0.1:{{ edge_router_port }}"
+# holyWisp `allow-udp`. Off is only the role default: the edges (group_vars/edge.yml,
+# since 2026-11-10, for STomp's HTTP/3) and amph (host_vars/amph.yml) both turn it
+# on. No proxy in this fleet carries UDP (edge-router.py and mullvad-pool are
+# SOCKS5 CONNECT only), so UDP that is on leaves the host itself: see
+# holywisp_proxy_udp_direct and, for the edges, edge_router_dns_port.
+holywisp_allow_udp: false
+# UDP on WARP (roles/edge_warp kernel mode; README.md "Cloudflare WARP"). True makes holyWisp
+# mark each UDP stream for the WARP tunnel edge-router.py would pick for its site, from the
+# router's /run/abulxt-edge-router/warp.json (udp-warp-marks/-state/-fallback in holywisp.conf,
+# CAP_NET_ADMIN in its unit). It only takes effect where kernel WARP is on. Needs holywisp_ref
+# at or after 71b0f31: an older build doesn't know those keys (the role's config check stops the
+# play). Off by default, so turning it on is a rollout of its own (README "Cloudflare WARP").
+# Rollout check: holyWisp /stats "udpWarp": {"marked", "direct", "refused"}.
+holywisp_udp_warp: false
+# Clean TCP without the router in the data path. edge-router.py is one Python process: every
+# byte it relays costs it CPU, and it tops out at about 0.5 GiB/s echoed for a whole box
+# (2026-11-13, wispdev; holyWisp alone did 9.6). True makes holyWisp dial clean TCP itself,
+# marked for the WARP tunnel the router would pick (tcp-warp), and send only the names the
+# router must handle (shady: amph's relay; adult: refused) to it: the router's name gate answers
+# those with the relay address (gate_adult in edge-router.json), and holyWisp's proxy-only-to is
+# that address. Takes effect only with holywisp_udp_warp, the name gate (edge_router_dns_port)
+# and kernel WARP. With no usable WARP state (router down, stale warp.json) clean TCP follows
+# edge_warp_fallback_direct, as it does in the router. Changes one thing besides the path: UDP to
+# an adult name is refused like a shady name's (the gate answers it with the relay address).
+# Needs a holyWisp with proxy-only-to and tcp-warp. Rollout check: /stats "tcpRoute"
+# {"proxied", "direct"} and "tcpWarp" {"marked", "direct", "refused"}.
+holywisp_tcp_direct: false
+# Names kept off WARP: their TCP (dialled by edge-router.py, or by holyWisp with
+# holywisp_tcp_direct) and their UDP (holywisp_udp_warp) leave from this box's own address.
+# "name" is the name itself, "*.name" its subdomains only, so a site is usually both. One list
+# for both sides (holyWisp warp-bypass-host, edge-router.json warp_bypass), or a site's TCP and
+# UDP leave from two addresses. Only a leading "*." is a wildcard; IP literals never match.
+# Takes effect only with kernel WARP; holyWisp's lines need holywisp_udp_warp and a holyWisp
+# with warp-bypass-host. Rollout check: /stats "udpWarp"/"tcpWarp" "bypassed".
+edge_warp_bypass_hosts: []
+holywisp_tcp_direct_on: >-
+  {{ holywisp_tcp_direct | bool and holywisp_udp_warp | bool and edge_wisp_manage_router | bool
+     and holywisp_proxy | length > 0 and edge_router_dns_port | int > 0
+     and edge_warp_enabled | default(false) | bool and edge_warp_mode | default('kernel') == 'kernel' }}
+# Per-client WARP exits: holyWisp `proxy-client-key`. With it, holyWisp sends each client's key
+# (BLAKE2b-64 of a per-box secret and the client's address; an IPv6 client by its /64) to
+# edge-router.py as the SOCKS5 username, and both pick the WARP tunnel by "<key>/<site>". One
+# client then keeps one exit per site, and a busy site spreads over the tunnels by client.
+# Without it, the pick is per site. Needs a holyWisp with proxy-client-key (af8a6d9 and later);
+# edge-router.py already understands it, so the two can roll out in either order. The secret must stay stable: a new one moves every client to another exit.
+holywisp_proxy_client_key: false
+# Per box, derived from one vaulted master (group_vars/all/secrets.yml
+# vault_holywisp_client_key_master, 32+ random characters), so every box has its own stable
+# secret and the vault holds one value. Evaluated only with holywisp_proxy_client_key on.
+holywisp_proxy_client_key_secret: "{{ (vault_holywisp_client_key_master ~ '/' ~ inventory_hostname) | hash('sha256') }}"
+# holyWisp `allow-direct-ip`: a CONNECT may name a literal IP instead of a hostname. Off
+# keeps every stream classifiable by name (edge-router.py waves literal IPs through as
+# clean, so this is the only place they are refused). The edges turn it on in
+# group_vars/edge.yml: the v86 emulator in vibeOS bridges guest networking over
+# holywisp.fracit.al and a guest's TCP packets only carry the address it already
+# resolved, so without this every guest connection closes with 0x48. amph stays off.
+holywisp_allow_direct_ip: false
+# holyWisp `proxy-udp` (rendered whenever `proxy` is set): true = `direct`, UDP
+# streams bypass the SOCKS5 proxy and leave from the host's own address (the
+# edges and amph both set it: edge-router.py and mullvad-pool are TCP-only, and
+# holyWisp has no SOCKS5 UDP associate); false = `refuse`, holyWisp closes every
+# UDP stream (the role default; it only matters once allow-udp is on).
+holywisp_proxy_udp_direct: false
+# holyWisp `dns-server` entries (the resolve-before-connect egress check and
+# direct UDP; with socks5h the proxy resolves TCP targets itself).
+holywisp_dns_servers: ["1.1.1.1", "1.0.0.1"]
+# edge-router.py's name gate: a UDP port on 127.0.0.1 where the router answers
+# DNS, rendered as holyWisp's first `dns-server` on a host with the router (the
+# entries above stay behind it, and are what the gate itself asks). 0 = no
+# gate. holyWisp can only send UDP directly, so without the gate a hostname
+# whose TCP the router sends through amph's Mullvad relay (shady) has its UDP
+# leave from the edge. With it such a name resolves to the relay's address
+# (abulxt_origin_ip), which the holyWisp unit may not send to (IPAddressDeny),
+# so the UDP stream closes on its first datagram and the client stays on TCP.
+# The edges turn it on (group_vars/edge.yml; RUNBOOK Phase 6, "UDP to a shady
+# name"). holyWisp keys its per-destination limits by resolved address: with
+# holywisp_flood_protection on, every shady name would share one bucket.
+# The gate also answers the AAAA question of a name the router pinned to IPv4
+# (its TCP connect fell back) with no records, so that name's UDP follows its
+# TCP (RUNBOOK "One family per name"); without the gate the pin is TCP only.
+edge_router_dns_port: 0
+# Names the play asks the gate about after a deploy (tasks/main.yml): each must come back as the
+# relay address, or the box's classifier is not reaching Cloudflare Gateway.
+edge_router_gate_probe_shady: thepiratebay.org
+edge_router_gate_probe_adult: pornhub.com
+# holyWisp `dns-order` (ipv4first | ipv6first | verbatim): the family holyWisp
+# dials first for a name that has both A and AAAA records. It decides only for
+# the streams holyWisp dials itself: direct UDP (`proxy-udp = direct`), and TCP
+# where no `proxy` is set. A proxied TCP stream is dialled by the proxy in the
+# proxy's own order (edge-router.py: getaddrinfo order, which is IPv6 first on a
+# dual-stack host), and holyWisp has no bind or egress address option. So this
+# is what puts a client's UDP streams on the address its TCP streams leave
+# from: the dual-stack edges set ipv6first (group_vars/edge.yml). ipv4first is
+# holyWisp's default and what this role rendered before it was a variable.
+holywisp_dns_order: ipv4first
+# holyWisp `host`. "" binds every interface (edge default; the host firewall
+# fronts it). amph sets 127.0.0.1 because 10.203.0.2:6001 is already held by
+# the proton-socks wisp.server listeners and a wildcard bind would fail with
+# EADDRINUSE.
+holywisp_bind_host: ""
+# Worker threads; 0 = one per CPU. A box that shares its cores with OpenResty pins both
+# (edge_relay edge_openresty_workers) and can say why in holywisp_workers_note (a comment above
+# `workers` in holywisp.conf).
+holywisp_workers: 0
+holywisp_workers_note: ""
+# holyWisp `serve-webclient`: GET / on the relay port returns holyWisp's built-in
+# single-file browser client (https://holywisp.fracit.al/ shows it). Through a
+# keyed path a plain GET on /<path>/<key>/ returns the same page instead of
+# "Upgrade Required"; the key still gates it.
+holywisp_serve_webclient: true
+# holyWisp `webclient-wisp-url`: the ws(s):// URL the page offers as its default
+# server; "" = the page's own origin. The edges set it to the public relay root
+# (group_vars/edge.yml) because the page is served from https://holywisp.fracit.al/
+# and that root is the relay too. amph keeps "" (its page is not public).
+holywisp_webclient_wisp_url: ""
+# holyWisp `flood-protection`. OFF for parity with what the fleet actually ran:
+# the wispurr config this role rendered had no `floodProtection` key and
+# wispurr only arms its flood limiter when that key exists. holyWisp's default
+# is on with max-connects-per-dest-per-second = 100, which closed the 101st
+# stream per second to one origin with THROTTLED in a benchmark; a browser
+# bursting to one origin would hit it. Turning this on needs the per-dest
+# limits raised first (templates/holywisp.conf.j2).
+holywisp_flood_protection: false
+holywisp_log_level: warn
+# Flow control, wispurr parity. templates/holywisp.conf.j2 explains each number.
+holywisp_max_message_size: 262149
+holywisp_stream_queue_max: 67108864
+holywisp_buffer_remaining: 128
+holywisp_ws_write_high_water: 8388608
+# A TCP connect with an address of the other family left gives up after this (family-fallback-ms;
+# holyWisp's default 3000), and the last address after connect-timeout-ms (15000). Measured
+# 2026-11-16 from a client: 3 of ~150 stream opens took 3023 and 15034 ms, a SYN nobody answered
+# on WARP. A SYN is retransmitted at 1 s, so 1000 ms is the first one lost; 6000 ms covers the
+# first two retransmits of the last address.
+holywisp_family_fallback_ms: 1000
+holywisp_connect_timeout_ms: 6000
+# The wispurr binary and config this role used to install stay on the host for
+# rollback (RUNBOOK "Rollback to wispurr"). true removes /etc/abulxt/wispurr.json
+# and <edge_wisp_dir>/wispurr once holyWisp has passed its health check.
+edge_wisp_remove_wispurr: false
+# Extra `[Service]` lines appended to abulxt-edge-wisp.service (e.g. the
+# memory guard the old amph unit carried). Rendered verbatim, one per entry.
+edge_wisp_service_extra: []
+# Hand-managed units this role replaces on the host. Each is stopped and
+# disabled (if it exists) right before abulxt-edge-wisp.service starts, so the
+# two never fight over edge_wisp_port. Unit files are left in place for rollback.
+edge_wisp_retire_units: []

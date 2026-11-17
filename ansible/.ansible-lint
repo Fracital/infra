@@ -1,0 +1,16 @@
+---
+# ansible-lint for this tree. Style rules the roles do not follow on purpose are skipped;
+# everything else fails CI. Findings that predate this repository are listed in
+# .ansible-lint-ignore (regenerate only to remove entries, never to add new ones).
+profile: production
+exclude_paths:
+  - inventory/group_vars/all/
+  - private.example/
+skip_list:
+  - var-naming[no-role-prefix]   # roles share fleet-wide names (wisp_path, openresty_conf_dir)
+  - name[template]               # task names carry the item they act on
+  - name[casing]
+  - yaml[line-length]            # Prettier and .yamllint own YAML style
+  - yaml[indentation]
+  - yaml[commas]
+  - jinja[spacing]

@@ -1,0 +1,13 @@
+# Application-layer register flood jail (2026-10-01: ~152k POSTs/hour from node UA).
+# Captures CF-Connecting-Ip. install.sh wires Cloudflare API ban when a token
+# is available; otherwise this jail stays disabled (origin iptables cannot stop
+# CF-proxied HTTP).
+
+[caddy-register]
+enabled  = false
+filter   = caddy-register
+backend  = systemd
+maxretry = 300
+findtime = 5m
+bantime  = 12h
+action   = cloudflare-token

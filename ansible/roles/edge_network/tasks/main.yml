@@ -1,0 +1,124 @@
+---
+# Persist the edge's full advertised IP set on its primary interface, and bring
+# any missing addresses up live. Most edges already persist their IPs via
+# ens3:N aliases in /etc/network/interfaces (managed by the hosting panel);
+# this role is for edges (e.g. abulxt-santaclara) where extra allocated IPs are
+# NOT yet configured on the box.
+#
+# Only runs when `edge_extra_interface_ips` is defined for the host.
+
+- name: Assert the primary interface is known
+  ansible.builtin.set_fact:
+    edge_primary_if: "{{ edge_primary_if | default('ens3') }}"
+
+# amph's root key was authorized here for abulxt-watchdog's null-route check. The
+# watchdog is gone (2026-11-16, README "Edge DNS") and nothing else on amph logs in to
+# an edge, so the key is revoked. site.yml / wisp.yml read it from amph into
+# `amph_ssh_pubkey`; once every box has had a run, the revoke and those reads can go.
+- name: Revoke amph's SSH key (only the removed watchdog used it)
+  ansible.posix.authorized_key:
+    user: root
+    key: "{{ amph_ssh_pubkey }}"
+    state: absent
+  when: amph_ssh_pubkey is defined and amph_ssh_pubkey | length > 0
+
+# "Address already there" is "RTNETLINK answers: File exists" from older iproute2 and
+# "Error: ipv4: Address already assigned." from iproute2 6.x (Debian 13).
+- name: Bring up extra IPv4 addresses live (idempotent)
+  ansible.builtin.command: >
+    ip addr add {{ item }}/{{ edge_ipv4_prefix | default(24) }} dev {{ edge_primary_if }}
+  register: ip_add
+  changed_when: ip_add.stderr is not search('File exists|already assigned', ignorecase=true)
+  failed_when: ip_add.rc != 0 and ip_add.stderr is not search('File exists|already assigned', ignorecase=true)
+  loop: "{{ edge_extra_interface_ips | default([]) }}"
+
+- name: Bring up extra IPv6 addresses live (idempotent)
+  ansible.builtin.command: >
+    ip -6 addr add {{ item }} dev {{ edge_primary_if }}
+  register: ip6_add
+  changed_when: ip6_add.stderr is not search('File exists|already assigned', ignorecase=true)
+  failed_when: ip6_add.rc != 0 and ip6_add.stderr is not search('File exists|already assigned', ignorecase=true)
+  loop: "{{ edge_extra_interface_ips_v6 | default([]) }}"
+
+# Boxes whose IPv6 the panel never configured (the wisp cloud dedis) name the
+# gateway here; edges whose v6 came up by RA or ifupdown leave it unset.
+- name: Route IPv6 via edge_ipv6_gateway (idempotent)
+  ansible.builtin.command: >
+    ip -6 route replace default via {{ edge_ipv6_gateway }} dev {{ edge_primary_if }}
+  changed_when: false
+  when:
+    - edge_ipv6_gateway is defined
+    - edge_extra_interface_ips_v6 | default([]) | length > 0
+
+# The wisp cloud's edge VMs (Debian cloud image) have no ifupdown: netplan, from
+# cloud-init, already persists their whole address set (pve_edge_vm), so there
+# is nothing to write (and no /etc/network/interfaces.d to write it to).
+- name: Check for ifupdown
+  ansible.builtin.stat:
+    path: /sbin/ifup
+  register: edge_network_ifup
+
+# A hand-made VM whose cloud-init can carry only one IPv4 (Proxmox ipconfig0, e.g.
+# the old wisp-mnz on meal) opts in with edge_network_netplan_extra_ips: true. netplan merges
+# this drop-in's addresses into cloud-init's own eth0 entry (same id).
+- name: Persist extra IPs via a netplan drop-in
+  ansible.builtin.copy:
+    dest: /etc/netplan/60-abulxt-edge-ips.yaml
+    owner: root
+    group: root
+    mode: "0600"
+    content: |
+      # Managed by Ansible (edge_network): extra edge addresses on top of cloud-init's.
+      network:
+        version: 2
+        ethernets:
+          {{ edge_primary_if }}:
+            addresses:
+      {% for ip in edge_extra_interface_ips | default([]) %}
+              - "{{ ip }}/{{ edge_ipv4_prefix | default(24) }}"
+      {% endfor %}
+      {% for ip in edge_extra_interface_ips_v6 | default([]) %}
+              - "{{ ip if '/' in ip else ip ~ '/64' }}"
+      {% endfor %}
+  register: edge_network_netplan
+  when:
+    - edge_network_netplan_extra_ips | default(false) | bool
+    - (edge_extra_interface_ips | default([]) + edge_extra_interface_ips_v6 | default([])) | length > 0
+
+- name: Check the netplan drop-in parses
+  ansible.builtin.command: netplan generate
+  changed_when: false
+  when: edge_network_netplan is changed
+
+- name: Persist extra IPs via ifupdown interfaces.d
+  ansible.builtin.template:
+    src: edge-extra-ips.j2
+    dest: /etc/network/interfaces.d/abulxt-edge-ips
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - edge_network_ifup.stat.exists
+    - edge_extra_interface_ips is defined
+    - edge_extra_interface_ips | length > 0
+
+# A container cannot load modules: its host loads tcp_bbr (edge_network_load_bbr false; the
+# edge on divide: docs/divide-host.md).
+- name: Load tcp_bbr at boot
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/tcp_bbr.conf
+    content: "tcp_bbr\n"
+    owner: root
+    group: root
+    mode: "0644"
+  when: edge_network_load_bbr | bool
+
+# Setting the congestion control loads tcp_bbr on demand (defaults/main.yml says why these).
+- name: TCP tuning for the client legs
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_file: "{{ edge_tcp_sysctl_file }}"
+    sysctl_set: true
+    state: present
+  loop: "{{ edge_tcp_sysctl | dict2items }}"

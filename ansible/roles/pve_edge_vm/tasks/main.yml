@@ -1,0 +1,159 @@
+---
+# The box's VMs, each built by tasks/vm.yml: its edge VM wisp-<site> (VM 100,
+# sized from what the host has left), then, only when kn-<site> is in [kn_vm],
+# its KrunkNative VM kn-<site> (VM 110, fixed size). The kn pass overrides the
+# per-VM pve_edge_vm_* values with include vars, which outrank host_vars and
+# set_fact, so nothing set for wisp-<site> (a pinned size or MAC in
+# host_vars/hv-<site>.yml) reaches kn-<site>. A host without a kn VM runs only
+# the first pass, with the defaults: exactly what this role did before kn VMs.
+
+# Only a [wisp_pve] host builds a VM, and only its own wisp-<site> (and kn-<site>):
+# an edge VM on any other hypervisor (the edge, a CT on divide) is never in reach of this role.
+- name: "{{ inventory_hostname }} is a wisp cloud Proxmox host (hv-<site>)"
+  ansible.builtin.assert:
+    that:
+      - inventory_hostname in groups.get('wisp_pve', [])
+      - inventory_hostname == 'hv-' ~ pve_site
+      - pve_edge_vm_name == 'wisp-' ~ pve_site
+    fail_msg: >-
+      pve_edge_vm runs only on a [wisp_pve] host hv-<site> and builds only wisp-<site>
+      ({{ inventory_hostname }}: pve_site={{ pve_site }}, VM {{ pve_edge_vm_name }}). Nothing was changed.
+    quiet: true
+
+# Checked before either VM is touched. The wisp VM's size is what the host has
+# left after its reserve and the kn VM; a pinned or minimum wisp size that does
+# not fit next to the kn VM stops the run here instead of overcommitting.
+- name: "{{ pve_kn_vm_name }} fits next to {{ pve_edge_vm_name }}"
+  when: pve_kn_vm_enabled | bool
+  vars:
+    _kn: "{{ hostvars[pve_kn_vm_name] }}"
+    _edge: "{{ hostvars[pve_edge_vm_name] | default({}) }}"
+    _edge_cores: >-
+      {{ (pve_edge_vm_cores | default([(pve_edge_vm_host_threads | int) - (pve_edge_vm_cores_reserve | int) - (pve_edge_vm_cores_others | int),
+                                       pve_edge_vm_cores_min | int] | max)) | int }}
+    _edge_memory_mb: >-
+      {{ (pve_edge_vm_memory_mb | default([((pve_edge_vm_host_memory_mb | int) - (pve_edge_vm_memory_reserve_mb | int) - (pve_edge_vm_memory_others_mb | int)) // 1024 * 1024,
+                                           pve_edge_vm_memory_min_mb | int] | max)) | int }}
+    _edge_ips: >-
+      {{ ([_edge.ansible_host | default('')] + _edge.edge_extra_interface_ips | default([])
+          + (_edge.edge_extra_interface_ips_v6 | default([]) | map('regex_replace', '/.*$', '') | list)) | select | list }}
+    _kn_ips: >-
+      {{ ([_kn.ansible_host | default('')] + _kn.kn_extra_interface_ips | default([])
+          + (_kn.kn_extra_interface_ips_v6 | default([]) | map('regex_replace', '/.*$', '') | list)) | select | list }}
+  ansible.builtin.assert:
+    that:
+      - pve_kn_vm_cores | int >= 1
+      - pve_kn_vm_memory_mb | int >= 1024
+      - pve_kn_vm_vmid | int not in [pve_edge_vm_vmid | int, pve_edge_vm_template_vmid | int]
+      - (_edge_cores | int) + (pve_edge_vm_cores_others | int) + (pve_edge_vm_cores_reserve | int) <= pve_edge_vm_host_threads | int
+      - (_edge_memory_mb | int) + (pve_edge_vm_memory_others_mb | int) + (pve_edge_vm_memory_reserve_mb | int) <= pve_edge_vm_host_memory_mb | int
+      - _kn_ips | intersect(_edge_ips) | length == 0
+    fail_msg: >-
+      {{ pve_kn_vm_name }} needs kn_cores (>= 1) and kn_memory_mb (>= 1024) in host_vars/{{ pve_kn_vm_name }}.yml, VM
+      {{ pve_kn_vm_vmid }} must not be {{ pve_edge_vm_name }}'s or the template's, the two VMs plus the host's reserve must fit
+      ({{ pve_edge_vm_name }} {{ _edge_cores }} cores / {{ _edge_memory_mb }} MiB + {{ pve_kn_vm_name }} {{ pve_kn_vm_cores }} /
+      {{ pve_kn_vm_memory_mb }} + reserve {{ pve_edge_vm_cores_reserve }} / {{ pve_edge_vm_memory_reserve_mb }} on a host with
+      {{ pve_edge_vm_host_threads }} threads / {{ pve_edge_vm_host_memory_mb }} MiB), and no address may be both VMs'
+      (shared: {{ _kn_ips | intersect(_edge_ips) | join(' ') | default('none', true) }}). Nothing was changed.
+    quiet: true
+
+# The same check for the blockshooter VM (bs-<site>, VM 120): its size, its VMID,
+# everything fitting together, and no address shared with the wisp or kn VM.
+- name: "{{ pve_bs_vm_name }} fits next to {{ pve_edge_vm_name }}"
+  when: pve_bs_vm_enabled | bool
+  vars:
+    _bs: "{{ hostvars[pve_bs_vm_name] }}"
+    _edge: "{{ hostvars[pve_edge_vm_name] | default({}) }}"
+    _kn: "{{ hostvars[pve_kn_vm_name] | default({}) if pve_kn_vm_enabled | bool else {} }}"
+    _edge_cores: >-
+      {{ (pve_edge_vm_cores | default([(pve_edge_vm_host_threads | int) - (pve_edge_vm_cores_reserve | int) - (pve_edge_vm_cores_others | int),
+                                       pve_edge_vm_cores_min | int] | max)) | int }}
+    _edge_memory_mb: >-
+      {{ (pve_edge_vm_memory_mb | default([((pve_edge_vm_host_memory_mb | int) - (pve_edge_vm_memory_reserve_mb | int) - (pve_edge_vm_memory_others_mb | int)) // 1024 * 1024,
+                                           pve_edge_vm_memory_min_mb | int] | max)) | int }}
+    _other_ips: >-
+      {{ ([_edge.ansible_host | default(''), _kn.ansible_host | default('')] + _edge.edge_extra_interface_ips | default([])
+          + _kn.kn_extra_interface_ips | default([])
+          + (_edge.edge_extra_interface_ips_v6 | default([]) | map('regex_replace', '/.*$', '') | list)
+          + (_kn.kn_extra_interface_ips_v6 | default([]) | map('regex_replace', '/.*$', '') | list)) | select | list }}
+    _bs_ips: >-
+      {{ ([_bs.ansible_host | default('')] + _bs.bs_extra_interface_ips | default([])
+          + (_bs.bs_extra_interface_ips_v6 | default([]) | map('regex_replace', '/.*$', '') | list)) | select | list }}
+  ansible.builtin.assert:
+    that:
+      - pve_bs_vm_cores | int >= 1
+      - pve_bs_vm_memory_mb | int >= 1024
+      - pve_bs_vm_vmid | int not in [pve_edge_vm_vmid | int, pve_edge_vm_template_vmid | int, pve_kn_vm_vmid | int]
+      - (_edge_cores | int) + (pve_edge_vm_cores_others | int) + (pve_edge_vm_cores_reserve | int) <= pve_edge_vm_host_threads | int
+      - (_edge_memory_mb | int) + (pve_edge_vm_memory_others_mb | int) + (pve_edge_vm_memory_reserve_mb | int) <= pve_edge_vm_host_memory_mb | int
+      - _bs_ips | intersect(_other_ips) | length == 0
+    fail_msg: >-
+      {{ pve_bs_vm_name }} needs bs_cores (>= 1) and bs_memory_mb (>= 1024) in host_vars/{{ pve_bs_vm_name }}.yml, VM
+      {{ pve_bs_vm_vmid }} must not be another VM's or the template's, every VM plus the host's reserve must fit
+      ({{ pve_edge_vm_name }} {{ _edge_cores }} cores / {{ _edge_memory_mb }} MiB + others {{ pve_edge_vm_cores_others }} /
+      {{ pve_edge_vm_memory_others_mb }} + reserve {{ pve_edge_vm_cores_reserve }} / {{ pve_edge_vm_memory_reserve_mb }} on a host with
+      {{ pve_edge_vm_host_threads }} threads / {{ pve_edge_vm_host_memory_mb }} MiB), and no address may be shared
+      (shared: {{ _bs_ips | intersect(_other_ips) | join(' ') | default('none', true) }}). Nothing was changed.
+    quiet: true
+
+- name: The edge VM, {{ pve_edge_vm_name }}
+  ansible.builtin.include_tasks: vm.yml
+
+# A wisp VM that still runs at its old (bigger) size leaves no room for the kn VM:
+# build kn-<site> but leave it stopped until the wisp VM has restarted.
+- name: Note whether {{ pve_edge_vm_name }} has yet to restart into its size
+  ansible.builtin.set_fact:
+    pve_fixed_vm_wait_for_edge: "{{ pve_edge_vm_restart_due | bool and not pve_edge_vm_reboot_for_pending | bool }}"
+  when: pve_kn_vm_enabled | bool or pve_bs_vm_enabled | bool
+
+- name: The KrunkNative VM, {{ pve_kn_vm_name }}
+  ansible.builtin.include_tasks: vm.yml
+  when: pve_kn_vm_enabled | bool
+  vars:
+    pve_edge_vm_name: "{{ pve_kn_vm_name }}"
+    pve_edge_vm_vmid: "{{ pve_kn_vm_vmid }}"
+    pve_edge_vm_tags: "{{ pve_kn_vm_tags }}"
+    pve_edge_vm_group: kn_vm
+    pve_edge_vm_hostvar_prefix: kn_
+    pve_edge_vm_description: abulxt-pve-kn-vm
+    pve_edge_vm_fqdn: "{{ pve_kn_vm_fqdn }}"
+    pve_edge_vm_next_step: "KrunkNative's own deploy (root by key: kn_ssh_authorized_keys)"
+    pve_edge_vm_etc_hosts_owner: KrunkNative's deploy
+    pve_edge_vm_mac: "{{ pve_kn_vm_mac }}"
+    pve_edge_vm_cores: "{{ pve_kn_vm_cores }}"
+    pve_edge_vm_memory_mb: "{{ pve_kn_vm_memory_mb }}"
+    pve_edge_vm_cores_others: 0
+    pve_edge_vm_memory_others_mb: 0
+    pve_edge_vm_disk_size: "{{ pve_kn_vm_disk_size }}"
+    pve_edge_vm_ssh_authorized_keys_extra: "{{ pve_kn_vm_ssh_authorized_keys }}"
+    pve_edge_vm_rebuild_others: "{{ ['wisp-' ~ pve_site] + ([pve_bs_vm_name] if pve_bs_vm_enabled | bool else []) }}"
+    pve_edge_vm_start: "{{ not pve_fixed_vm_wait_for_edge | bool }}"
+    pve_edge_vm_not_started_reason: >-
+      wisp-{{ pve_site }} has a restart due (to shrink to its share of the host, among others); restart it
+      (one box at a time: its addresses go dark meanwhile), then re-run, or re-run with -e pve_edge_vm_reboot_for_pending=true
+
+- name: The blockshooter VM, {{ pve_bs_vm_name }}
+  ansible.builtin.include_tasks: vm.yml
+  when: pve_bs_vm_enabled | bool
+  vars:
+    pve_edge_vm_name: "{{ pve_bs_vm_name }}"
+    pve_edge_vm_vmid: "{{ pve_bs_vm_vmid }}"
+    pve_edge_vm_tags: "{{ pve_bs_vm_tags }}"
+    pve_edge_vm_group: bs_vm
+    pve_edge_vm_hostvar_prefix: bs_
+    pve_edge_vm_description: abulxt-pve-bs-vm
+    pve_edge_vm_fqdn: "{{ pve_bs_vm_fqdn }}"
+    pve_edge_vm_next_step: "blockshooter's own deploy (root by key: bs_ssh_authorized_keys)"
+    pve_edge_vm_etc_hosts_owner: blockshooter's deploy
+    pve_edge_vm_mac: "{{ pve_bs_vm_mac }}"
+    pve_edge_vm_cores: "{{ pve_bs_vm_cores }}"
+    pve_edge_vm_memory_mb: "{{ pve_bs_vm_memory_mb }}"
+    pve_edge_vm_cores_others: 0
+    pve_edge_vm_memory_others_mb: 0
+    pve_edge_vm_disk_size: "{{ pve_bs_vm_disk_size }}"
+    pve_edge_vm_ssh_authorized_keys_extra: "{{ pve_bs_vm_ssh_authorized_keys }}"
+    pve_edge_vm_rebuild_others: "{{ ['wisp-' ~ pve_site] + ([pve_kn_vm_name] if pve_kn_vm_enabled | bool else []) }}"
+    pve_edge_vm_start: "{{ not pve_fixed_vm_wait_for_edge | bool }}"
+    pve_edge_vm_not_started_reason: >-
+      wisp-{{ pve_site }} has a restart due (to shrink to its share of the host, among others); restart it
+      (one box at a time: its addresses go dark meanwhile), then re-run, or re-run with -e pve_edge_vm_reboot_for_pending=true

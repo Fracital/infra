@@ -1,0 +1,16 @@
+# Weekly pull requests for the pinned actions and controller tooling. CI checks them like
+# any other pull request; nothing is merged or applied on its own.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: pip
+    directory: /ansible
+    schedule:
+      interval: weekly

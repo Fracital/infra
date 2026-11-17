@@ -1,0 +1,183 @@
+---
+# Proxmox VE 9 on Debian 13, the wiki's steps (Install_Proxmox_VE_on_Debian_13_Trixie):
+# keyring + no-subscription repo, full-upgrade, Proxmox kernel, reboot, proxmox-ve,
+# Debian kernels and os-prober out, update-grub, reboot. Each step is a no-op once
+# done, so a run that died halfway picks up where it stopped; on a host that already
+# has pveversion the full-upgrade and the reboots are skipped outright.
+# Not done: the wiki's optional `apt modernize-sources` (debian_release's one-line
+# sources.list works as is).
+
+- name: Is Proxmox VE installed?
+  ansible.builtin.command: pveversion
+  register: pve_version
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Note whether Proxmox VE was there before this run
+  ansible.builtin.set_fact:
+    pve_present: "{{ pve_version.rc == 0 }}"
+
+# proxmox-archive-keyring (a proxmox-ve dependency) owns the file once installed and
+# updates it; the bootstrap download must never overwrite the packaged copy.
+- name: Is the proxmox-archive-keyring package installed?
+  ansible.builtin.command:
+    argv: [dpkg-query, -W, "-f=${db:Status-Abbrev}", proxmox-archive-keyring]
+  register: pve_keyring_pkg
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Fetch the Proxmox archive keyring (pinned checksum)
+  ansible.builtin.get_url:
+    url: "{{ pve_keyring_url }}"
+    dest: /usr/share/keyrings/proxmox-archive-keyring.gpg
+    checksum: "{{ pve_keyring_checksum }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: pve_keyring_pkg.stdout is not match('ii')
+
+- name: Add the {{ pve_repo_component }} repository (deb822)
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/pve-install-repo.sources
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by Ansible (roles/proxmox_host). Proxmox VE without a subscription.
+      Types: deb
+      URIs: {{ pve_repo_uri }}
+      Suites: {{ pve_repo_suite }}
+      Components: {{ pve_repo_component }}
+      Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg
+
+- name: Remove enterprise repositories
+  ansible.builtin.include_tasks: no-enterprise.yml
+
+- name: Bring Debian fully up to date (full-upgrade)
+  ansible.builtin.apt:
+    update_cache: true
+    upgrade: dist
+    dpkg_options: force-confdef,force-confold
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  when: not pve_present
+
+# pve-firmware replaces Debian's firmware-* packages; apt removes those here.
+- name: Install the Proxmox kernel
+  ansible.builtin.apt:
+    name: proxmox-default-kernel
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+
+- name: Read the running kernel
+  ansible.builtin.command: uname -r
+  register: pve_uname
+  changed_when: false
+  check_mode: false
+
+# On the old network config, which still works: the bridge comes later.
+- name: Reboot into the Proxmox kernel
+  ansible.builtin.reboot:
+    reboot_timeout: 900
+  when: pve_uname.stdout is not search('-pve$')
+
+- name: Re-read the running kernel
+  ansible.builtin.command: uname -r
+  register: pve_uname
+  changed_when: false
+  check_mode: false
+
+- name: Require the Proxmox kernel
+  ansible.builtin.assert:
+    that: pve_uname.stdout is search('-pve$')
+    fail_msg: "Booted {{ pve_uname.stdout }}, not a Proxmox kernel: check GRUB's default entry."
+    quiet: true
+  when: not ansible_check_mode
+
+# Before proxmox-ve, not after: its triggers rebuild the Proxmox initrd (~65 MB),
+# and a G-Core /boot of 244 MB that still holds two Debian kernels (11 -> 12 -> 13)
+# runs out of space mid-install. The Proxmox kernel is already running here.
+# argv, not a shell: the patterns go to dpkg-query unexpanded. rc 1 = nothing matched.
+- name: List the Debian kernels still installed
+  ansible.builtin.command:
+    argv: "{{ ['dpkg-query', '-W', pve_dpkg_format] + pve_remove_kernels }}"
+  vars:
+    pve_dpkg_format: '-f=${db:Status-Abbrev} ${Package}\n'
+  register: pve_debian_kernels
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Remove the Debian kernels and os-prober
+  ansible.builtin.apt:
+    name: "{{ (pve_debian_kernels.stdout_lines | select('match', '^ii') | map('split') | map('last') | list) + ['os-prober'] }}"
+    state: absent
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  register: pve_kernel_removal
+  when: pve_uname.stdout is search('-pve$')
+
+- name: Update GRUB
+  ansible.builtin.command: update-grub
+  changed_when: true
+  when: pve_kernel_removal is changed
+
+- name: Replace ifupdown with ifupdown2
+  ansible.builtin.include_tasks: ifupdown2.yml
+
+# Answered up front so the install never stops at a debconf prompt (the debconf
+# module reads answers with debconf-utils).
+- name: Install debconf-utils
+  ansible.builtin.apt:
+    name: debconf-utils
+    state: present
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+
+- name: Preseed postfix as Local only
+  ansible.builtin.debconf:
+    name: postfix
+    question: postfix/main_mailer_type
+    vtype: select
+    value: Local only
+
+- name: Preseed postfix's mail name
+  ansible.builtin.debconf:
+    name: postfix
+    question: postfix/mailname
+    vtype: string
+    value: "{{ pve_postfix_mailname }}"
+
+- name: Install Proxmox VE ({{ pve_packages | join(', ') }})
+  ansible.builtin.apt:
+    name: "{{ pve_packages }}"
+    state: present
+    dpkg_options: force-confdef,force-confold
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  register: pve_install
+
+# proxmox-ve's postinst drops pve-enterprise.sources and ceph.sources.
+- name: Remove the enterprise repositories proxmox-ve added
+  ansible.builtin.include_tasks: no-enterprise.yml
+
+- name: Reboot into the finished Proxmox VE
+  ansible.builtin.reboot:
+    reboot_timeout: 900
+  when: pve_install is changed and not pve_present
+
+- name: Read the Proxmox VE version
+  ansible.builtin.command: pveversion
+  register: pve_version
+  changed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+
+- name: Show the Proxmox VE version
+  ansible.builtin.debug:
+    msg: "{{ pve_version.stdout | default('') }}"

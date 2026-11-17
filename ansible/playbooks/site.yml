@@ -1,0 +1,30 @@
+---
+# Full deployment: bring up every abulxt edge and wire them to amph.
+#
+# Run order matters: the origin (Redis + firewall) must be up before edges try
+# to use the shared store. Apply with:
+#   ansible-playbook playbooks/site.yml --vault-password-file <file>
+
+- name: Configure amph origin (shared Redis store + firewall)
+  hosts: origin
+  gather_facts: true
+  roles:
+    - abulxt_origin
+    - { role: fail2ban, tags: ["fail2ban"] }
+
+- name: Install and configure OpenResty on all edges
+  hosts: edge
+  gather_facts: true
+  pre_tasks:
+    # amph's SSH pubkey, so edge_network can revoke it (the removed watchdog's
+    # login). Read from amph (origin) into a hostvar.
+    - name: Read amph's SSH public key from the origin host
+      ansible.builtin.set_fact:
+        amph_ssh_pubkey: "{{ hostvars[groups['origin'][0]].amph_pubkey }}"
+
+  roles:
+    - edge_network
+    - openresty
+    - edge_relay
+    - { role: edge_firewall, tags: ["firewall"] }
+    - { role: fail2ban, tags: ["fail2ban"] }

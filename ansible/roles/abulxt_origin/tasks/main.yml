@@ -1,0 +1,189 @@
+---
+# Configure amph (origin dedi) to support the multi-edge fleet:
+#   1. Redis bound to the public interface, password-protected: the shared
+#      lua-resty-auto-ssl store (certs + ACME http-01 tokens) for all edges.
+#   2. Open amph's firewall so every edge subnet can reach:
+#        6379  shared auto-ssl Redis
+#        8822  abulxt-domains validator (/ask?target=edge)
+#        9080  origin-internal reverse-proxy target (edge → amph traffic)
+#      Previously only the 45.82.161.0/24 (ashburn) subnet was allowed.
+
+# Read amph's own ed25519 pubkey so the edge play can revoke it on the edges
+# (the removed byod watchdog's login, roles/edge_network).
+- name: Read amph's SSH public key
+  ansible.builtin.slurp:
+    src: /root/.ssh/id_ed25519.pub
+  register: amph_pubkey_b64
+  failed_when: false
+
+- name: Expose amph's SSH pubkey for other plays
+  ansible.builtin.set_fact:
+    amph_pubkey: "{{ amph_pubkey_b64.content | b64decode | trim }}"
+  when: amph_pubkey_b64.content is defined
+
+- name: Install redis-server
+  ansible.builtin.apt:
+    name: redis-server
+    state: present
+    update_cache: true
+
+- name: Render redis config for shared auto-ssl storage
+  ansible.builtin.template:
+    src: redis-autossl.conf.j2
+    dest: /etc/redis/redis.conf
+    owner: redis
+    group: redis
+    mode: "0640"
+  notify: restart redis
+
+- name: Ensure redis is enabled and started
+  ansible.builtin.systemd:
+    name: redis-server
+    state: started
+    enabled: true
+
+# The address amph sees an edge's traffic from: edge_origin_source when the edge reaches amph
+# over a private network (the edge on divide's vmbr1, 172.16.5.10/32), else its edge_subnet.
+# abulxt_edge_subnets_override (host_vars/amph.yml), when set, replaces the computed list.
+- name: Build the list of edge source subnets
+  ansible.builtin.set_fact:
+    abulxt_edge_subnets: "{{ abulxt_edge_subnets | default([]) + [hostvars[item].edge_origin_source | default(hostvars[item].edge_subnet)] }}"
+  loop: "{{ groups['edge'] }}"
+  when:
+    - abulxt_edge_subnets_override | default([]) | length == 0
+    - hostvars[item].edge_origin_source is defined or hostvars[item].edge_subnet is defined
+
+- name: Use the edge subnets set for this host (abulxt_edge_subnets_override)
+  ansible.builtin.set_fact:
+    abulxt_edge_subnets: "{{ abulxt_edge_subnets_override }}"
+  when: abulxt_edge_subnets_override | default([]) | length > 0
+
+- name: Install updated abulxt firewall script on amph
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../origin/abulxt-firewall.sh"
+    dest: /usr/local/sbin/abulxt-firewall.sh
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Persist edge subnets for the boot-time firewall service
+  # abulxt-firewall.service re-runs the script at boot; without this file it
+  # only allows ashburn's subnet and the other edges lose Redis (fallback cert)
+  # and the 9080 relay.
+  ansible.builtin.copy:
+    dest: /etc/abulxt/firewall.env
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by Ansible (abulxt_origin). Read by abulxt-firewall.service.
+      EDGE_SUBNETS="{{ abulxt_edge_subnets | join(' ') }}"
+      AUTO_SSL_REDIS_PORT={{ auto_ssl_redis_port }}
+      SHADY_RELAY_PORT={{ shady_relay_port }}
+
+- name: Create the abulxt-firewall drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/abulxt-firewall.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Make abulxt-firewall.service read the edge subnets
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/abulxt-firewall.service.d/edge-subnets.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Service]
+      EnvironmentFile=-/etc/abulxt/firewall.env
+  register: abulxt_firewall_dropin
+
+- name: Reload systemd after the firewall drop-in changes
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: abulxt_firewall_dropin.changed
+
+- name: Open firewall for edge subnets (9080, 8822, 6379, 1082)
+  ansible.builtin.command: /usr/local/sbin/abulxt-firewall.sh
+  environment:
+    EDGE_SUBNETS: "{{ abulxt_edge_subnets | join(' ') }}"
+    AUTO_SSL_REDIS_PORT: "{{ auto_ssl_redis_port }}"
+    SHADY_RELAY_PORT: "{{ shady_relay_port }}"
+  # The script is installed to /usr/local/sbin (where amph's abulxt-firewall
+  # systemd unit runs it from); we re-run it with the widened edge subnets.
+
+# amph relays the mc subdomains to the Eaglercraft backend on its local subnet
+# (the remote edges can't route to it). Edges forward here with the original
+# Host header.
+- name: Render Eaglercraft / MC panel relay on amph
+  ansible.builtin.template:
+    src: mc-relay.conf.j2
+    dest: "{{ openresty_conf_dir }}/conf.d/25-mc-relay.conf"
+    owner: root
+    group: root
+    mode: "0644"
+
+# estro.help: edges relay it here like any byod name; amph forwards over the VLAN.
+# `--tags estro` renders only this file (skips the firewall rebuild).
+- name: Render estro.help relay on amph
+  ansible.builtin.template:
+    src: estro-relay.conf.j2
+    dest: "{{ openresty_conf_dir }}/conf.d/57-estro.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [estro]
+  notify: reload openresty on amph
+
+# Shady-traffic hop: edges' Wisp routers forward "shady" streams here over an
+# authenticated SOCKS5 relay that chains into mullvad-pool (127.0.0.1:1080),
+# so those streams exit via a Mullvad relay instead of the edge's own IP.
+- name: Ensure /opt/abulxt and /etc/abulxt exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop: [/opt/abulxt, /etc/abulxt]
+
+- name: Install shady-relay.py
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../byod/shady-relay.py"
+    dest: /opt/abulxt/shady-relay.py
+    owner: root
+    group: root
+    mode: "0755"
+  notify: restart shady relay
+
+- name: Render shady-relay credential
+  ansible.builtin.copy:
+    dest: /etc/abulxt/shady-relay.json
+    owner: root
+    group: root
+    mode: "0600"
+    content: "{{ {'user': shady_relay_user, 'pass': shady_relay_password} | to_nice_json }}\n"
+  notify: restart shady relay
+
+- name: Install shady-relay systemd unit
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../byod/shady-relay.service"
+    dest: /etc/systemd/system/shady-relay.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: shady_relay_unit
+
+- name: Reload systemd when the relay unit changes
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: shady_relay_unit.changed
+
+- name: Enable and start shady-relay
+  ansible.builtin.systemd:
+    name: shady-relay.service
+    enabled: true
+    state: started
+  notify: reload openresty on amph

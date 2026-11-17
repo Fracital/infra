@@ -1,0 +1,343 @@
+/* ============================================================
+   Map-select screen. Consumes the base design tokens (base.css):
+   --c-panel, --c-emerald/gold/diamond/redstone/lapis, mc-* classes.
+   All ids/classes are namespaced .ms-* to avoid clashing with other
+   screens sharing #screen-root.
+   ============================================================ */
+
+.ms-root {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    background:
+        radial-gradient(ellipse at 50% -10%, rgba(70, 55, 110, 0.35), transparent 60%),
+        var(--c-bg);
+    color: var(--c-text);
+}
+
+/* ---------------- header ---------------- */
+
+.ms-header {
+    flex: 0 0 auto;
+    height: 66px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 0 22px;
+    background: linear-gradient(rgba(30, 24, 42, 0.9), rgba(18, 14, 26, 0.9));
+    border-bottom: 2px solid var(--c-border-dark);
+    box-shadow: inset 0 -2px 0 rgba(255, 255, 255, 0.05);
+}
+
+.ms-back { min-width: 92px; }
+.ms-header-spacer { min-width: 92px; }
+
+.ms-title {
+    flex: 1 1 auto;
+    text-align: center;
+    font-size: 30px;
+    color: var(--c-gold);
+}
+
+/* ---------------- body + sections ---------------- */
+
+.ms-body {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    padding: 22px 26px 40px;
+}
+
+.ms-section { margin-bottom: 30px; }
+
+.ms-section-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+    padding-bottom: 6px;
+    border-bottom: 2px solid rgba(255, 255, 255, 0.08);
+}
+
+.ms-section-chip {
+    width: 16px;
+    height: 16px;
+    border: 2px solid #000;
+    box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.35);
+}
+
+.ms-section-label {
+    font-size: 19px;
+    font-weight: 800;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    text-shadow: var(--shadow-px);
+}
+
+.ms-section-count {
+    font-size: 12px;
+    letter-spacing: 1px;
+    color: var(--c-text-dim);
+}
+
+.ms-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 16px;
+}
+
+/* ---------------- map card ---------------- */
+
+.ms-card {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    cursor: pointer;
+    transition: transform 0.09s, filter 0.09s;
+    outline: none;
+}
+
+.ms-card:hover,
+.ms-card:focus-visible {
+    transform: translateY(-3px);
+    filter: brightness(1.12);
+    box-shadow:
+        inset 2px 2px 0 rgba(0, 0, 0, 0.7),
+        inset -2px -2px 0 rgba(255, 255, 255, 0.08),
+        inset 0 0 0 2px var(--c-gold),
+        0 6px 16px rgba(0, 0, 0, 0.55);
+}
+
+.ms-card:active { transform: translateY(-1px); }
+
+.ms-thumb-wrap {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    overflow: hidden;
+    background: #0d0b13;
+    border-bottom: 2px solid #000;
+}
+
+.ms-thumb {
+    display: block;
+    width: 100%;
+    height: 100%;
+    image-rendering: pixelated;
+}
+
+.ms-card-info {
+    padding: 8px 10px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.ms-card-name {
+    font-size: 15px;
+    font-weight: 700;
+    text-shadow: var(--shadow-px);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ms-card-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+}
+
+.ms-biome-tag {
+    font-size: 11px;
+    letter-spacing: 0.5px;
+    color: var(--c-text-dim);
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    padding: 2px 7px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ms-medals {
+    display: flex;
+    gap: 4px;
+    flex: 0 0 auto;
+}
+
+.ms-medal-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #221d2c;
+    border: 1px solid #000;
+    box-shadow: inset 1px 1px 0 rgba(0, 0, 0, 0.6);
+}
+
+.ms-medal-dot.earned {
+    border-color: rgba(255, 255, 255, 0.5);
+}
+
+/* ---------------- difficulty modal ---------------- */
+
+.ms-modal-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 40;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(6, 4, 12, 0.72);
+    backdrop-filter: blur(2px);
+}
+
+.ms-modal {
+    width: 560px;
+    max-width: calc(100% - 60px);
+    max-height: calc(100% - 60px);
+    overflow-y: auto;
+    padding: 22px 24px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.ms-modal-head { text-align: center; }
+
+.ms-modal-title {
+    font-size: 26px;
+    font-weight: 900;
+    letter-spacing: 1px;
+    color: var(--c-gold);
+    text-shadow: var(--shadow-px);
+}
+
+.ms-modal-sub {
+    font-size: 13px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    margin-top: 2px;
+}
+
+.ms-modal-thumb {
+    display: block;
+    width: 100%;
+    height: auto;
+    image-rendering: pixelated;
+    border: 2px solid #000;
+    box-shadow: inset 0 0 0 2px var(--c-border-light);
+}
+
+.ms-modal-desc {
+    font-size: 13px;
+    line-height: 1.45;
+    text-align: center;
+}
+
+.ms-diff-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+
+.ms-diff-btn {
+    --diff-color: var(--c-gold);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px 14px;
+    text-align: left;
+    cursor: pointer;
+    background: linear-gradient(rgba(48, 42, 62, 0.9), rgba(30, 25, 40, 0.9));
+    border: 2px solid #000;
+    box-shadow:
+        inset 0 0 0 2px rgba(255, 255, 255, 0.06),
+        inset 0 2px 0 rgba(255, 255, 255, 0.12);
+    color: var(--c-text);
+    transition: transform 0.08s, filter 0.08s, box-shadow 0.08s;
+}
+
+.ms-diff-btn:hover {
+    filter: brightness(1.12);
+    box-shadow:
+        inset 0 0 0 2px var(--diff-color),
+        inset 0 2px 0 rgba(255, 255, 255, 0.12);
+}
+
+.ms-diff-btn:active { transform: translateY(2px); }
+
+.ms-diff-name {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 19px;
+    font-weight: 800;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    text-shadow: var(--shadow-px);
+}
+
+.ms-diff-medal {
+    font-size: 14px;
+    color: #241c04;
+    background: var(--c-gold);
+    border: 1px solid #000;
+    border-radius: 50%;
+    width: 20px;
+    height: 20px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 0 8px rgba(252, 220, 95, 0.7);
+}
+
+.ms-diff-stats {
+    display: flex;
+    gap: 10px;
+}
+
+.ms-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex: 1 1 0;
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    padding: 5px 4px;
+}
+
+.ms-stat-label {
+    font-size: 10px;
+    letter-spacing: 1px;
+    color: var(--c-text-dim);
+}
+
+.ms-stat-value {
+    font-size: 17px;
+    font-weight: 800;
+    color: var(--c-emerald);
+}
+
+.ms-diff-hardcore {
+    grid-column: 1 / -1;
+    box-shadow:
+        inset 0 0 0 2px rgba(176, 60, 240, 0.5),
+        inset 0 2px 0 rgba(255, 255, 255, 0.1);
+}
+
+.ms-diff-warn {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    color: var(--c-redstone);
+    text-shadow: var(--shadow-px);
+}
+
+.ms-modal-close { align-self: center; margin-top: 2px; }
+
+/* fit five columns down to a comfortable minimum on very short stages */
+@media (max-height: 640px) {
+    .ms-header { height: 56px; }
+    .ms-title { font-size: 24px; }
+}

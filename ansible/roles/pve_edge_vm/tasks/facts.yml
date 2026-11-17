@@ -1,0 +1,129 @@
+---
+# The VM's settings, from this host's facts and the VM's host_vars. Runs no
+# command on the host (tasks/vm.yml uses it, and so can a local render).
+# The addressing keys are <pve_edge_vm_hostvar_prefix><name>: edge_subnet etc.
+# for wisp-<site> (its edge roles read the same keys), kn_subnet etc. for kn-<site>.
+
+- name: "{{ pve_edge_vm_name }} is in [{{ pve_edge_vm_group }}]"
+  ansible.builtin.assert:
+    that:
+      - pve_edge_vm_name in hostvars
+      - pve_edge_vm_name in groups.get(pve_edge_vm_group, [])
+    fail_msg: 'Add {{ pve_edge_vm_name }} to [{{ pve_edge_vm_group }}] with host_vars/{{ pve_edge_vm_name }}.yml (README.md "Edge VM on Proxmox").'
+    quiet: true
+
+- name: "{{ pve_edge_vm_name }}'s addressing is set"
+  vars:
+    _vm: "{{ hostvars[pve_edge_vm_name] }}"
+    _p: "{{ pve_edge_vm_hostvar_prefix }}"
+  ansible.builtin.assert:
+    that:
+      - _vm.ansible_host is defined
+      - _vm.ansible_host is match('^[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+$')
+      - _vm[_p ~ 'subnet'] is defined
+      - _vm[_p ~ 'subnet'] is match('^[0-9.]+/[0-9]+$')
+      - _vm[_p ~ 'ipv4_gateway'] is defined or pve_gateway is defined
+      - _vm[_p ~ 'primary_if'] | default('') == pve_edge_vm_guest_if
+    fail_msg: >-
+      host_vars/{{ pve_edge_vm_name }}.yml needs ansible_host (its first IPv4), {{ _p }}subnet (a.b.c.d/n) and
+      {{ _p }}primary_if: {{ pve_edge_vm_guest_if }} (the VM's NIC, named by cloud-init), and a gateway:
+      {{ _p }}ipv4_gateway there or pve_gateway in host_vars/{{ inventory_hostname }}.yml.
+    quiet: true
+
+- name: Collect {{ pve_edge_vm_name }}'s addresses
+  vars:
+    _vm: "{{ hostvars[pve_edge_vm_name] }}"
+    _p: "{{ pve_edge_vm_hostvar_prefix }}"
+  ansible.builtin.set_fact:
+    pve_edge_vm_ipv4_first: "{{ _vm.ansible_host }}"
+    pve_edge_vm_subnet: "{{ _vm[_p ~ 'subnet'] }}"
+    pve_edge_vm_subnet_prefix: "{{ _vm[_p ~ 'subnet'].split('/')[1] | int }}"
+    # edge_network adds the extra IPv4s live with this prefix too: the two must agree.
+    pve_edge_vm_ipv4_prefix: "{{ _vm[_p ~ 'ipv4_prefix'] | default(_vm[_p ~ 'subnet'].split('/')[1]) | int }}"
+    pve_edge_vm_ipv4_gateway: "{{ _vm[_p ~ 'ipv4_gateway'] | default(pve_gateway) }}"
+    pve_edge_vm_ipv4_extra: "{{ _vm[_p ~ 'extra_interface_ips'] | default([]) }}"
+    pve_edge_vm_ipv6_all: "{{ _vm[_p ~ 'extra_interface_ips_v6'] | default([]) }}"
+    pve_edge_vm_ipv6_gateway: "{{ _vm[_p ~ 'ipv6_gateway'] | default('') }}"
+    pve_edge_vm_host_address: "{{ pve_main_ip | default(ansible_host) | default(inventory_hostname) }}"
+    pve_edge_vm_host_address_v6: "{{ (pve_ipv6 | default('')).split('/')[0] }}"
+
+# Every IPv4 of the VM and its gateway in edge_subnet (integer compare: no
+# netaddr on the controller). Empty = all inside.
+- name: Check {{ pve_edge_vm_name }}'s IPv4s against edge_subnet
+  ansible.builtin.set_fact:
+    pve_edge_vm_ipv4_outside: >-
+      {%- set ns = namespace(out=[]) -%}
+      {%- set size = 2 ** (32 - (pve_edge_vm_subnet_prefix | int)) -%}
+      {%- set n = pve_edge_vm_subnet.split('/')[0].split('.') | map('int') | list -%}
+      {%- set base = (n[0] * 16777216 + n[1] * 65536 + n[2] * 256 + n[3]) // size -%}
+      {%- for a in [pve_edge_vm_ipv4_first, pve_edge_vm_ipv4_gateway] + pve_edge_vm_ipv4_extra -%}
+      {%- set o = (a ~ '.0.0.0.0').split('.')[:4] | map('int') | list -%}
+      {%- if (o[0] * 16777216 + o[1] * 65536 + o[2] * 256 + o[3]) // size != base -%}
+      {%- set ns.out = ns.out + [a] -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ ns.out | join(' ') }}
+
+# The hv keeps its management address (and pve_ipv6, if it has one); the VM must
+# never claim it (that would take the Proxmox host off the network).
+- name: The addresses are consistent
+  ansible.builtin.assert:
+    that:
+      - pve_edge_vm_ipv4_prefix | int == pve_edge_vm_subnet_prefix | int
+      - pve_edge_vm_ipv4_prefix | int >= 8 and pve_edge_vm_ipv4_prefix | int <= 30
+      - pve_edge_vm_ipv4_outside | length == 0
+      - pve_edge_vm_ipv4_first != pve_edge_vm_host_address
+      - pve_edge_vm_ipv4_gateway != pve_edge_vm_ipv4_first
+      - pve_edge_vm_host_address not in pve_edge_vm_ipv4_extra
+      - pve_edge_vm_ipv4_gateway not in pve_edge_vm_ipv4_extra
+      - pve_edge_vm_ipv4_extra | unique | length == pve_edge_vm_ipv4_extra | length
+      - pve_edge_vm_host_address_v6 | length == 0
+        or pve_edge_vm_host_address_v6 not in (pve_edge_vm_ipv6_all | map('regex_replace', '/.*$', '') | list)
+      - pve_edge_vm_ipv6_all | length == 0 or pve_edge_vm_ipv6_gateway | length > 0
+    fail_msg: >-
+      {%- set p = pve_edge_vm_hostvar_prefix -%}
+      {{ pve_edge_vm_name }}: {{ p }}ipv4_prefix ({{ pve_edge_vm_ipv4_prefix }}) must equal {{ p }}subnet's prefix
+      ({{ pve_edge_vm_subnet_prefix }}), and ansible_host, the gateway and {{ p }}extra_interface_ips must lie in
+      {{ p }}subnet (outside: {{ pve_edge_vm_ipv4_outside | default('none', true) }}). Neither ansible_host nor
+      {{ p }}extra_interface_ips may hold {{ inventory_hostname }}'s own address {{ pve_edge_vm_host_address }}
+      or the gateway (nor {{ p }}extra_interface_ips_v6 its pve_ipv6), {{ p }}extra_interface_ips must not repeat,
+      and IPv6 addresses need {{ p }}ipv6_gateway.
+    quiet: true
+
+# IPv4: the first address, then the others (deduplicated against it). IPv6 as
+# edge_network adds it: "<addr>/<prefix>", a bare address is a /128.
+- name: Size {{ pve_edge_vm_name }} and lay out its network
+  ansible.builtin.set_fact:
+    pve_edge_vm_ipv4_addresses: >-
+      {{ ([pve_edge_vm_ipv4_first]
+          + ((pve_edge_vm_ipv4_extra | reject('equalto', pve_edge_vm_ipv4_first) | list)
+             if pve_edge_vm_cloudinit_all_addresses | bool else []))
+         | map('regex_replace', '$', '/' ~ pve_edge_vm_ipv4_prefix) | list }}
+    pve_edge_vm_ipv6_addresses: >-
+      {{ (pve_edge_vm_ipv6_all if pve_edge_vm_cloudinit_all_addresses | bool else pve_edge_vm_ipv6_all[:1])
+         | map('regex_replace', '^([^/]+)$', '\1/128') | list }}
+    # What the host has left after its reserve and its other VMs (_others: the kn
+    # VM's pinned size, 0 without one). The kn pass pins its own size.
+    pve_edge_vm_size_cores: >-
+      {{ (pve_edge_vm_cores | default([(pve_edge_vm_host_threads | int) - (pve_edge_vm_cores_reserve | int)
+                                        - (pve_edge_vm_cores_others | int),
+                                       pve_edge_vm_cores_min | int] | max)) | int }}
+    # Whole GiB, so a kernel update that moves MemTotal by a few MiB does not
+    # change the VM's size (a pending change on every box).
+    pve_edge_vm_size_memory_mb: >-
+      {{ (pve_edge_vm_memory_mb | default([((pve_edge_vm_host_memory_mb | int) - (pve_edge_vm_memory_reserve_mb | int)
+                                            - (pve_edge_vm_memory_others_mb | int)) // 1024 * 1024,
+                                           pve_edge_vm_memory_min_mb | int] | max)) | int }}
+    pve_edge_vm_mac_upper: "{{ pve_edge_vm_mac | trim | upper }}"
+
+- name: Fix the NIC's queue count
+  ansible.builtin.set_fact:
+    pve_edge_vm_size_queues: "{{ [pve_edge_vm_size_cores | int, pve_edge_vm_queues_max | int] | min }}"
+
+- name: The MAC is a unicast address
+  ansible.builtin.assert:
+    that:
+      - pve_edge_vm_mac_upper is match('^([0-9A-F]{2}:){5}[0-9A-F]{2}$')
+      - (pve_edge_vm_mac_upper[0:2] | int(base=16)) % 2 == 0
+    fail_msg: "pve_edge_vm_mac '{{ pve_edge_vm_mac }}' is not a unicast MAC address."
+    quiet: true

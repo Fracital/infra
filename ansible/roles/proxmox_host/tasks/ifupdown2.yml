@@ -1,0 +1,111 @@
+---
+# Proxmox manages /etc/network/interfaces with ifupdown2 (`ifreload -a` is how the GUI
+# and this role apply it), and proxmox-ve pulls it in anyway. Installed here on its
+# own, from the Proxmox repo, before proxmox-ve: swapping ifupdown out over SSH is the
+# step forum reports blame for boxes that dropped off the network or hung in
+# postinst. So it runs detached from the SSH session (async), under an armed rescue
+# timer: if Ansible cannot log in again within pve_net_rescue_seconds, the timer checks
+# the network, brings the on-disk config back up if it is dead, and reboots as the
+# last resort (the on-disk config is still the panel's working one).
+- name: Is ifupdown2 installed?
+  ansible.builtin.command:
+    argv: [dpkg-query, -W, "-f=${db:Status-Abbrev}", ifupdown2]
+  register: pve_ifupdown2_pkg
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+# ifupdown2 has been reported not to bring `allow-hotplug` interfaces up at boot, and
+# `ifreload -a` (the rescue) only handles `auto` ones. ifupdown treats the two alike
+# for a NIC present at boot, so the panel's file is switched to `auto` first.
+- name: Mark the panel's interfaces auto instead of allow-hotplug
+  ansible.builtin.replace:
+    path: /etc/network/interfaces
+    regexp: '^allow-hotplug(\s+)'
+    replace: 'auto\1'
+    backup: true
+
+- name: Install ifupdown2 under the network rescue timer
+  when:
+    - pve_ifupdown2_pkg.stdout is not match('ii')
+    - not ansible_check_mode
+  block:
+    # systemd module can't reset-failed or ignore a unit that doesn't exist.
+    - name: Clear any leftover rescue unit # noqa: command-instead-of-module
+      ansible.builtin.shell: |
+        systemctl stop pve-net-rescue.timer pve-net-rescue.service 2>/dev/null
+        systemctl reset-failed pve-net-rescue.timer pve-net-rescue.service 2>/dev/null
+        true
+      changed_when: false
+
+    - name: Arm the network rescue, seconds = {{ pve_net_rescue_seconds }}
+      ansible.builtin.command:
+        argv:
+          "{{ ['systemd-run', '--unit=pve-net-rescue', '--description=Proxmox host network rescue (armed by Ansible)',
+          '--on-active=' ~ pve_net_rescue_seconds, '/usr/local/sbin/pve-net-rescue', '-'] + pve_net_probes }}"
+      changed_when: true
+
+    - name: Install ifupdown2 (detached from this SSH session)
+      ansible.builtin.apt:
+        name: ifupdown2
+        state: present
+        dpkg_options: force-confdef,force-confold
+      environment:
+        DEBIAN_FRONTEND: noninteractive
+      # Generous on purpose: async kills the job at this limit, even mid-dpkg.
+      async: 900
+      poll: 0
+      register: pve_ifupdown2_job
+
+    - name: Drop the multiplexed SSH connection
+      ansible.builtin.meta: reset_connection
+
+    - name: Log in again on a fresh SSH connection (the rescue fires if this fails)
+      ansible.builtin.wait_for_connection:
+        delay: 5
+        timeout: "{{ (pve_net_rescue_seconds | int) - 60 }}"
+
+    - name: Wait for the ifupdown2 install to finish
+      ansible.builtin.async_status:
+        jid: "{{ pve_ifupdown2_job.ansible_job_id }}"
+      register: pve_ifupdown2_result
+      until: pve_ifupdown2_result.finished
+      retries: 120
+      delay: 5
+
+    # Unlike the rollback, a rescue that already fired is not an error: with the
+    # network up it did nothing (journalctl -t pve-net-rescue), and we are logged in.
+    - name: Disarm the network rescue # noqa: command-instead-of-module
+      ansible.builtin.shell: |
+        if systemctl is-active --quiet pve-net-rescue.timer; then
+          systemctl stop pve-net-rescue.timer
+        else
+          echo "rescue timer already fired (see journalctl -t pve-net-rescue)"
+        fi
+        systemctl reset-failed pve-net-rescue.timer pve-net-rescue.service 2>/dev/null
+        true
+      register: pve_rescue_disarm
+      changed_when: true
+
+    - name: Show the rescue's state
+      ansible.builtin.debug:
+        msg: "{{ pve_rescue_disarm.stdout }}"
+      when: pve_rescue_disarm.stdout | length > 0
+
+- name: Require ifupdown2 and no ifupdown
+  ansible.builtin.command:
+    argv:
+      [
+        dpkg-query,
+        -W,
+        "-f=${Package} ${db:Status-Abbrev}\\n",
+        ifupdown2,
+        ifupdown,
+      ]
+  register: pve_ifupdown_pkgs
+  changed_when: false
+  failed_when: >-
+    pve_ifupdown_pkgs.stdout_lines | select('match', '^ifupdown2 ii') | list | length != 1
+    or pve_ifupdown_pkgs.stdout_lines | select('match', '^ifupdown ii') | list | length != 0
+  check_mode: false
+  when: not ansible_check_mode

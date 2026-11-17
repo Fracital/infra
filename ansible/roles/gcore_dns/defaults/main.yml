@@ -1,0 +1,25 @@
+---
+gcore_api_base: https://api.gcore.com/dns/v2
+# Gcore Free plan enforces a minimum TTL of 120s.
+gcore_dns_ttl: 120
+
+# (Disabled, see tasks/main.yml.) Healthchecks: Gcore probes each address in the RRset and stops returning any
+# that fail, so a dead edge IP drops out of the round-robin automatically.
+# This is an RRset-level `meta.failover` object plus an `is_healthy` picker.
+# We probe HTTPS on each edge (every advertised IP terminates TLS + relays to
+# amph, so a 200 on / means the whole edge→origin path is up).
+gcore_healthcheck_enabled: false
+gcore_healthcheck:
+  protocol: HTTP
+  method: GET
+  port: 443
+  tls: true
+  host: "{{ abulxt_byod_fqdn }}"
+  url: /
+  http_status_code: 200
+  frequency: 300 # probe interval seconds; Gcore Free plan minimum is 300
+  timeout: 5 # per-probe timeout seconds (1-10)
+# is_healthy picker: limit=0 returns all healthy records, strict=false falls
+# back to returning all records if every probe fails (better than NXDOMAIN).
+gcore_healthcheck_picker_limit: 0
+gcore_healthcheck_picker_strict: false

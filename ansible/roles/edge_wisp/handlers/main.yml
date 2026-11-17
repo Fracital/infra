@@ -1,0 +1,10 @@
+---
+- name: restart edge router
+  ansible.builtin.systemd:
+    name: abulxt-edge-router.service
+    state: restarted
+
+- name: restart edge wisp
+  ansible.builtin.systemd:
+    name: abulxt-edge-wisp.service
+    state: restarted

@@ -1,0 +1,131 @@
+---
+# Install OpenResty + lua-resty-auto-ssl on an edge (Debian 11/12/13).
+# Mirrors the proven manual setup on abulxt-ashburn:
+#   - openresty from the official openresty.org apt repo
+#   - lua-resty-auto-ssl + deps via luarocks (not packaged)
+#   - fallback self-signed cert in /etc/resty-auto-ssl
+
+- name: Install apt prerequisites
+  ansible.builtin.apt:
+    name:
+      - build-essential
+      - ca-certificates
+      - curl
+      - gnupg
+      - lsb-release
+      - luarocks
+      - openssl
+      - rsync
+    state: present
+    update_cache: true
+
+- name: Detect Debian codename
+  ansible.builtin.command: lsb_release -cs
+  register: debian_codename
+  changed_when: false
+
+- name: Resolve openresty apt suite (per-host override or OS codename)
+  ansible.builtin.set_fact:
+    openresty_apt_suite: "{{ openresty_apt_suite | default(debian_codename.stdout) }}"
+
+- name: Download openresty ASCII GPG key
+  ansible.builtin.get_url:
+    url: https://openresty.org/package/pubkey.gpg
+    dest: /tmp/openresty-pubkey.gpg
+    mode: "0644"
+  register: openresty_key
+
+- name: Dearmor openresty GPG key into keyring
+  ansible.builtin.command: gpg --batch --yes --dearmor -o /usr/share/keyrings/openresty.gpg /tmp/openresty-pubkey.gpg
+  when: openresty_key.changed
+
+- name: Add openresty apt repository (deb822 format)
+  ansible.builtin.deb822_repository:
+    name: openresty
+    types: deb
+    uris: "https://openresty.org/package/debian"
+    suites: "{{ openresty_apt_suite }}"
+    components: openresty
+    signed_by: /usr/share/keyrings/openresty.gpg
+    state: present
+  when: openresty_install_method | default('apt') == 'apt'
+
+- name: Install openresty via apt
+  ansible.builtin.apt:
+    name: openresty
+    state: present
+    update_cache: true
+  when: openresty_install_method | default('apt') == 'apt'
+
+# Debian 13 (trixie) edges: apt's sqv verifier rejects OpenResty's SHA1-signed
+# repo, so install the pinned bookworm .debs directly (dpkg resolves deps from
+# the same pool). Pinned to the same versions running on abulxt-ashburn.
+- name: Download openresty .debs (Debian 13 direct install)
+  ansible.builtin.get_url:
+    url: "https://openresty.org/package/debian/pool/openresty/o/{{ item.pkg }}/{{ item.file }}"
+    dest: "/tmp/{{ item.file }}"
+    mode: "0644"
+  loop:
+    - {
+        pkg: openresty-openssl3,
+        file: "openresty-openssl3_3.5.7-1~bookworm1_amd64.deb",
+      }
+    - {
+        pkg: openresty-pcre2,
+        file: "openresty-pcre2_10.48-1~bookworm1_amd64.deb",
+      }
+    - {
+        pkg: openresty-zlib,
+        file: "openresty-zlib_1.3.2-1~bookworm1_amd64.deb",
+      }
+    - { pkg: openresty, file: "openresty_1.31.1.1-1~bookworm1_amd64.deb" }
+  when: openresty_install_method | default('apt') == 'debs'
+
+- name: Install openresty .debs together (Debian 13 direct install)
+  # Install all four in one dpkg transaction so inter-package deps resolve.
+  ansible.builtin.command: >
+    dpkg -i
+    /tmp/openresty-openssl3_3.5.7-1~bookworm1_amd64.deb
+    /tmp/openresty-pcre2_10.48-1~bookworm1_amd64.deb
+    /tmp/openresty-zlib_1.3.2-1~bookworm1_amd64.deb
+    /tmp/openresty_1.31.1.1-1~bookworm1_amd64.deb
+  register: openresty_dpkg
+  changed_when: openresty_dpkg.rc == 0
+  failed_when: openresty_dpkg.rc != 0 and 'already installed' not in openresty_dpkg.stderr
+  when: openresty_install_method | default('apt') == 'debs'
+
+- name: Check if lua-resty-auto-ssl is installed
+  ansible.builtin.stat:
+    path: /usr/local/share/lua/5.1/resty/auto-ssl.lua
+  register: auto_ssl_rock
+
+- name: Install lua-resty-auto-ssl via luarocks
+  ansible.builtin.command: luarocks install lua-resty-auto-ssl
+  when: not auto_ssl_rock.stat.exists
+
+- name: Create auto-ssl state directory
+  ansible.builtin.file:
+    path: "{{ openresty_auto_ssl_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Generate fallback self-signed certificate (if absent)
+  ansible.builtin.command: >
+    openssl req -new -newkey rsa:2048 -days 3650 -nodes -x509
+    -subj /CN=fallback
+    -keyout {{ openresty_auto_ssl_dir }}/fallback.key
+    -out {{ openresty_auto_ssl_dir }}/fallback.crt
+  args:
+    creates: "{{ openresty_auto_ssl_dir }}/fallback.crt"
+
+- name: Set fallback cert permissions
+  ansible.builtin.file:
+    path: "{{ openresty_auto_ssl_dir }}/{{ item.name }}"
+    owner: www-data
+    group: www-data
+    mode: "{{ item.mode }}"
+  loop:
+    - { name: fallback.key, mode: "0600" }
+    - { name: fallback.crt, mode: "0644" }

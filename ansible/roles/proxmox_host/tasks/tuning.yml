@@ -1,0 +1,105 @@
+---
+# Modest tuning for 10 GbE that is bridged to VMs, and the one thing that must never
+# happen on this host: bridged VM frames going through the host's netfilter.
+
+# irqbalance spreads the ixgbe/i40e queue interrupts over the cores (they all land on
+# CPU 0 without it). ethtool: the ring script and the bond MAC lookup.
+- name: Install irqbalance and ethtool
+  ansible.builtin.apt:
+    name: [irqbalance, ethtool]
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+
+- name: Keep irqbalance enabled and running
+  ansible.builtin.systemd:
+    name: irqbalance
+    enabled: true
+    state: started
+
+- name: Network sysctls ({{ pve_sysctl_file }})
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_file: "{{ pve_sysctl_file }}"
+    state: present
+    reload: true
+  loop: "{{ pve_sysctl | dict2items }}"
+  loop_control:
+    label: "{{ item.key }} = {{ item.value }}"
+
+# br_netfilter makes bridged IPv4/IPv6/ARP frames traverse the host's iptables/nftables
+# hooks (bridge-nf-call-* default to 1 when it loads). The fleet's edge_firewall base
+# has `chain forward { policy drop; }`, so with it loaded every VM would go dark.
+# Nothing here needs it (no pve-firewall, no docker). Whenever anything loads it, the
+# install hook sets the three switches back to 0 in the same modprobe call; they are
+# not in sysctl.d because the keys only exist once the module is in. Reversible:
+# delete the file.
+- name: Keep bridged traffic out of netfilter when br_netfilter loads
+  ansible.builtin.copy:
+    dest: /etc/modprobe.d/abulxt-pve-no-bridge-nf.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by Ansible (roles/proxmox_host tasks/tuning.yml). Bridged VM traffic must
+      # not hit the host firewall (its forward chain drops): bridge-nf-call-* stay 0.
+      install br_netfilter /usr/sbin/modprobe --ignore-install br_netfilter $CMDLINE_OPTS && /usr/sbin/sysctl -q -w net.bridge.bridge-nf-call-iptables=0 net.bridge.bridge-nf-call-ip6tables=0 net.bridge.bridge-nf-call-arptables=0
+
+- name: Turn bridge netfilter off now if the module is already loaded
+  ansible.builtin.shell: |
+    set -eu
+    [ -d /proc/sys/net/bridge ] || exit 0
+    for key in bridge-nf-call-iptables bridge-nf-call-ip6tables bridge-nf-call-arptables; do
+      f=/proc/sys/net/bridge/$key
+      [ -e "$f" ] || continue
+      if [ "$(cat "$f")" != 0 ]; then
+        echo 0 > "$f"
+        echo "changed $key"
+      fi
+    done
+  register: pve_bridge_nf
+  changed_when: "'changed' in pve_bridge_nf.stdout"
+
+# Proxmox kernels (6.8+) put the IOMMU in translated mode, and under the VM's disk load
+# the G-Core boxes' megaraid_sas controller then fails DMA mapping ("sge_count (-12) is
+# out of range", ENOMEM) until the host's IO wedges: hv-jnb hung 2026-11-12 with ping and
+# the SSH banner up but every disk-touching process stuck, and needed a panel reset.
+# iommu=pt leaves host devices untranslated (VFIO passthrough still works). Takes effect
+# on the next boot: the play reboots only when pve_kernel_reboot is true.
+- name: Kernel command line ({{ pve_kernel_cmdline | join(' ') }})
+  ansible.builtin.copy:
+    dest: /etc/default/grub.d/abulxt-pve.cfg
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by Ansible (roles/proxmox_host tasks/tuning.yml).
+      GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT {{ pve_kernel_cmdline | join(' ') }}"
+  register: pve_grub_cmdline
+  when: pve_kernel_cmdline | length > 0
+
+- name: Update GRUB for the kernel command line
+  ansible.builtin.command: update-grub
+  when: pve_grub_cmdline is changed
+
+- name: Read the running kernel command line
+  ansible.builtin.slurp:
+    src: /proc/cmdline
+  register: pve_proc_cmdline
+
+- name: Reboot for the kernel command line
+  ansible.builtin.reboot:
+    reboot_timeout: 900
+  when:
+    - pve_kernel_reboot | bool
+    - pve_kernel_cmdline | reject('in', (pve_proc_cmdline.content | b64decode).split()) | list | length > 0
+
+- name: Warn that the kernel command line waits for a reboot
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }} boots with {{ pve_kernel_cmdline | join(' ') }} only after a reboot (pve_kernel_reboot=true reboots it)."
+  when:
+    - not (pve_kernel_reboot | bool)
+    - pve_kernel_cmdline | reject('in', (pve_proc_cmdline.content | b64decode).split()) | list | length > 0

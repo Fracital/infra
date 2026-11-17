@@ -1,0 +1,562 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>wisp.baby: internet speed test over Wisp</title>
+		<meta
+			name="description"
+			content="How fast is your connection through Wisp? A speed test that runs entirely over the Wisp protocol."
+		/>
+		<meta name="color-scheme" content="light dark" />
+		<link rel="icon" href="favicon.svg" type="image/svg+xml" />
+		<link rel="stylesheet" href="styles.css" />
+		<script type="module" src="app.js"></script>
+	</head>
+	<body data-mode="gcore" data-state="idle">
+		<a class="skip" href="#main">Skip to the result</a>
+
+		<header class="top">
+			<a class="wordmark" href="./" aria-label="wisp.baby home"
+				><span>wisp<span class="wordmark-tld">.baby</span></span></a
+			>
+			<a
+				class="source"
+				href="https://github.com/Fracital/wisp.baby"
+				aria-label="Source on GitHub"
+				title="Source on GitHub"
+			>
+				<svg
+					viewBox="0 0 16 16"
+					width="22"
+					height="22"
+					aria-hidden="true"
+					focusable="false"
+				>
+					<path
+						fill="currentColor"
+						d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"
+					/>
+				</svg>
+			</a>
+		</header>
+
+		<main id="main" class="main">
+			<section class="result" aria-labelledby="speed-label">
+				<p id="speed-label" class="speed-label">Your Internet speed is</p>
+
+				<div class="speed-row" id="speed-row">
+					<div
+						class="speed"
+						id="speed"
+						aria-live="polite"
+						aria-atomic="true"
+						aria-busy="true"
+					>
+						<span class="speed-value" id="speed-value">0</span>
+						<span class="speed-units" id="speed-units">Mbps</span>
+					</div>
+					<div class="speed-side">
+						<span class="spinner" id="spinner" aria-hidden="true"></span>
+						<button
+							type="button"
+							class="restart"
+							id="restart"
+							hidden
+							aria-label="Run the test again"
+						>
+							<svg
+								viewBox="0 0 24 24"
+								width="26"
+								height="26"
+								aria-hidden="true"
+								focusable="false"
+							>
+								<path
+									d="M20 12a8 8 0 1 1-2.34-5.66"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="1.8"
+									stroke-linecap="round"
+								/>
+								<path
+									d="M20.5 3.5v4.75h-4.75"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="1.8"
+									stroke-linecap="round"
+									stroke-linejoin="round"
+								/>
+							</svg>
+						</button>
+					</div>
+				</div>
+
+				<div class="error" id="error" role="alert" hidden>
+					<p class="error-msg" id="error-msg">Something went wrong.</p>
+					<button type="button" class="btn" id="retry">Try again</button>
+				</div>
+			</section>
+
+			<section class="modes" aria-label="Test servers">
+				<div
+					class="switch"
+					role="radiogroup"
+					aria-label="Where the test servers are"
+					id="switch"
+				>
+					<span class="switch-thumb" aria-hidden="true"></span>
+					<button
+						type="button"
+						class="switch-opt"
+						role="radio"
+						data-mode="gcore"
+						id="opt-gcore"
+						aria-checked="true"
+					>
+						<span class="switch-name">G-Core</span
+						><span class="switch-sub">self-hosted</span>
+					</button>
+					<button
+						type="button"
+						class="switch-opt"
+						role="radio"
+						data-mode="netflix"
+						id="opt-netflix"
+						aria-checked="false"
+						tabindex="-1"
+					>
+						<span class="switch-name">Netflix</span
+						><span class="switch-sub">proxied</span>
+					</button>
+				</div>
+
+				<figure class="route" id="route">
+					<ol class="route-path" aria-label="Path the test traffic takes">
+						<li class="node node-you">
+							<span class="node-dot" aria-hidden="true"></span
+							><span class="node-label">You</span>
+						</li>
+						<li class="link" aria-hidden="true">
+							<span class="link-line"></span>
+						</li>
+						<li class="node node-wisp">
+							<span class="node-dot" aria-hidden="true"></span
+							><span class="node-label">Wisp</span>
+						</li>
+						<li class="link" aria-hidden="true">
+							<span class="link-line"></span>
+						</li>
+						<li class="node node-box">
+							<span class="node-dot" aria-hidden="true"></span
+							><span class="node-label" id="route-box">wisp.baby</span>
+						</li>
+						<li class="link link-oca" aria-hidden="true">
+							<span class="link-line"></span>
+						</li>
+						<li class="node node-oca">
+							<span class="node-dot" aria-hidden="true"></span
+							><span class="node-label">Netflix Open Connect</span>
+						</li>
+					</ol>
+					<figcaption class="route-caption" id="route-caption">
+						The wisp box is the test server
+					</figcaption>
+				</figure>
+			</section>
+
+			<div class="more-toggle">
+				<button
+					type="button"
+					class="linkish"
+					id="more-btn"
+					aria-expanded="false"
+					aria-controls="more"
+				>
+					Show more info
+				</button>
+			</div>
+
+			<section class="more" id="more" hidden aria-label="More info">
+				<div class="metrics">
+					<div class="metric">
+						<h2 class="metric-title">Latency</h2>
+						<div class="metric-pair">
+							<div
+								class="metric-cell"
+								id="lat-unloaded-cell"
+								data-measuring="true"
+							>
+								<span class="metric-num"
+									><span id="lat-unloaded">–</span
+									><span class="metric-unit">ms</span></span
+								>
+								<span class="metric-sub">Unloaded</span>
+							</div>
+							<div
+								class="metric-cell"
+								id="lat-loaded-cell"
+								data-measuring="true"
+							>
+								<span class="metric-num"
+									><span id="lat-loaded">–</span
+									><span class="metric-unit">ms</span></span
+								>
+								<span class="metric-sub">Loaded</span>
+							</div>
+						</div>
+					</div>
+					<div class="metric">
+						<h2 class="metric-title">Upload speed</h2>
+						<div class="metric-cell" id="up-cell" data-measuring="true">
+							<span class="metric-num"
+								><span id="up-value">–</span
+								><span class="metric-unit" id="up-units">Mbps</span></span
+							>
+							<span class="metric-sub" id="up-status"
+								>Waiting for the download</span
+							>
+						</div>
+					</div>
+				</div>
+
+				<dl class="facts">
+					<div class="fact">
+						<dt>Data used</dt>
+						<dd>
+							<span id="data-down">0</span> MB down,
+							<span id="data-up">0</span> MB up
+						</dd>
+					</div>
+					<div class="fact">
+						<dt>Wisp server</dt>
+						<dd id="fact-wisp">…</dd>
+					</div>
+					<div class="fact">
+						<dt>Test servers</dt>
+						<dd id="fact-targets">…</dd>
+					</div>
+				</dl>
+
+				<div class="more-actions">
+					<button
+						type="button"
+						class="linkish"
+						id="settings-btn"
+						aria-expanded="false"
+						aria-controls="settings"
+					>
+						Settings
+					</button>
+				</div>
+
+				<form class="settings" id="settings" hidden novalidate>
+					<fieldset>
+						<legend>Parallel connections</legend>
+						<label
+							>Min
+							<input
+								type="number"
+								name="connMin"
+								min="1"
+								max="8"
+								step="1"
+								inputmode="numeric"
+								required
+						/></label>
+						<label
+							>Max
+							<input
+								type="number"
+								name="connMax"
+								min="1"
+								max="8"
+								step="1"
+								inputmode="numeric"
+								required
+						/></label>
+					</fieldset>
+					<fieldset>
+						<legend>Test duration (seconds)</legend>
+						<label
+							>Min
+							<input
+								type="number"
+								name="durMin"
+								min="5"
+								max="30"
+								step="1"
+								inputmode="numeric"
+								required
+						/></label>
+						<label
+							>Max
+							<input
+								type="number"
+								name="durMax"
+								min="5"
+								max="30"
+								step="1"
+								inputmode="numeric"
+								required
+						/></label>
+					</fieldset>
+					<label class="check"
+						><input type="checkbox" name="showAll" /> Always show all
+						metrics</label
+					>
+					<p class="settings-err" id="settings-err" role="alert" hidden></p>
+					<div class="settings-actions">
+						<button type="submit" class="btn btn-primary">Save</button>
+						<button type="button" class="btn" id="settings-cancel">
+							Cancel
+						</button>
+					</div>
+				</form>
+			</section>
+
+			<section
+				class="live"
+				id="live"
+				aria-labelledby="live-title"
+				data-state="loading"
+			>
+				<header class="live-head">
+					<h2 class="live-title" id="live-title">Live on the relay</h2>
+					<p class="live-now">
+						<span class="live-now-num"
+							><span id="live-rate">–</span
+							><span class="live-now-unit" id="live-rate-units"
+								>Gbps</span
+							></span
+						>
+						<span class="live-now-sub" id="live-now-sub"
+							>through all five boxes, right now</span
+						>
+					</p>
+				</header>
+
+				<figure class="chart" id="chart">
+					<div class="chart-bar">
+						<div
+							class="tabs"
+							role="tablist"
+							aria-label="Graph time range"
+							id="chart-tabs"
+						>
+							<button
+								type="button"
+								role="tab"
+								class="tab"
+								data-view="m10"
+								id="tab-m10"
+								aria-selected="true"
+								aria-controls="chart-plot"
+							>
+								10 min
+							</button>
+							<button
+								type="button"
+								role="tab"
+								class="tab"
+								data-view="h24"
+								id="tab-h24"
+								aria-selected="false"
+								aria-controls="chart-plot"
+								tabindex="-1"
+							>
+								24 h
+							</button>
+							<button
+								type="button"
+								role="tab"
+								class="tab"
+								data-view="d7"
+								id="tab-d7"
+								aria-selected="false"
+								aria-controls="chart-plot"
+								tabindex="-1"
+							>
+								7 days
+							</button>
+						</div>
+						<div
+							class="tabs"
+							role="group"
+							aria-label="Split the graph"
+							id="chart-split"
+							hidden
+						>
+							<button
+								type="button"
+								class="tab"
+								data-split="box"
+								aria-pressed="true"
+							>
+								By box
+							</button>
+							<button
+								type="button"
+								class="tab"
+								data-split="domain"
+								aria-pressed="false"
+							>
+								By domain
+							</button>
+						</div>
+						<span class="chart-peak" id="chart-peak"></span>
+					</div>
+					<div
+						class="chart-plot"
+						id="chart-plot"
+						role="tabpanel"
+						aria-labelledby="tab-m10"
+					>
+						<svg
+							class="chart-svg"
+							id="chart-svg"
+							aria-hidden="true"
+							focusable="false"
+						></svg>
+						<div class="chart-tip" id="chart-tip" hidden></div>
+						<p class="chart-empty" id="chart-empty">
+							Collecting the first samples…
+						</p>
+					</div>
+					<figcaption class="sr-only" id="chart-caption">
+						Relay throughput by box.
+					</figcaption>
+					<ul class="sites" id="sites" aria-label="The boxes, right now"></ul>
+				</figure>
+
+				<div class="panels">
+					<section class="panel" aria-labelledby="you-title">
+						<h3 class="panel-title" id="you-title">You</h3>
+						<dl class="kv" id="you">
+							<div>
+								<dt>Your IP</dt>
+								<dd><code id="you-ip">–</code></dd>
+							</div>
+							<div>
+								<dt>Location</dt>
+								<dd id="you-geo">–</dd>
+							</div>
+							<div>
+								<dt>Your box</dt>
+								<dd id="you-box">–</dd>
+							</div>
+							<div>
+								<dt>Round trip</dt>
+								<dd id="you-rtt">–</dd>
+							</div>
+							<div>
+								<dt>Open sessions</dt>
+								<dd id="you-open">–</dd>
+							</div>
+							<div>
+								<dt>Last 24 h</dt>
+								<dd id="you-day">–</dd>
+							</div>
+						</dl>
+					</section>
+
+					<section class="panel" aria-labelledby="all-title">
+						<h3 class="panel-title" id="all-title">Everyone</h3>
+						<table class="totals">
+							<thead>
+								<tr>
+									<th scope="col"><span class="sr-only">Measure</span></th>
+									<th scope="col">5 h</th>
+									<th scope="col">7 d</th>
+									<th scope="col">30 d</th>
+									<th scope="col">All time</th>
+								</tr>
+							</thead>
+							<tbody>
+								<tr>
+									<th scope="row">Data moved</th>
+									<td id="t-bytes-h5">–</td>
+									<td id="t-bytes-d7">–</td>
+									<td id="t-bytes-d30">–</td>
+									<td id="t-bytes-all">–</td>
+								</tr>
+								<tr>
+									<th scope="row">Speed tests</th>
+									<td id="t-st-h5">–</td>
+									<td id="t-st-d7">–</td>
+									<td id="t-st-d30">–</td>
+									<td id="t-st-all">–</td>
+								</tr>
+								<tr>
+									<th scope="row">Sessions</th>
+									<td id="t-sess-h5">–</td>
+									<td id="t-sess-d7">–</td>
+									<td id="t-sess-d30">–</td>
+									<td id="t-sess-all">–</td>
+								</tr>
+							</tbody>
+						</table>
+						<dl class="kv kv-tight">
+							<div>
+								<dt>Open right now</dt>
+								<dd id="g-open">–</dd>
+							</div>
+							<div>
+								<dt>Clients today</dt>
+								<dd id="g-today">–</dd>
+							</div>
+							<div>
+								<dt>Clients, 30 days</dt>
+								<dd id="g-d30">–</dd>
+							</div>
+							<div>
+								<dt>IP-days, 30 days</dt>
+								<dd id="g-ipdays">–</dd>
+							</div>
+							<div>
+								<dt>Peak, 24 h</dt>
+								<dd id="g-peak">–</dd>
+							</div>
+							<div>
+								<dt>byod domains</dt>
+								<dd id="g-byod">–</dd>
+							</div>
+						</dl>
+						<table class="totals dom-totals" id="dom-totals" hidden>
+							<caption>
+								By domain
+							</caption>
+							<thead>
+								<tr>
+									<th scope="col"><span class="sr-only">Domain</span></th>
+									<th scope="col">Open</th>
+									<th scope="col">5 h</th>
+									<th scope="col">30 d</th>
+									<th scope="col">All time</th>
+								</tr>
+							</thead>
+							<tbody id="dom-rows"></tbody>
+						</table>
+					</section>
+				</div>
+
+				<p class="live-note" id="live-note">
+					Counters only. No addresses are stored: distinct clients are counted
+					with a salted hash, and your own numbers stay on your box for 24
+					hours. Your traffic is added up when each connection closes. By
+					domain, each box splits its traffic by the sessions open on each
+					domain, weighted by what that domain's finished sessions used, so
+					those bytes are an estimate; session counts are exact. Location by
+					<a href="https://db-ip.com">DB-IP</a>.
+				</p>
+			</section>
+		</main>
+
+		<footer class="foot">
+			<p>Powered by G-Core</p>
+			<p class="foot-note">
+				The Wisp relay is public at <code id="relay-url">wss://wisp.baby/</code>
+			</p>
+		</footer>
+	</body>
+</html>

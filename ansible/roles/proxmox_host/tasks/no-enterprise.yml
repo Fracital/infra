@@ -1,0 +1,19 @@
+---
+# Any apt source pointing at enterprise.proxmox.com (pve-enterprise.sources,
+# ceph.sources, the older .list names): without a subscription key it answers 401 and
+# fails every `apt update`. The packages may add them back on upgrade; every run
+# removes them again.
+- name: Find enterprise repository files
+  ansible.builtin.find:
+    paths: /etc/apt/sources.list.d
+    patterns: ["*.sources", "*.list"]
+    contains: '^[^#]*enterprise\.proxmox\.com'
+  register: pve_enterprise_sources
+
+- name: Delete enterprise repository files
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ pve_enterprise_sources.files }}"
+  loop_control:
+    label: "{{ item.path }}"

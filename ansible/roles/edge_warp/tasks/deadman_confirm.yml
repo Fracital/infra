@@ -1,0 +1,50 @@
+---
+# Confirm the box from outside (the controller), then cancel the dead-man timer.
+# If any check fails, the play stops here and the timer undoes the change by itself.
+
+# A fresh SSH connection (the play's own connection is a multiplexed master opened
+# before the change). ansible_ssh_common_args carries the ProxyJump of a box behind NAT
+# (group_vars/divide_guests.yml).
+- name: A new SSH connection still reaches the box
+  ansible.builtin.command: >-
+    ssh -o ControlMaster=no -o ControlPath=none -o BatchMode=yes -o ConnectTimeout=10
+    {{ ansible_ssh_common_args | default('') }} root@{{ ansible_host }} true
+  changed_when: false
+  delegate_to: localhost
+  become: false
+
+# public_ip: the address clients reach when ansible_host is private (the edge on divide).
+- name: HTTPS on the main address still answers from outside
+  ansible.builtin.uri:
+    url: "https://{{ public_ip | default(ansible_host) }}/"
+    validate_certs: false
+    status_code: [200, 204, 301, 302, 400, 403, 404, 421]
+    timeout: 10
+  delegate_to: localhost
+  become: false
+
+# PowerDNS on :53 answers the wisp.baby apex, on a box that still runs it (edge_warp_check_dns;
+# off by default: PowerDNS is retired and nothing on the edge answers :53).
+- name: DNS on the main address still answers from outside
+  ansible.builtin.command:
+    argv:
+      [
+        dig,
+        +short,
+        +time=3,
+        +tries=2,
+        "@{{ public_ip | default(ansible_host) }}",
+        "{{ wisp_zone | default('wisp.baby') }}",
+        A,
+      ]
+  register: edge_warp_dig
+  changed_when: false
+  failed_when: edge_warp_dig.rc != 0 or edge_warp_dig.stdout | trim | length == 0
+  delegate_to: localhost
+  become: false
+  when: edge_warp_check_dns | bool
+
+- name: Disarm the dead-man switch
+  ansible.builtin.command: systemctl stop edge-warp-deadman.timer
+  changed_when: false
+  failed_when: false

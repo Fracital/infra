@@ -1,0 +1,19 @@
+---
+# Prettier owns layout (indentation, spacing, line breaks: npm run format); yamllint
+# keeps the checks Prettier does not make: syntax, duplicate keys, truthy values.
+extends: default
+ignore: |
+  node_modules/
+  ansible/inventory/group_vars/all/*secrets.yml
+rules:
+  line-length: disable
+  braces: disable
+  brackets: disable
+  commas: disable
+  comments: disable
+  comments-indentation: disable
+  document-start: disable
+  indentation: disable
+  truthy:
+    allowed-values: ["true", "false"]
+    check-keys: false

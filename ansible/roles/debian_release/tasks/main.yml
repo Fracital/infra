@@ -1,0 +1,16 @@
+---
+- name: Step Debian up to {{ debian_release_target }}
+  ansible.builtin.include_tasks: step.yml
+  loop: [1, 2]
+  loop_control:
+    label: "step {{ item }}"
+
+- name: Re-read the OS version
+  ansible.builtin.setup:
+    gather_subset: [min]
+
+- name: Require Debian {{ debian_release_target }}
+  ansible.builtin.assert:
+    that: ansible_facts.distribution_major_version | int >= debian_release_target | int
+    fail_msg: "Still on Debian {{ ansible_facts.distribution_major_version }}."
+    quiet: true
