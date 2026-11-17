@@ -488,18 +488,21 @@ sees the client's address and not the tunnel's.
 - **DNS**: each name is a proxied CNAME to `<tunnel id>.cfargotunnel.com` (the id is in the
   dashboard; like the other Zero Trust ids it stays out of this repository).
 
-Retired the same evening:
+Retired the same evening (2026-11-17, about 22:35 to 22:50 UTC):
 
-- The per-guest daemons on vault (tunnel `v`), chat (`chat`), guca (`guca`), holy (`holy`) and kru
-  (`kru`): `cloudflared.service` stopped and disabled (on holy also `cloudflared-update.timer`).
-  The tunnels themselves are kept for now. To roll a name back: start that guest's
-  `cloudflared.service` and point the CNAME back at the old tunnel's ID. Delete them once the
-  edge's tunnel has run for a few days.
-- eagler's `cloudflared.service` (tunnel `eagler`, no ingress): stopped and disabled.
-- DNS `kru.eli.gift`, `mcp.eli.gift`, `mcp2.eli.gift`, and the tunnels `goldenticket-mcp` and
-  `abulxt-mcp2` (both without a connector): deleted. kru's tunnel also listed krunk.io names whose
-  DNS is not on Cloudflare; those rows died with it.
-- giftshop's two tunnels are covered in "giftshop: retired" below.
+- The per-guest connectors on vault (tunnel `v`), chat (`chat`), guca (`guca`), holy (`holy`),
+  kru (`kru`) and eagler (`eagler`, which had no ingress): stopped, then removed with their
+  credentials (`cloudflared` itself, `/etc/cloudflared`, `/root/.cloudflared`, the token-mode
+  `cloudflared.service` and `cloudflared-update.*` units, the apt source). No guest but the edge
+  has `cloudflared` now.
+- Those six tunnels, giftshop's two (`giftshop` and `pages`), `goldenticket-mcp` and `abulxt-mcp2`:
+  deleted in Cloudflare, which also revokes the tokens that were in plain text in their units.
+  `divide-edge` is the account's only tunnel.
+- DNS `kru.eli.gift`, `mcp.eli.gift` and `mcp2.eli.gift`: deleted. kru's tunnel also listed
+  krunk.io names whose DNS is not on Cloudflare; those rows died with it.
+
+Rolling a name back now means a new tunnel: create it, run its connector where the origin is, and
+point the CNAME at it.
 
 ## holy: VM 127 to CT 205 (2026-11-17)
 
@@ -613,9 +616,10 @@ Redis. Everything moved as above; it was shut down cleanly at 22:27:30 UTC on 20
 
 - **Backup**: a vzdump of the stopped VM in `/var/lib/vz/dump/vzdump-qemu-111-2026_11_17-22_27_39.vma.zst` (30.5 GB),
   and the VM's disk itself. Keep both until 2026-12-01.
-- **Then**: `qm destroy 111`, delete the dump, remove `tap111i0` from both `divide_guests` sets,
-  and delete the two tunnels in Cloudflare (Zero Trust, Networks, Tunnels). The token-mode unit
-  had its tunnel token in plain text in a world-readable unit file; deleting the tunnel retires it.
+- **Then**: `qm destroy 111`, delete the dump, and remove `tap111i0` from both `divide_guests`
+  sets. The two tunnels are already deleted (with the others, "Cloudflare Tunnel" above), which
+  retired the token that was in plain text in the token-mode unit.
 
-Rollback: `qm start 111` (and "Rollback" under fg above for the game), then put pages.eli.gift
-back to the proxied CNAME from the saved record.
+Rollback: `qm start 111` (and "Rollback" under fg above for the game). pages.eli.gift's old
+tunnel is gone, so serving it from giftshop again needs a new one (or an edge route to
+172.16.5.78:80).
