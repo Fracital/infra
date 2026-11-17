@@ -49,7 +49,7 @@ Every guest's Proxmox tags follow one scheme, in this order (the UI shows them i
 2. **Project**, where the guest belongs to one: `abulxt`, `fracital`, `wisp-baby`, `holyunb`,
    `krunk`, `blockshooter`, `eaglercraft`, `estro`, `eli-gift`.
 3. **How traffic gets in**, any of: `in-edge` (served through the edge, directly or by way of
-   amph), `in-tunnel` (its own cloudflared tunnel), `in-dnat` (a port forward on divide, "NAT"
+   amph), `in-tunnel` (runs the cloudflared tunnel; only the edge since 2026-11-17), `in-dnat` (a port forward on divide, "NAT"
    below).
 4. **How it gets out**, when not plain NAT: `out-mullvad` (may use mull), `out-warp` (the edge's
    WARP tunnels).
@@ -57,29 +57,29 @@ Every guest's Proxmox tags follow one scheme, in this order (the UI shows them i
 
 The software a guest runs is its name and the table above, not a tag.
 
-| Guest                  | Tags                                              |
-| ---------------------- | ------------------------------------------------- |
-| vault (100)            | `app` `eli-gift` `in-tunnel`                      |
-| mull (101)             | `gateway` `in-dnat`                               |
-| eagler (104)           | `game` `eaglercraft` `in-edge` `in-dnat`          |
-| fun (105)              | `desktop` `legacy`                                |
-| chat (106)             | `app` `estro` `in-edge` `in-tunnel` `out-mullvad` |
-| fum (110)              | `desktop` `legacy` `out-mullvad`                  |
-| giftshop (111)         | `app` `eli-gift` (powered off 2026-11-17)         |
-| amph (113)             | `origin` `abulxt` `in-edge` `out-mullvad`         |
-| terp (116)             | `origin` `fracital` `in-edge` `in-dnat`           |
-| guca (117)             | `app` `eli-gift` `in-tunnel`                      |
-| kru (120)              | `origin` `krunk` `in-edge` `in-tunnel` `in-dnat`  |
-| wispdev (122)          | `dev` `wisp-baby`                                 |
-| mac (126)              | `ci`                                              |
-| wg (200)               | `vpn` `in-dnat`                                   |
-| edge (201)             | `edge` `in-dnat` `out-warp`                       |
-| blockshooter (202)     | `game` `blockshooter` `in-edge` `in-dnat`         |
-| kn (203)               | `game` `krunk` `in-dnat`                          |
-| runner (204)           | `ci`                                              |
-| holy (205)             | `origin` `holyunb` `in-edge` `in-tunnel`          |
-| fg (206)               | `game` `eli-gift` `in-edge`                       |
-| templates (9000, 9001) | `template`                                        |
+| Guest                  | Tags                                      |
+| ---------------------- | ----------------------------------------- |
+| vault (100)            | `app` `eli-gift` `in-edge`                |
+| mull (101)             | `gateway` `in-dnat`                       |
+| eagler (104)           | `game` `eaglercraft` `in-edge` `in-dnat`  |
+| fun (105)              | `desktop` `legacy`                        |
+| chat (106)             | `app` `estro` `in-edge` `out-mullvad`     |
+| fum (110)              | `desktop` `legacy` `out-mullvad`          |
+| giftshop (111)         | `app` `eli-gift` (powered off 2026-11-17) |
+| amph (113)             | `origin` `abulxt` `in-edge` `out-mullvad` |
+| terp (116)             | `origin` `fracital` `in-edge` `in-dnat`   |
+| guca (117)             | `app` `eli-gift` `in-edge`                |
+| kru (120)              | `origin` `krunk` `in-edge` `in-dnat`      |
+| wispdev (122)          | `dev` `wisp-baby`                         |
+| mac (126)              | `ci`                                      |
+| wg (200)               | `vpn` `in-dnat`                           |
+| edge (201)             | `edge` `in-dnat` `in-tunnel` `out-warp`   |
+| blockshooter (202)     | `game` `blockshooter` `in-edge` `in-dnat` |
+| kn (203)               | `game` `krunk` `in-dnat`                  |
+| runner (204)           | `ci`                                      |
+| holy (205)             | `origin` `holyunb` `in-edge`              |
+| fg (206)               | `game` `eli-gift` `in-edge`               |
+| templates (9000, 9001) | `template`                                |
 
 A guest that gains or loses a port forward, a tunnel or an edge route gets its `in-` tags changed
 in the same change (`pct set <id> --tags "a;b"`, `qm set` for VMs).
@@ -126,8 +126,10 @@ repaired offline with e2fsck before the rootfs was grown.
 
 ## Host firewall: /etc/nftables.conf
 
-Proxmox's own firewall (`proxmox-firewall`) is installed but **disabled**: the `nf_conntrack_bridge`
-module it needs broke the host's masquerade. divide runs a plain `nftables.service` instead.
+divide's own firewall, its NAT and the `vmbr1` bridge rules are a plain `nftables.service`. The
+guests' firewalls are Proxmox's legacy `pve-firewall` (iptables), see "Guest firewalls" below. The
+nftables engine, `proxmox-firewall`, is disabled (`systemctl disable`, and `nftables: 0` in
+`host.fw`): the `nf_conntrack_bridge` module it needs broke the host's masquerade.
 
 The file manages **only its own tables**. Each table starts with the create-then-delete idiom, so a
 reload replaces it without touching anyone else's:
@@ -156,6 +158,14 @@ Never `flush ruleset`: fail2ban keeps its bans in its own table, and a flush dro
 - **forward**: from the LAN (`vmbr1`) to the WAN and to the LAN is accepted. Traffic in from the
   WAN is accepted with `ct status dnat` (the port forwards below). The LAN's outbound connections
   also need their replies admitted (established/related): check the live file when you rebuild.
+  The first rule accepts `iifname "fwbr*"`: frames bridged inside a guest's Proxmox firewall
+  bridge, which `pve-firewall` filters.
+- **fwbr_zone** (prerouting, priority raw): `iifname "fwbr*" ct zone set 1`. With `br_netfilter`
+  a guest's packet is tracked twice, once bridged in its `fwbr` and again routed on `vmbr1`. The
+  routed pass needs its own conntrack entry to be NATed, so the bridged pass uses zone 1 (the
+  setup the Proxmox firewall docs give for masquerading hosts).
+- **hairpin_mark** (prerouting, priority dstnat + 10): `iifname "vmbr1" ct status dnat meta mark
+set meta mark | 0x4000`. `divide_guests` accepts that mark, see "The hairpin is bridged" below.
 
 ### `table ip divide_nat` (port forwards and NAT)
 
@@ -182,9 +192,13 @@ NAT:
 
 - `oifname bond0 masquerade`: the guests' egress is 91.199.82.174 (what Cloudflare Gateway, terp's
   old rules and every third party see).
-- **Hairpin**: `iifname vmbr1 oifname vmbr1 ct status dnat masquerade`. A guest that dials
-  91.199.82.174 is DNATed back onto `vmbr1` and arrives from 172.16.5.1. This is why wisp.baby's
-  speed test admits 172.16.5.0/24 (`host_vars/edge.yml` `wispbaby_speedtest_allow_extra`).
+- **Hairpin**: `oifname vmbr1 ip saddr 172.16.5.0/24 ct status dnat masquerade`. A guest that
+  dials 91.199.82.174 is DNATed back onto `vmbr1` and arrives from 172.16.5.1. This is why
+  wisp.baby's speed test admits 172.16.5.0/24 (`host_vars/edge.yml`
+  `wispbaby_speedtest_allow_extra`).
+- Both NAT chains start with `iifname "fwbr*" return` (prerouting) and `oifname "fwbr*" return`
+  (postrouting): the bridged pass inside a Proxmox firewall bridge is never NATed; the routed pass
+  on `vmbr1` is.
 
 ### `table bridge divide_guests` (guest-to-guest firewall)
 
@@ -192,13 +206,19 @@ The stateless equivalent of Proxmox's per-NIC `ipfilter`, on the `vmbr1` bridge:
 
 - **Anti-spoof**: a set of `ifname . ipv4_addr` pairs, one per guest port (`veth<ct>i0`,
   `tap<vm>i0`) and its address. An IPv4 frame from a guest port whose pair is not in the set is
-  dropped.
+  dropped. Since every guest NIC has `firewall=1`, the port on `vmbr1` is `fwpr<id>p<n>`, not in
+  the `ports` set, so this check is skipped and Proxmox's `ipfilter` does the job instead. A NIC
+  set back to `firewall=0` gets its old port name, and this check, back.
 - **forward**, policy drop. Allowed:
+  - anything inside a Proxmox firewall bridge (`meta ibrname "fwbr*"`): `pve-firewall` filters it
+  - the hairpin mark 0x4000 (below)
   - ARP
   - IPv6 other than tcp/udp (neighbour discovery)
   - ICMP
   - the WireGuard port (udp 51820, to and from wg 172.16.5.11), both ways
   - mull (`tap101i0`): in and out only to and from chat 172.16.5.64 and sm 172.16.5.37
+  - The rules that name a port list both names, the plain one and the firewall one:
+    `{ "veth200i0", "fwpr200p0" }` for wg and `{ "tap101i0", "fwpr101p0" }` for mull.
   - tcp without a lone SYN (it is stateless: established flows pass, new connections need a rule
     below)
   - new tcp from the edge 172.16.5.10 to the origins:
@@ -211,6 +231,9 @@ The stateless equivalent of Proxmox's per-NIC `ipfilter`, on the `vmbr1` bridge:
     | terp 172.16.5.62         | 443, 8443                       |
     | holy 172.16.5.79         | 8080                            |
     | fg 172.16.5.206          | 8787                            |
+    | guca 172.16.5.38         | 80 (the edge's cloudflared)     |
+    | vault 172.16.5.63        | 80 (the edge's cloudflared)     |
+    | chat 172.16.5.64         | 80 (the edge's cloudflared)     |
 
   - other guest-to-guest paths:
 
@@ -229,20 +252,22 @@ The stateless equivalent of Proxmox's per-NIC `ipfilter`, on the `vmbr1` bridge:
   Traffic between a guest and divide (its gateway, DNS, the NAT) is not bridged and does not
   pass this chain.
 
-  **The hairpin is bridged.** A guest that dials 91.199.82.174 for a port DNATed to another guest
-  is DNATed on the bridge (`br_netfilter`): the frame goes straight from its port to the other
-  guest's, from the guest's own address (the hairpin masquerade does not apply, its `oifname` is a
-  bridge port, not `vmbr1`), so this chain sees a new SYN between two guests and drops it unless a
-  rule above allows it. That is why amph and holy have their own tcp 443 lines to the edge. Found
-  2026-11-17 when pages.eli.gift moved to the edge: until then that name resolved to Cloudflare.
-  kn (172.16.5.94) to the edge's tcp 443 is dropped the same way (seen 22:11 to 22:19 UTC that
-  day, before the move).
+  **The hairpin is bridged.** `pve-firewall` turns on `br_netfilter` (and
+  `bridge-nf-call-iptables`) for every bridge. A guest that dials 91.199.82.174 for a port DNATed
+  to another guest is then DNATed in the bridge's prerouting, and `br_netfilter` bridges the frame
+  straight to the other guest's port instead of routing it, so this chain sees a new SYN between
+  two guests. It is still masqueraded (conntrack shows the reply going to 172.16.5.1). Since about
+  22:21 UTC on 2026-11-17, `inet divide hairpin_mark` marks every DNATed connection from `vmbr1` with
+  0x4000 and this chain accepts the mark, which is the same exposure as from the internet. Before
+  that, every guest's hairpin was dropped from 22:10 UTC (pve-firewall started) unless a pair rule
+  allowed it, which is why amph and holy also have their own tcp 443 lines to the edge.
 
 holy's pair is `veth205i0` (it was `tap127i1`, VM 127's second NIC, until 2026-11-17). fg's is
 `veth206i0` . 172.16.5.206 (CT 206, 2026-11-17).
 
-A new edge-to-origin path needs a line here as well as the origin's own firewall (amph:
-`abulxt-firewall.sh`, `EDGE_SUBNETS="172.16.5.0/24"`; terp: ufw, `roles/fracital_origin`).
+A new edge-to-origin path needs a line here, a rule in the guest's `/etc/pve/firewall/<id>.fw`
+(below), and the origin's own firewall where it has one (amph: `abulxt-firewall.sh`,
+`EDGE_SUBNETS="172.16.5.0/24"`; terp: ufw, `roles/fracital_origin`).
 
 ## CI keys on divide
 
@@ -291,41 +316,78 @@ Routes via mull (172.16.5.6, VM 101) to Mullvad's side, as `post-up ip route rep
 | wg (200)   | 10.64.0.0/16, 100.64.0.0/16, 10.124.0.0/16, 100.124.0.0/16   |
 
 wg masquerades its VPN clients (172.16.8.0/24) to 172.16.5.11 on eth0, so mull sees wg's address.
-The bridge firewall lets wg's port (`veth200i0`) talk to anyone, and mull forwards to
-`wg0-mullvad` from the LAN.
+The bridge firewall lets wg's port (`veth200i0`, `fwpr200p0` behind its Proxmox firewall) talk to
+anyone, and mull forwards to `wg0-mullvad` from the LAN.
 
 ## Guest firewalls
 
-Besides the bridge firewall on divide, the guests filter their own input (2026-11-17). On the
-containers below it is one nft table, `inet guestfw`, in `/etc/nftables.d/guestfw.nft`, included
-from `/etc/nftables.conf`. Input policy is drop; it accepts `lo`, established and related
-traffic, ICMP, SSH from divide (172.16.5.1) and the VPN (172.16.5.11), and then:
+Every guest NIC on `vmbr1` has `firewall=1` since 2026-11-17 (22:10 to 22:24 UTC), filtered by
+Proxmox's legacy `pve-firewall` (iptables and ipsets). Proxmox plugs such a NIC into its own bridge
+`fwbr<id>i<n>`, joined to `vmbr1` by the veth pair `fwln<id>i<n>` and `fwpr<id>p<n>`, and filters
+on that bridge. Not filtered: giftshop (VM 111, retired) and fum (VM 110, stopped).
 
-| Guest         | Also accepts                                              |
-| ------------- | --------------------------------------------------------- |
-| wispdev (122) | nothing                                                   |
-| vault (100)   | nothing (its tunnel reaches nginx over `lo`)              |
-| guca (117)    | nothing (its tunnel reaches nginx over `lo`)              |
-| holy (205)    | tcp 8080 from the edge 172.16.5.10 and amph 172.16.5.3    |
-| kn (203)      | tcp and udp 21015-21017, 21115 from anyone                |
-| runner (204)  | anything from `docker0` (job containers)                  |
-| kru (120)     | tcp 80, 443 from the edge; udp 21100 (kn-rtc, after DNAT) |
-| fg (206)      | tcp 8787 from the edge 172.16.5.10                        |
+Earlier that day the guests filtered themselves (an nft table `inet guestfw` in 7 CTs, and a
+narrowed ufw on eagler). That is all removed, and `divide/guestfw/` with it: guest rules belong in
+`/etc/pve/firewall`, not inside the guest. The firewalls the guests' own roles install are
+unchanged: amph's `abulxt-firewall.sh`, terp's ufw (`roles/fracital_origin`, it admits tcp 8443 only
+from Cloudflare), blockshooter's `inet bsfilter`, eagler's original ufw.
 
-The table is rendered and loaded by `divide/guestfw/apply.sh <ctid> [rule ...]` (run on divide,
-it arms a 180 s revert timer first) and kept by `divide/guestfw/persist.sh <ctid>`, which also
-deletes `flush ruleset` from `/etc/nftables.conf`. That line would otherwise wipe tables other
-services load on a restart of `nftables.service` (kru's `krurtc`, Docker's on the runner).
+- `/etc/pve/firewall/cluster.fw`: `enable: 1`; ipsets `mgmt` (divide 172.16.5.1, wg 172.16.5.11)
+  and `bs_game` (blockshooter's three game servers); security group `base`: icmp, ipv6-icmp, and
+  tcp 22 from `+dc/mgmt`.
+- `/etc/pve/nodes/divide/host.fw`: `enable: 0`, `nftables: 0`. divide's own input stays in
+  `/etc/nftables.conf`.
+- `/etc/pve/firewall/<id>.fw`: `policy_in: DROP`, `policy_out: ACCEPT`, `log_level_in: info`
+  (drops go to `/var/log/pve-firewall.log`), `ipfilter: 1` (the NIC may only send from its
+  configured address; a VM lists it in an `ipfilter-net<n>` ipset), `GROUP base`, and then:
 
-- **eagler (VM 104)** keeps ufw, narrowed to: SSH from divide and the VPN; tcp 80, 443, 8080 from
-  amph (the panel and Wings are reached edge, amph, eagler); tcp 3306 from `pterodactyl0`
-  (172.18.0.0/16); tcp 2022 (Wings SFTP) from anyone. Minecraft 25565/25566 is Docker's DNAT and
-  does not pass ufw. The old rules are in `/root/ufw-bak-20261117/`.
-- **bs (CT 202)** already had its own default-deny table (`inet bsfilter`).
-- **amph** (`abulxt-firewall.sh`) and **terp** (ufw from `roles/fracital_origin`) are default-deny
-  through their roles.
-- **Not yet**: the edge (`roles/edge_firewall` has never been applied on divide), chat, wg and mull.
-  wg and divide carry the operator's own VPN; chat and mull carry chat's traffic.
+| Guest         | Also accepts                                                                                             |
+| ------------- | -------------------------------------------------------------------------------------------------------- |
+| vault (100)   | tcp 80 from the edge (cloudflared)                                                                       |
+| mull (101)    | anything from 172.16.5.0/24 (the gateway: guest rules also see what it forwards); udp 51820              |
+| eagler (104)  | tcp 443, 8080, 25565 from amph; tcp 2022, 25565, 25566 and udp 25565, 25566                              |
+| chat (106)    | tcp 80 from amph and the edge; 8317, 8318 from wg; 5900, 8088 from `mgmt`; 22 from the runner; udp 33190 |
+| amph (113)    | tcp 80, 443, 1082, 6379, 8822, 9080 from the edge                                                        |
+| terp (116)    | tcp 443, 8443 from the edge; tcp 8443 (the DNAT); tcp 22 from the runner                                 |
+| guca (117)    | tcp 80 from the edge (cloudflared)                                                                       |
+| kru (120)     | tcp 80, 443 from the edge; udp 21100                                                                     |
+| wispdev (122) | nothing                                                                                                  |
+| mac (126)     | tcp 5900 from `mgmt`                                                                                     |
+| wg (200)      | udp 51820                                                                                                |
+| edge (201)    | tcp 53, 80, 443, 8080 and udp 53, 443                                                                    |
+| bs (202)      | tcp 80, 8080 from the edge; udp 4433, 8443; tcp 7778 from `bs_game`                                      |
+| kn (203)      | tcp and udp 21015-21017, 21115                                                                           |
+| runner (204)  | nothing                                                                                                  |
+| holy (205)    | tcp 8080 from the edge and amph                                                                          |
+| fg (206)      | tcp 8787 from the edge                                                                                   |
+
+A port with no source listed admits anyone: the port forwards keep the internet source, and the
+hairpin arrives from 172.16.5.1. mull and wg have `ipfilter: 0` because they forward traffic that
+is not from their own address. The `vmbr1` bridge rules above still apply as well, so a new
+guest-to-guest path needs a line in both.
+
+Changing it:
+
+- Edit the `.fw` file. `pve-firewall` applies it within about 10 s; `pve-firewall compile` prints
+  the iptables it would load.
+- `divide/pvefw/fwnic.sh <id> <n> <0|1>` (in `/root` on divide) sets `firewall=` on `net<n>`, a
+  live replug. Arm the undo first, `systemd-run --on-active=150 /root/fwnic.sh <id> <n> 0`, check
+  with `divide/pvefw/fwcheck.sh <id> <ip>`, then stop the timer. wg carries the operator's VPN, so
+  its switch ran detached (`systemd-run`) and went last.
+- Turn it all off: `systemctl stop pve-firewall`, `enable: 0` in `cluster.fw`, and
+  `sysctl -w net.bridge.bridge-nf-call-iptables=0`. The NICs can stay on their `fwbr`: with no
+  rules it just bridges. The configs from before are in `/root/pvefw-bak/` on divide.
+
+Things learned on the way:
+
+- `pve-firewall` sets `net.bridge.bridge-nf-call-iptables=1`, for every bridge. Each frame bridged
+  on `vmbr1` then crosses the inet and ip hooks with `iifname` the bridge, which is what the
+  `fwbr*` rules, the zone and the hairpin mark in `/etc/nftables.conf` are for.
+- `nf_conntrack_bridge` stays unloaded (it was removed with `modprobe -r`); only the nftables
+  engine wants it.
+- Moving a NIC onto its `fwbr` starts its flows in a new conntrack zone. FINs of connections
+  opened before the move count as INVALID and are dropped (the first rule of `PVEFW-FORWARD`); they
+  stop once those connections age out.
 
 ## TCP tuning and modules
 
@@ -384,6 +446,55 @@ not leave through WARP. `roles/edge_warp` adds `to 91.199.82.174 tcp dport 80 lo
 `divide.eli.gift` `/.well-known/acme-challenge/` goes to 172.16.5.1:80, and the rest of that name
 is a 301 to `:8006`.
 
+## Cloudflare Tunnel: one daemon on the edge (2026-11-17)
+
+Every Cloudflare Tunnel hostname on divide comes in through one tunnel, **`divide-edge`**
+(`d9c69781-5dac-4b6f-9bf0-f4f1c5dea137`), run by the edge. It replaced six daemons, one per guest.
+Set up by hand: no role renders it yet.
+
+- **On the edge**: the `cloudflared` package from `pkg.cloudflare.com/cloudflared`
+  (`/etc/apt/sources.list.d/cloudflared.list`, key `/usr/share/keyrings/cloudflare-main.gpg`),
+  `/etc/systemd/system/cloudflared-divide-edge.service` (`cloudflared --no-autoupdate --metrics
+127.0.0.1:20241 tunnel run`), and the tunnel token as `TUNNEL_TOKEN=` in
+  `/etc/cloudflared/divide-edge.env` (mode 600, never in the unit or the process list).
+- **Ingress is remotely managed** (Cloudflare, Zero Trust, Networks, Tunnels, `divide-edge`):
+
+| Hostname                    | Service                   | Notes                                                            |
+| --------------------------- | ------------------------- | ---------------------------------------------------------------- |
+| `holy.eli.gift`             | `http://172.16.5.79:8080` | website2                                                         |
+| `g.eli.gift`                | `http://172.16.5.38:80`   | guca's nginx (Guacamole)                                         |
+| `v.eli.gift`                | `http://172.16.5.63:80`   | vault's nginx; its tunnel vhost also listens on 172.16.5.63:80   |
+| `chat.eli.gift`             | `http://172.16.5.64:80`   | chat                                                             |
+| `krunker.party`             | `https://127.0.0.1:443`   | the edge's krunk.io relay as `assets.krunk.io`, `noTLSVerify`    |
+| `coordinator.krunker.party` | `https://127.0.0.1:443`   | as `coordinator.krunk.io` (`originServerName`, `httpHostHeader`) |
+| `matchmaker.krunker.party`  | `https://127.0.0.1:443`   | as `matchmaker.krunk.io`                                         |
+| anything else               | `http_status:404`         |                                                                  |
+
+The krunker.party names ride the edge's own krunk.io relay (OpenResty to kru :443 with the
+pinned certificate and `X-KN-Edge-Token`), because kru's apps listen on `127.0.0.1` only. The
+edge has no certificate for `assets.krunk.io` (issuing fails), hence `noTLSVerify` on that one
+row. A Cloudflare redirect answers `krunker.party` itself first (301 to `https://krunk.io/`, path
+kept). The edge's `nginx.conf` trusts `CF-Connecting-IP` from `127.0.0.1` and `::1` too, so kru
+sees the client's address and not the tunnel's.
+
+- **Firewall**: the edge reaches guca, vault and chat on tcp 80 (their `.fw` files and
+  `divide_guests` from_edge), holy on 8080. The tunnel's own connections leave like every edge
+  connection, through VLAN 2832 (`edge_out`), over QUIC.
+- **DNS**: each name is a proxied CNAME to `d9c69781-5dac-4b6f-9bf0-f4f1c5dea137.cfargotunnel.com`.
+
+Retired the same evening:
+
+- The per-guest daemons on vault (tunnel `v`), chat (`chat`), guca (`guca`), holy (`holy`) and kru
+  (`kru`): `cloudflared.service` stopped and disabled (on holy also `cloudflared-update.timer`).
+  The tunnels themselves are kept for now. To roll a name back: start that guest's
+  `cloudflared.service` and point the CNAME back at the old tunnel's ID. Delete them once the
+  edge's tunnel has run for a few days.
+- eagler's `cloudflared.service` (tunnel `eagler`, no ingress): stopped and disabled.
+- DNS `kru.eli.gift`, `mcp.eli.gift`, `mcp2.eli.gift`, and the tunnels `goldenticket-mcp` and
+  `abulxt-mcp2` (both without a connector): deleted. kru's tunnel also listed krunk.io names whose
+  DNS is not on Cloudflare; those rows died with it.
+- giftshop's two tunnels are covered in "giftshop: retired" below.
+
 ## holy: VM 127 to CT 205 (2026-11-17)
 
 holy was converted from VM 127 (Debian 13 cloud image) to the unprivileged container CT 205 on
@@ -400,7 +511,8 @@ filesystem was tarred with `--numeric-owner --xattrs --acls` and created as the 
   and `LimitNPROC=131072`, because systemd in an unprivileged CT cannot set `infinity`.
   `sys-kernel-config.mount` and `sys-kernel-debug.mount` are masked.
 - **Unchanged**: website2 under `pm2-holy` on :8080, PostgreSQL 17 (local database `holy`) and
-  the token-file `cloudflared` tunnel.
+  the token-file `cloudflared` tunnel (disabled later that evening: holy.eli.gift now comes through
+  the edge's tunnel, see "Cloudflare Tunnel" below).
 - **Backups** (on divide): `/var/lib/vz/dump/vzdump-qemu-127-2026_11_17-21_26_03.vma.zst` (the
   stopped VM), and `/root/holy-ct-20261117T212522/` (the rootfs tarball, the VM config, the old
   `nftables.conf` and holy's SSH host keys).
