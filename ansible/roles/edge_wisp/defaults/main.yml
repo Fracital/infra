@@ -66,6 +66,11 @@ holywisp_npm_provenance_ref: "refs/tags/v{{ holywisp_npm_version }}"
 # stay at their defaults here: busy-poll-us (0, off) and stop-on-stdin-eof (off;
 # it must stay off under systemd, where stdin is /dev/null).
 holywisp_repo: https://github.com/Fracital/holyWisp.git
+# 2026-11-17 bumped to 2ffb7c7: a busy client's recv room starts at 256 KiB instead of 128 KiB
+# (conn.c CONN_READ_CHUNK_BASE). On the divide bench CT one busy stream got 5% and ten streams
+# 3.5 to 4% cheaper per server CPU second (fewer, fuller TCP segments toward the remote), and no
+# row lost. A busy connection holds up to about 0.4 MiB more. No new keys. Also in the range:
+# 0.5.4 version metadata, docs and tests.
 # 2026-11-16 bumped to 978e1d1: a UDP stream to a closed port closes as unreachable (0x42) at
 # once (6a2dcb1, stream.c). The send path used to drop the port unreachable a second datagram
 # collected, so a QUIC client's two-datagram Initial to a closed port never closed: proxied
@@ -92,7 +97,7 @@ holywisp_repo: https://github.com/Fracital/holyWisp.git
 # so a page asking the browser for a private address still does not score the client.
 # Deployed via build (npm has no version past 0.5.2 yet). Clear data/reputation.json
 # after, old scores persist.
-holywisp_ref: 978e1d10ea465ce228d9c140196aabc909030734
+holywisp_ref: 2ffb7c7e92b858cdde39c7acd8fd5015d02dc827
 # Controller cache for both sources: built binaries, npm downloads, and the
 # per-host configs tasks/verify.yml checks.
 holywisp_build_dir: "{{ lookup('env', 'HOME') }}/.cache/abulxt/holywisp"
