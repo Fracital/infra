@@ -243,6 +243,36 @@ a key run commands; the forced `/bin/false` is what blocks them. Back the file u
 Jails `sshd` and `proxmox` (the web UI login). `ignoreip` includes wg 172.16.5.11 and the admin IPs
 5.188.124.57 and 108.217.204.73. This is divide's own setup, not the vendored `roles/fail2ban`.
 
+## Routes and networkd inside the containers
+
+The CTs configure eth0 with ifupdown from the `/etc/network/interfaces` Proxmox writes, and extra
+routes are `post-up` lines in that file. systemd-networkd also runs in most CTs, and by default it
+deletes every route it did not create whenever it restarts. A systemd package upgrade restarts it,
+so an `apt upgrade` removed chat's default route via mull on 2026-11-17 (chat was offline from
+20:47 to 21:10 UTC, until a reboot reapplied the `post-up` lines). Every CT now has
+`/etc/systemd/networkd.conf.d/10-keep-foreign-routes.conf`:
+
+```
+[Network]
+ManageForeignRoutes=no
+ManageForeignRoutingPolicyRules=no
+ManageForeignNextHops=no
+```
+
+A new CT gets the same file before its first upgrade.
+
+Routes via mull (172.16.5.6, VM 101) to Mullvad's side, as `post-up ip route replace ... via
+172.16.5.6 dev eth0` lines:
+
+| Guest      | Prefixes                                                     |
+| ---------- | ------------------------------------------------------------ |
+| chat (106) | 10.64.0.0/16, 100.64.0.0/16, 10.124.0.0/16; default via mull |
+| wg (200)   | 10.64.0.0/16, 100.64.0.0/16, 10.124.0.0/16, 100.124.0.0/16   |
+
+wg masquerades its VPN clients (172.16.8.0/24) to 172.16.5.11 on eth0, so mull sees wg's address.
+The bridge firewall lets wg's port (`veth200i0`) talk to anyone, and mull forwards to
+`wg0-mullvad` from the LAN.
+
 ## TCP tuning and modules
 
 The edge is a container. It can set its own per-namespace TCP keys (`roles/edge_network`,
@@ -269,7 +299,8 @@ Two guests run UDP services that must use the public address as their own (kn-rt
 for one, names the address the peer dials). Each one puts 91.199.82.174/32 on its own `lo` and
 DNATs the port locally to it:
 
-- **kru** (KrunkNative's repo owns this): `kru-public-ip.service` adds the address,
+- **kru** (set up by hand in the 2026-11-16 migration; no repository renders these files, and
+  KrunkNative's `kn_rtc` role leaves kru's nftables alone): `kru-public-ip.service` adds the address,
   `/etc/nftables.d/kru-rtc.nft` DNATs udp 21100 to it, and `rtc.env` has
   `KRUNK_NATIVE_RTC_ICE_ADDR=91.199.82.174:21100`. kru's `krunknative-edge-origin.conf` allowlist
   admits the edge as `allow 172.16.5.10;  # divide edge CT 201`. Because the address is local,
