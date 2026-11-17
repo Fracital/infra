@@ -22,6 +22,9 @@
     - { role: edge_wisp, tags: ["wisp"] }
     # `--tags relay` runs only the byod OpenResty vhost (the keyed route).
     - { role: edge_relay, tags: ["relay"] }
+    # `--tags cloudflared`: the Cloudflare Tunnel connector, only where
+    # edge_local_cloudflared_tunnel is set (the edge on divide).
+    - { role: edge_cloudflared, tags: ["cloudflared"] }
     # `--tags static` (or playbooks/edge-static.yml) runs only the static sites.
     - { role: edge_static, tags: ["static"] }
     # Host firewall (vendored edge_firewall role). playbooks/firewall.yml runs

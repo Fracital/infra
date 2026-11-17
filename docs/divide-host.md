@@ -448,9 +448,12 @@ is a 301 to `:8006`.
 
 ## Cloudflare Tunnel: one daemon on the edge (2026-11-17)
 
-Every Cloudflare Tunnel hostname on divide comes in through one tunnel, **`divide-edge`**
-(`d9c69781-5dac-4b6f-9bf0-f4f1c5dea137`), run by the edge. It replaced six daemons, one per guest.
-Set up by hand: no role renders it yet.
+Every Cloudflare Tunnel hostname on divide comes in through one tunnel, **`divide-edge`**, run by
+the edge. It replaced six daemons, one per guest. Set up by hand on 2026-11-17 and adopted by
+`roles/edge_cloudflared` (`playbooks/edges.yml` and `wisp.yml`, tag `cloudflared`, where
+`edge_local_cloudflared_tunnel` is set), which renders the same files byte for byte. The token is
+the secret `edge_cloudflared_tunnel_token` (ansible/README.md "Secrets"); without it the role
+leaves the running connector alone.
 
 - **On the edge**: the `cloudflared` package from `pkg.cloudflare.com/cloudflared`
   (`/etc/apt/sources.list.d/cloudflared.list`, key `/usr/share/keyrings/cloudflare-main.gpg`),
@@ -480,7 +483,8 @@ sees the client's address and not the tunnel's.
 - **Firewall**: the edge reaches guca, vault and chat on tcp 80 (their `.fw` files and
   `divide_guests` from_edge), holy on 8080. The tunnel's own connections leave like every edge
   connection, through VLAN 2832 (`edge_out`), over QUIC.
-- **DNS**: each name is a proxied CNAME to `d9c69781-5dac-4b6f-9bf0-f4f1c5dea137.cfargotunnel.com`.
+- **DNS**: each name is a proxied CNAME to `<tunnel id>.cfargotunnel.com` (the id is in the
+  dashboard; like the other Zero Trust ids it stays out of this repository).
 
 Retired the same evening:
 

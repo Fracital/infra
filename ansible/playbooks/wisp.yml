@@ -69,6 +69,9 @@
       }
     - { role: edge_wisp, tags: ["wisp"] }
     - { role: edge_relay, tags: ["relay"] }
+    # `--tags cloudflared`: the Cloudflare Tunnel connector, only where
+    # edge_local_cloudflared_tunnel is set (the edge on divide).
+    - { role: edge_cloudflared, tags: ["cloudflared"] }
     - { role: edge_firewall, tags: ["firewall"] }
     - { role: fail2ban, tags: ["fail2ban"] }
   post_tasks:

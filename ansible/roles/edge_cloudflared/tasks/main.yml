@@ -1,0 +1,90 @@
+---
+# The edge's Cloudflare Tunnel connector (defaults/main.yml).
+
+- name: The tunnel name is a plain name
+  ansible.builtin.assert:
+    that:
+      - edge_local_cloudflared_tunnel is match('^([a-z0-9-]+)?$')
+    fail_msg: "edge_local_cloudflared_tunnel must be empty or a plain name like divide-edge."
+    quiet: true
+
+# Until the GitHub secret is synced CI has no token. Rendering an empty one would stop the
+# running connector, and with it every hostname the tunnel carries, so leave it as it is.
+- name: No tunnel token, the connector is left alone
+  ansible.builtin.debug:
+    msg: "edge_cloudflared_tunnel_token is empty: cloudflared-{{ edge_local_cloudflared_tunnel }} was not touched."
+  when:
+    - edge_local_cloudflared_tunnel | length > 0
+    - edge_cloudflared_tunnel_token | length == 0
+
+- name: Cloudflare Tunnel connector
+  when:
+    - edge_local_cloudflared_tunnel | length > 0
+    - edge_cloudflared_tunnel_token | length > 0
+  block:
+    - name: Cloudflare's package signing key
+      ansible.builtin.get_url:
+        url: https://pkg.cloudflare.com/cloudflare-main.gpg
+        dest: /usr/share/keyrings/cloudflare-main.gpg
+        mode: "0644"
+        force: false
+
+    - name: Cloudflare's cloudflared repository
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/cloudflared.list
+        content: "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main\n"
+        mode: "0644"
+      register: edge_cloudflared_repo
+
+    # Unattended upgrades keep it current; the unit runs it with --no-autoupdate so it never
+    # replaces its own binary under dpkg.
+    - name: cloudflared is installed
+      ansible.builtin.apt:
+        name: cloudflared
+        state: present
+        update_cache: "{{ edge_cloudflared_repo.changed }}"
+
+    - name: /etc/cloudflared
+      ansible.builtin.file:
+        path: /etc/cloudflared
+        state: directory
+        mode: "0755"
+
+    # The token stays out of the unit file and the process list (systemd reads it from here).
+    - name: The tunnel token
+      ansible.builtin.copy:
+        dest: /etc/cloudflared/{{ edge_local_cloudflared_tunnel }}.env
+        content: "TUNNEL_TOKEN={{ edge_cloudflared_tunnel_token }}\n"
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+      notify: Restart the cloudflared tunnel
+
+    - name: The connector's unit
+      ansible.builtin.template:
+        src: cloudflared-tunnel.service.j2
+        dest: /etc/systemd/system/cloudflared-{{ edge_local_cloudflared_tunnel }}.service
+        mode: "0644"
+      notify: Restart the cloudflared tunnel
+
+    - name: The connector runs at boot
+      ansible.builtin.systemd_service:
+        name: cloudflared-{{ edge_local_cloudflared_tunnel }}.service
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Restart now if the token or the unit changed
+      ansible.builtin.meta: flush_handlers
+
+    # /ready answers 200 once at least one connection to Cloudflare is registered.
+    - name: The tunnel is connected
+      ansible.builtin.uri:
+        url: http://{{ edge_cloudflared_metrics }}/ready
+        status_code: 200
+      register: edge_cloudflared_ready
+      retries: 12
+      delay: 5
+      until: edge_cloudflared_ready.status == 200
+      changed_when: false

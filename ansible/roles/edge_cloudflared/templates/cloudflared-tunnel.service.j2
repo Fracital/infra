@@ -1,0 +1,17 @@
+{# Rendered byte for byte like the unit set up by hand on 2026-11-17, so adopting it restarts nothing. -#}
+[Unit]
+Description=cloudflared tunnel {{ edge_local_cloudflared_tunnel }} (every Cloudflare Tunnel hostname on divide)
+Documentation=https://github.com/Fracital/infra/blob/main/docs/divide-host.md
+After=network-online.target openresty.service
+Wants=network-online.target
+
+[Service]
+# TUNNEL_TOKEN: the tunnel token (remotely managed; ingress lives in Cloudflare)
+EnvironmentFile=/etc/cloudflared/{{ edge_local_cloudflared_tunnel }}.env
+ExecStart=/usr/bin/cloudflared --no-autoupdate --metrics {{ edge_cloudflared_metrics }} tunnel run
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,17 @@
+---
+# roles/edge_cloudflared: the one Cloudflare Tunnel connector on an edge (docs/divide-host.md
+# "Cloudflare Tunnel: one daemon on the edge"). The tunnel is remotely managed: its ingress lives
+# in Cloudflare (Zero Trust, Networks, Tunnels), so this role only installs cloudflared and runs
+# the connector with the tunnel's token.
+
+# The tunnel's name in Cloudflare; it names the unit (cloudflared-<name>.service) and the env file
+# (/etc/cloudflared/<name>.env). Empty: the role does nothing. The edge on divide sets divide-edge
+# (host_vars/edge.yml); edge_relay reads the same variable to trust CF-Connecting-IP from loopback.
+edge_local_cloudflared_tunnel: ""
+
+# The tunnel token (secrets.yml, GitHub secret EDGE_CLOUDFLARED_TUNNEL_TOKEN). It carries the
+# account and tunnel ids, so nothing else about the tunnel is needed here.
+edge_cloudflared_tunnel_token: ""
+
+# Prometheus metrics and /ready, on loopback only. The check after a restart reads /ready.
+edge_cloudflared_metrics: 127.0.0.1:20241
