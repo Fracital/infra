@@ -122,3 +122,43 @@ edge_warp_accept_tos: true
 holywisp_udp_warp: true
 # Per-client WARP exits: holyWisp proxy-client-key (README "Cloudflare WARP").
 holywisp_proxy_client_key: true
+
+# Static sites (roles/edge_static, docs/divide-host.md "Static sites on the edge"): content on CT
+# 201's mount point /srv/static, delivered with rsync as `static` through divide. pages.eli.gift
+# came from giftshop (VM 111) on 2026-11-17: the file listing, and the Flying Gorilla client under
+# /fg/ with its API and socket on fg (CT 206, 172.16.5.206:8787). Its DNS is a DNS-only A record
+# for divide_public_ip, so abulxt-domains approves its certificate (no edge_relay change).
+edge_static_keys:
+  - restrict,command="/usr/bin/rrsync /srv/static" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxBdxGZVgEAvDKkb97l2s7U8BYZo7w2Z+EVlJK9vpXU user@unblocker
+# Where /fg/api/ and /fg/socket go: fg-api on fg, without the /fg/api prefix. From 22:12 to
+# 22:22 UTC on 2026-11-17, while the game's database moved to terp.db, both went back to giftshop's
+# nginx ("http://172.16.5.78", full path).
+pages_fg_api_pass: "http://172.16.5.206:8787/"
+pages_fg_socket_pass: "http://172.16.5.206:8787/socket"
+edge_static_sites:
+  - host: pages.eli.gift
+    listing: true
+    # The game's publisher sets the flag while it swaps a build in.
+    maintenance: "^/fg(?:/|$)"
+    # Unity's build files are content-hashed: revalidate them; everything else of the game is
+    # never cached, so a new build shows up on the next load.
+    cache_map:
+      - ["^/fg/Build/", "no-cache, must-revalidate"]
+      - ["^/fg(?:/|$)", "no-store"]
+    redirects:
+      - { at: /fg, code: 301, to: "https://pages.eli.gift/fg/" }
+      - { at: /fg/api, code: 308, to: /fg/api/ }
+    proxies:
+      - { at: "^~ /fg/api/", pass: "{{ pages_fg_api_pass }}" }
+      - {
+          at: "= /fg/socket",
+          pass: "{{ pages_fg_socket_pass }}",
+          websocket: true,
+        }
+    hidden:
+      - '^/fg/(?:.*/)?\.'
+    apps:
+      - /fg/
+    unity_prefixes:
+      - /fg/
+    unity_compressed: true

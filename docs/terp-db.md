@@ -7,7 +7,7 @@ MariaDB); nothing on this page touches mailcow. No role in this repo configures 
 set up by hand, and this page is the record. The copy on the host is authoritative.
 
 Clients reach it by name: `terp.db` resolves to 80.93.219.21 through `/etc/hosts` on each client
-(amph, holy, chat), because the pinned certificate is issued to that name.
+(amph, holy, chat, terp), because the pinned certificate is issued to that name.
 
 ## Postgres 18
 
@@ -34,20 +34,23 @@ everything written since, including the migrated databases. Prefer restoring a d
 
 ### Databases and roles
 
-| Database   | Owner role      | Client                                   | Locale                      |
-| ---------- | --------------- | ---------------------------------------- | --------------------------- |
-| `fracital` | Fracital's role | terp, `/opt/fracital/repo/.env`          | `en_US.UTF-8` (libc)        |
-| `abulxt`   | `abulxt`        | amph, abulxt `config.js` `db.url`        | builtin `C.UTF-8`           |
-| `holt`     | `holt`          | amph, `/opt/holt/config.js` `db.url`     | builtin `C.UTF-8`           |
-| `holy`     | `holy`          | holy, website2 `config/config.js` `db`   | `C.UTF-8` (libc), `pg_trgm` |
-| `elichat`  | `elichat`       | chat, `/opt/elichat/.env` `DATABASE_URL` | `C`, `SQL_ASCII`            |
+| Database      | Owner role      | Client                                                   | Locale                                 |
+| ------------- | --------------- | -------------------------------------------------------- | -------------------------------------- |
+| `fracital`    | Fracital's role | terp, `/opt/fracital/repo/.env`                          | `en_US.UTF-8` (libc)                   |
+| `abulxt`      | `abulxt`        | amph, abulxt `config.js` `db.url`                        | builtin `C.UTF-8`                      |
+| `holt`        | `holt`          | amph, `/opt/holt/config.js` `db.url`                     | builtin `C.UTF-8`                      |
+| `holy`        | `holy`          | holy, website2 `config/config.js` `db`                   | `C.UTF-8` (libc), `pg_trgm`            |
+| `elichat`     | `elichat`       | chat, `/opt/elichat/.env` `DATABASE_URL`                 | `C`, `SQL_ASCII`                       |
+| `fg_api_beta` | `fg_api`        | fg (CT 206), `/etc/fg-api/environment` `FG_POSTGRES_DSN` | `C.UTF-8` (libc), `citext`, `pgcrypto` |
 
 Every app role is a plain login role (no superuser, createdb, createrole or replication) that
 owns its own database and everything in it. `CONNECT` and `TEMPORARY` are revoked from `PUBLIC`
 on the migrated databases. abulxt and holt came from a musl `en_US.utf8` cluster, which sorts by
 code point; builtin `C.UTF-8` keeps that order and does not depend on glibc. elichat keeps the
 `SQL_ASCII` encoding it had on chat, so restores cannot fail on bytes that are not UTF-8.
-Extensions an app needs are created as `postgres` before its restore (`pg_trgm` in `holy`).
+Extensions an app needs are created as `postgres` before its restore (`pg_trgm` in `holy`,
+`citext` and `pgcrypto` in `fg_api_beta`; their `COMMENT ON EXTENSION` lines fail in the restore,
+harmlessly).
 
 Role passwords: `/root/terpdb-roles.secret` (root, 0600) and each client's own config.
 
@@ -63,6 +66,7 @@ hostssl abulxt   abulxt        91.199.82.174/32 scram-sha-256
 hostssl holt     holt          91.199.82.174/32 scram-sha-256
 hostssl holy     holy          91.199.82.174/32 scram-sha-256
 hostssl elichat  elichat       91.199.82.174/32 scram-sha-256
+hostssl fg_api_beta fg_api 91.199.82.174/32 scram-sha-256
 hostssl all all      0.0.0.0/0 reject
 hostssl all all      ::/0      reject
 ```
@@ -79,16 +83,16 @@ The server certificate is self-signed, `CN=terp.db`, `subjectAltName DNS:terp.db
 to `/etc/postgresql/ssl/terp-db.{crt,key}` so a reinstall of the `ssl-cert` package cannot swap it
 under the clients.
 
-Each client keeps a copy at `/etc/ssl/terp-db/ca.crt` and connects with
+Each client (amph, holy, chat, terp) keeps a copy at `/etc/ssl/terp-db/ca.crt` and connects with
 
 ```
 postgres://<role>:<password>@terp.db:5432/<db>?sslmode=verify-full&sslrootcert=/etc/ssl/terp-db/ca.crt
 ```
 
 node-postgres (abulxt, holt, holy) and Go's pgx (elichat) read both parameters from the URL. The
-host must be the name `terp.db`: with the address, verification fails by design. Fracital still
-connects with `rejectUnauthorized: false` (encrypted, not verified); switching it to the URL form
-above is a terp `.env` change.
+host must be the name `terp.db`: with the address, verification fails by design. Fracital (terp,
+both `/opt/fracital/repo/.env` and `/opt/fracital/dev/.env`) uses host `terp.db` in `DATABASE_URL`
+plus `DATABASE_CA=/etc/ssl/terp-db/ca.crt`, and always verifies (since 2026-11-17, commit d164559).
 
 Name resolution, on each client: `80.93.219.21 terp.db` in `/etc/hosts`. amph also has it in
 `/etc/cloud/templates/hosts.debian.tmpl` (cloud-init rewrites `/etc/hosts` from it); on the
@@ -180,13 +184,14 @@ back in the config.
 
 ## The 2026-11-17 move
 
-| Database   | From                              | Downtime           | Dump kept on terp.db                          |
-| ---------- | --------------------------------- | ------------------ | --------------------------------------------- |
-| `fracital` | (already here) PG 17 to 18        | 35 s, 21:33:42 UTC | `/var/backups/postgres/20261117T213319Z/`     |
-| `holt`     | amph Docker `abulxt-db` (PG 18.6) | 15 s, 21:49:48 UTC | `/var/backups/migrate/holt-cutover-*.dump`    |
-| `abulxt`   | amph Docker `abulxt-db` (PG 18.6) | 3.5 min, 21:50:21  | `/var/backups/migrate/abulxt-cutover-*.dump`  |
-| `holy`     | holy's local PG 17 (CT 205)       | 10 s, 21:59:01 UTC | `/var/backups/migrate/holy-cutover-*.dump`    |
-| `elichat`  | chat's local PG 17 (CT 106)       | 3 s, 22:02:01 UTC  | `/var/backups/migrate/elichat-cutover-*.dump` |
+| Database      | From                              | Downtime           | Dump kept on terp.db                              |
+| ------------- | --------------------------------- | ------------------ | ------------------------------------------------- |
+| `fracital`    | (already here) PG 17 to 18        | 35 s, 21:33:42 UTC | `/var/backups/postgres/20261117T213319Z/`         |
+| `holt`        | amph Docker `abulxt-db` (PG 18.6) | 15 s, 21:49:48 UTC | `/var/backups/migrate/holt-cutover-*.dump`        |
+| `abulxt`      | amph Docker `abulxt-db` (PG 18.6) | 3.5 min, 21:50:21  | `/var/backups/migrate/abulxt-cutover-*.dump`      |
+| `holy`        | holy's local PG 17 (CT 205)       | 10 s, 21:59:01 UTC | `/var/backups/migrate/holy-cutover-*.dump`        |
+| `elichat`     | chat's local PG 17 (CT 106)       | 3 s, 22:02:01 UTC  | `/var/backups/migrate/elichat-cutover-*.dump`     |
+| `fg_api_beta` | giftshop's local PG 17 (VM 111)   | 75 s, 22:21:10 UTC | `/var/backups/migrate/fg_api_beta-cutover-*.dump` |
 
 Row counts matched for every table after each restore. The old copies are kept, not deleted:
 
@@ -196,6 +201,9 @@ Row counts matched for every table after each restore. The old copies are kept, 
 - holy: `postgresql@17-main` and its `pg_backupcluster` timers stopped and disabled, `start.conf`
   `manual`, data in `/var/lib/postgresql/17/main`. Config backup:
   `/home/holy/website2/config/config.js.bak-terpdb-*`.
+- giftshop (VM 111, powered off 2026-11-17): `postgresql@17-main` stopped and disabled, `start.conf`
+  `manual`, data in `/var/lib/postgresql/17/main`. The Flying Gorilla game keeps its Redis on fg
+  (`docs/divide-host.md` "fg"), not on the shared Redis here.
 - chat: local Postgres still runs (for `labelsupplier`); its `elichat` database has
   `ALLOW_CONNECTIONS false`. Config backup: `/opt/elichat/.env.bak-terpdb-*`.
 

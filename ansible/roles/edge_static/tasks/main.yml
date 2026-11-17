@@ -1,0 +1,113 @@
+---
+# Static sites on the edge (defaults/main.yml, docs/divide-host.md "Static sites on the edge").
+
+- name: Static site inputs are set
+  ansible.builtin.assert:
+    that:
+      - edge_static_sites | map(attribute='host') | reject('match', '^[a-z0-9.-]+$') | list | length == 0
+      - edge_static_keys | reject('match', '^restrict,command="/usr/bin/rrsync ' ~ edge_static_root ~ '" ssh-ed25519 ') | list | length == 0
+    fail_msg: "edge_static_sites hosts must be plain names, and edge_static_keys must each be forced through rrsync {{ edge_static_root }}."
+    quiet: true
+
+- name: Static sites
+  when: edge_static_sites | length > 0
+  block:
+    # The mount point is divide's (pct mp0), not Ansible's: without it the sites would land on
+    # the 20 GB root filesystem and fill it.
+    - name: The content directory is its own mount
+      ansible.builtin.command: findmnt --noheadings --output TARGET --mountpoint {{ edge_static_root }}
+      register: edge_static_mount
+      changed_when: false
+      failed_when: edge_static_mount.rc != 0
+
+    - name: rsync is installed (rrsync ships with it)
+      ansible.builtin.apt:
+        name: rsync
+        state: present
+
+    - name: Delivery group
+      ansible.builtin.group:
+        name: "{{ edge_static_user }}"
+        system: true
+
+    # '*' matches no password, unlike a '!' lock, which sshd treats as a locked account.
+    - name: Delivery user
+      ansible.builtin.user:
+        name: "{{ edge_static_user }}"
+        group: "{{ edge_static_user }}"
+        system: true
+        shell: /bin/sh
+        password: "*"
+        home: "/var/lib/{{ edge_static_user }}"
+        create_home: true
+
+    # Root owns the key file, so the delivery user cannot loosen its own restrictions.
+    - name: Delivery SSH directory
+      ansible.builtin.file:
+        path: "/var/lib/{{ edge_static_user }}/.ssh"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Delivery keys
+      ansible.builtin.copy:
+        dest: "/var/lib/{{ edge_static_user }}/.ssh/authorized_keys"
+        content: "{{ (edge_static_keys | join('\n') ~ '\n') if edge_static_keys | length > 0 else '' }}"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Content root
+      ansible.builtin.file:
+        path: "{{ edge_static_root }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    # Only the top of each tree: the content below is the sites' own and not Ansible's.
+    - name: Site directories
+      ansible.builtin.file:
+        path: "{{ edge_static_root }}/{{ item }}"
+        state: directory
+        owner: "{{ edge_static_user }}"
+        group: "{{ edge_static_user }}"
+        mode: "0755"
+      loop: "{{ ['.maintenance'] + edge_static_sites | map(attribute='host') | list }}"
+
+    - name: Listing filters directory
+      ansible.builtin.file:
+        path: "{{ openresty_conf_dir }}/edge_static"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Listing filters
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: "{{ openresty_conf_dir }}/edge_static/{{ item }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop:
+        - listing-header.lua
+        - listing-body.lua
+      notify: reload openresty
+
+    - name: Render the static sites
+      ansible.builtin.template:
+        src: static-sites.conf.j2
+        dest: "{{ openresty_conf_dir }}/conf.d/37-static.conf"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: reload openresty
+
+- name: Static sites absent (no edge_static_sites)
+  ansible.builtin.file:
+    path: "{{ openresty_conf_dir }}/conf.d/37-static.conf"
+    state: absent
+  when: edge_static_sites | length == 0
+  notify: reload openresty

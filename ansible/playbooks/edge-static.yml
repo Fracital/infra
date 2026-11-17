@@ -1,0 +1,10 @@
+---
+# Static sites on the edge alone (roles/edge_static, docs/divide-host.md "Static sites on the
+# edge"). playbooks/edges.yml runs the same role with the rest of the edge.
+#   ansible-playbook playbooks/edge-static.yml -l edge --vault-password-file <file>
+
+- name: Static sites on the edge
+  hosts: edge
+  gather_facts: false
+  roles:
+    - { role: edge_static, tags: ["static"] }

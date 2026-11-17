@@ -67,14 +67,15 @@ fail2ban_retire_files:
   - /etc/ssh/sshd_config.d/00password.conf
 
 # Link routing (roles/edge_relay, README.md "Link routing"): a Host with no server block of its own
-# goes to the site staff registered it for in abulxt's Discord bot (amph's Redis, linkroute:v1),
+# goes to the site staff registered it for in abulxt's Discord bot (terp.db's shared Redis, linkroute:v1),
 # and an unregistered one gets the placeholder page. Off, every such Host goes to amph, as before
 # link routing.
 link_routes_enabled: true
 link_routes_default_site: holywisp
 link_routes_unavailable_site: abstract
-# true once the static lists are imported into linkroute:v1 (README.md "Replacing the static lists").
-link_routes_replace_static: false
+# The static Fracital, Stomp and Holy Unblocker lists were imported into linkroute:v1 on 2026-11-17
+# (README.md "Replacing the static lists"), so those names route like any registered domain.
+link_routes_replace_static: true
 
 # Relay tuning
 edge_proxy_read_timeout: 1800s

@@ -1,0 +1,14 @@
+---
+# The openresty role has the same pair; this role also runs alone (playbooks/edge-static.yml).
+- name: Test openresty configuration (edge_static)
+  ansible.builtin.command: "{{ openresty_prefix }}/nginx/sbin/nginx -t"
+  register: edge_static_openresty_test
+  changed_when: false
+  listen: reload openresty
+
+- name: Reload openresty (edge_static)
+  ansible.builtin.systemd:
+    name: openresty
+    state: reloaded
+  listen: reload openresty
+  when: edge_static_openresty_test.rc == 0

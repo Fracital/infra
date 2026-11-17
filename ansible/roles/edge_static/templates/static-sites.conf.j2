@@ -1,0 +1,169 @@
+# Static sites on the edge. Managed by Ansible (edge_static role, host_vars edge_static_sites).
+# docs/divide-host.md "Static sites on the edge". Host-specific blocks win over the 00-edge-relay
+# catch-all:
+#
+#   client -> edge :443 (DNS-only A record) -> {{ edge_static_root }}/<host>, plus the site's proxies
+{% for site in edge_static_sites %}
+{%   set id = site.host | regex_replace('[^a-z0-9]', '_') %}
+{%   set root = site.root | default(edge_static_root ~ '/' ~ site.host) %}
+
+# --- {{ site.host }} ---
+{%   if site.cache_map | default([]) | length > 0 %}
+map $uri $es_{{ id }}_cc {
+    default "";
+{%     for rule in site.cache_map %}
+    ~{{ rule[0] }} "{{ rule[1] }}";
+{%     endfor %}
+}
+{%   endif %}
+{%   if site.maintenance is defined %}
+# 503 while {{ edge_static_root }}/.maintenance/{{ site.host }} exists (a publish in progress).
+map $uri $es_{{ id }}_maint {
+    default "";
+    ~{{ site.maintenance }} {{ edge_static_root }}/.maintenance/{{ site.host }};
+}
+{%   endif %}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name {{ site.host }};
+
+    location /.well-known/acme-challenge/ {
+        content_by_lua_block {
+            auto_ssl_instance:challenge_server()
+        }
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name {{ site.host }};
+
+    ssl_certificate_by_lua_block {
+        auto_ssl_instance:ssl_certificate()
+    }
+    ssl_certificate {{ openresty_auto_ssl_dir }}/fallback.crt;
+    ssl_certificate_key {{ openresty_auto_ssl_dir }}/fallback.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    root {{ root }}/;
+{%   if site.maintenance is defined %}
+
+    if (-f $es_{{ id }}_maint) { return 503; }
+{%   endif %}
+
+    location /.well-known/acme-challenge/ {
+        content_by_lua_block {
+            auto_ssl_instance:challenge_server()
+        }
+    }
+{%   for r in site.redirects | default([]) %}
+    location = {{ r.at }} { return {{ r.code }} {{ r.to }}; }
+{%   endfor %}
+{%   for p in site.proxies | default([]) %}
+
+    location {{ p.at }} {
+        proxy_pass {{ p.pass }};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+{%     if p.websocket | default(false) %}
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_connect_timeout {{ p.connect_timeout | default('2s') }};
+        proxy_send_timeout {{ p.timeout | default('75s') }};
+        proxy_read_timeout {{ p.timeout | default('75s') }};
+        proxy_buffering off;
+        proxy_cache off;
+{%     else %}
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Authorization $http_authorization;
+        proxy_set_header Connection "";
+        proxy_connect_timeout {{ p.connect_timeout | default('2s') }};
+        proxy_send_timeout {{ p.timeout | default('10s') }};
+        proxy_read_timeout {{ p.timeout | default('10s') }};
+        client_max_body_size {{ p.body_max | default('4k') }};
+        client_body_timeout {{ p.timeout | default('10s') }};
+        proxy_cache off;
+        proxy_cache_bypass 1;
+        proxy_no_cache 1;
+        expires off;
+        proxy_hide_header Cache-Control;
+        add_header Cache-Control "no-store" always;
+{%     endif %}
+        access_log off;
+    }
+{%   endfor %}
+{%   for h in site.hidden | default([]) %}
+
+    location ~ {{ h }} { return 404; }
+{%   endfor %}
+{%   for a in site.apps | default([]) %}
+
+    location {{ a }} {
+        expires off;
+        add_header Cache-Control $es_{{ id }}_cc always;
+        index index.html;
+        autoindex off;
+        try_files $uri $uri/ =404;
+    }
+{%   endfor %}
+{%   set unity = [
+       ['(data|symbols\\.json)\\.br', 'br', 'application/octet-stream'],
+       ['js\\.br', 'br', 'application/javascript'],
+       ['wasm\\.br', 'br', 'application/wasm'],
+       ['(data|symbols\\.json)\\.gz', 'gzip', 'application/gzip'],
+       ['js\\.gz', 'gzip', 'application/javascript'],
+       ['wasm\\.gz', 'gzip', 'application/wasm'],
+     ] %}
+{%   for prefix in site.unity_prefixes | default([]) %}
+
+    # Unity WebGL files precompressed on disk under {{ prefix }}: no second compression.
+{%     for u in unity %}
+    location ~ ^{{ prefix }}.+\.{{ u[0] }}$ {
+        gzip off;
+        add_header Content-Encoding {{ u[1] }};
+        default_type {{ u[2] }};
+        expires off;
+        add_header Cache-Control $es_{{ id }}_cc always;
+    }
+{%     endfor %}
+{%   endfor %}
+{%   if site.unity_compressed | default(false) %}
+
+    # Unity WebGL files precompressed on disk anywhere else on the site.
+{%     for u in unity %}
+    location ~ .+\.{{ u[0] }}$ {
+        gzip off;
+        add_header Content-Encoding {{ u[1] }};
+        default_type {{ u[2] }};
+    }
+{%     endfor %}
+{%   endif %}
+
+    location / {
+        index index.html;
+{%   if site.listing | default(false) %}
+        # nginx lists the directory as JSON; the filters turn that into the styled page
+        # giftshop's XSLT stylesheet made (OpenResty has no XSLT module).
+        autoindex on;
+        autoindex_format json;
+        header_filter_by_lua_file {{ openresty_conf_dir }}/edge_static/listing-header.lua;
+        body_filter_by_lua_file {{ openresty_conf_dir }}/edge_static/listing-body.lua;
+{%   else %}
+        try_files $uri $uri/ =404;
+{%   endif %}
+    }
+}
+{% endfor %}

@@ -22,6 +22,8 @@
     - { role: edge_wisp, tags: ["wisp"] }
     # `--tags relay` runs only the byod OpenResty vhost (the keyed route).
     - { role: edge_relay, tags: ["relay"] }
+    # `--tags static` (or playbooks/edge-static.yml) runs only the static sites.
+    - { role: edge_static, tags: ["static"] }
     # Host firewall (vendored edge_firewall role). playbooks/firewall.yml runs
     # it alone (README.md "Edge firewall"); applies with a 120s auto-rollback.
     - { role: edge_firewall, tags: ["firewall"] }

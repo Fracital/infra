@@ -20,20 +20,22 @@ authorization, like any other live host (AGENTS.md "Servers").
 
 ## Guests on vmbr1
 
-| Address     | Guest                 | What                                                       |
-| ----------- | --------------------- | ---------------------------------------------------------- |
-| 172.16.5.1  | divide                | gateway, NAT, its own ACME client (`divide.eli.gift`)      |
-| 172.16.5.3  | amph                  | abulxt origin (`[origin]`)                                 |
-| 172.16.5.10 | edge (CT 201)         | the only abulxt edge (`[wisp_edge]`, `host_vars/edge.yml`) |
-| 172.16.5.11 | wg                    | WireGuard, udp 51820                                       |
-| 172.16.5.37 | sm                    |                                                            |
-| 172.16.5.47 | kru                   | KrunkNative central node (krunk.io origin)                 |
-| 172.16.5.48 | blockshooter (CT 202) | blockshooter relay (`[bs_ct_divide]`)                      |
-| 172.16.5.62 | terp                  | Fracital origin, VM 116 (moved from meal 2026-11-16)       |
-| 172.16.5.64 | chat                  | estro.help backend (`host_vars/amph.yml` `estro_upstream`) |
-| 172.16.5.79 | holy (CT 205)         | holyunb.locker site (website2 :8080), was VM 127           |
-| 172.16.5.94 | kn (CT 203)           | KrunkNative game servers (`[kn_ct_divide]`)                |
-| (tap101i0)  | mull (VM 101)         | may only talk to chat and sm (bridge firewall below)       |
+| Address      | Guest                 | What                                                             |
+| ------------ | --------------------- | ---------------------------------------------------------------- |
+| 172.16.5.1   | divide                | gateway, NAT, its own ACME client (`divide.eli.gift`)            |
+| 172.16.5.3   | amph                  | abulxt origin (`[origin]`)                                       |
+| 172.16.5.10  | edge (CT 201)         | the only abulxt edge (`[wisp_edge]`, `host_vars/edge.yml`)       |
+| 172.16.5.11  | wg                    | WireGuard, udp 51820                                             |
+| 172.16.5.37  | sm                    |                                                                  |
+| 172.16.5.47  | kru                   | KrunkNative central node (krunk.io origin)                       |
+| 172.16.5.48  | blockshooter (CT 202) | blockshooter relay (`[bs_ct_divide]`)                            |
+| 172.16.5.62  | terp                  | Fracital origin, VM 116 (moved from meal 2026-11-16)             |
+| 172.16.5.64  | chat                  | estro.help backend (`host_vars/amph.yml` `estro_upstream`)       |
+| 172.16.5.78  | giftshop (VM 111)     | powered off 2026-11-17 (see "giftshop: retired" below)           |
+| 172.16.5.79  | holy (CT 205)         | holyunb.locker site (website2 :8080), was VM 127                 |
+| 172.16.5.94  | kn (CT 203)           | KrunkNative game servers (`[kn_ct_divide]`)                      |
+| 172.16.5.206 | fg (CT 206)           | Flying Gorilla game API (fg-api :8787), from giftshop 2026-11-17 |
+| (tap101i0)   | mull (VM 101)         | may only talk to chat and sm (bridge firewall below)             |
 
 Ansible reaches the guests with `ProxyJump root@91.199.82.174` (`group_vars/divide_guests.yml`).
 
@@ -63,7 +65,7 @@ The software a guest runs is its name and the table above, not a tag.
 | fun (105)              | `desktop` `legacy`                                |
 | chat (106)             | `app` `estro` `in-edge` `in-tunnel` `out-mullvad` |
 | fum (110)              | `desktop` `legacy` `out-mullvad`                  |
-| giftshop (111)         | `app` `eli-gift` `in-tunnel`                      |
+| giftshop (111)         | `app` `eli-gift` (powered off 2026-11-17)         |
 | amph (113)             | `origin` `abulxt` `in-edge` `out-mullvad`         |
 | terp (116)             | `origin` `fracital` `in-edge` `in-dnat`           |
 | guca (117)             | `app` `eli-gift` `in-tunnel`                      |
@@ -76,6 +78,7 @@ The software a guest runs is its name and the table above, not a tag.
 | kn (203)               | `game` `krunk` `in-dnat`                          |
 | runner (204)           | `ci`                                              |
 | holy (205)             | `origin` `holyunb` `in-edge` `in-tunnel`          |
+| fg (206)               | `game` `eli-gift` `in-edge`                       |
 | templates (9000, 9001) | `template`                                        |
 
 A guest that gains or loses a port forward, a tunnel or an edge route gets its `in-` tags changed
@@ -96,7 +99,7 @@ rebalancing them), VMs with `qm set --affinity`.
 | 0-3, 16-19   | edge (CT 201), exclusive         |
 | 4-5, 20-21   | kn (CT 203)                      |
 | 6, 22        | kru (120), blockshooter (CT 202) |
-| 7, 23        | guca (117)                       |
+| 7, 23        | guca (117), fg (CT 206)          |
 | 7            | vault (100), wg (CT 200)         |
 | 23           | chat (106)                       |
 | 0-7, 16-23   | every VM except mac, holy (205)  |
@@ -207,6 +210,7 @@ The stateless equivalent of Proxmox's per-NIC `ipfilter`, on the `vmbr1` bridge:
     | blockshooter 172.16.5.48 | 80, 8080                        |
     | terp 172.16.5.62         | 443, 8443                       |
     | holy 172.16.5.79         | 8080                            |
+    | fg 172.16.5.206          | 8787                            |
 
   - other guest-to-guest paths:
 
@@ -219,11 +223,23 @@ The stateless equivalent of Proxmox's per-NIC `ipfilter`, on the `vmbr1` bridge:
     | amph 172.16.5.3     | chat 172.16.5.64   | tcp 80                                   | estro.help origin behind amph :9080                                                                     |
     | amph 172.16.5.3     | eagler 172.16.5.76 | tcp 443, 8080, 25565                     | mc, mcpanel, mcnode relay (25-mc-relay.conf)                                                            |
     | amph 172.16.5.3     | holy 172.16.5.79   | tcp 8080                                 | abulxt `/cdn/` (theatre) via `abulxt_cdn_backend`; added 2026-11-17, it had been dropped since the move |
+    | amph 172.16.5.3     | edge 172.16.5.10   | tcp 443                                  | pages.eli.gift through the hairpin (abulxt `/cdn/html5/fg`, Flying Gorilla), 2026-11-17                 |
+    | holy 172.16.5.79    | edge 172.16.5.10   | tcp 443                                  | the same for website2's `/cdn/html5/fg`                                                                 |
 
   Traffic between a guest and divide (its gateway, DNS, the NAT) is not bridged and does not
   pass this chain.
 
-holy's pair is `veth205i0` (it was `tap127i1`, VM 127's second NIC, until 2026-11-17).
+  **The hairpin is bridged.** A guest that dials 91.199.82.174 for a port DNATed to another guest
+  is DNATed on the bridge (`br_netfilter`): the frame goes straight from its port to the other
+  guest's, from the guest's own address (the hairpin masquerade does not apply, its `oifname` is a
+  bridge port, not `vmbr1`), so this chain sees a new SYN between two guests and drops it unless a
+  rule above allows it. That is why amph and holy have their own tcp 443 lines to the edge. Found
+  2026-11-17 when pages.eli.gift moved to the edge: until then that name resolved to Cloudflare.
+  kn (172.16.5.94) to the edge's tcp 443 is dropped the same way (seen 22:11 to 22:19 UTC that
+  day, before the move).
+
+holy's pair is `veth205i0` (it was `tap127i1`, VM 127's second NIC, until 2026-11-17). fg's is
+`veth206i0` . 172.16.5.206 (CT 206, 2026-11-17).
 
 A new edge-to-origin path needs a line here as well as the origin's own firewall (amph:
 `abulxt-firewall.sh`, `EDGE_SUBNETS="172.16.5.0/24"`; terp: ufw, `roles/fracital_origin`).
@@ -294,6 +310,7 @@ traffic, ICMP, SSH from divide (172.16.5.1) and the VPN (172.16.5.11), and then:
 | kn (203)      | tcp and udp 21015-21017, 21115 from anyone                |
 | runner (204)  | anything from `docker0` (job containers)                  |
 | kru (120)     | tcp 80, 443 from the edge; udp 21100 (kn-rtc, after DNAT) |
+| fg (206)      | tcp 8787 from the edge 172.16.5.10                        |
 
 The table is rendered and loaded by `divide/guestfw/apply.sh <ctid> [rule ...]` (run on divide,
 it arms a 180 s revert timer first) and kept by `divide/guestfw/persist.sh <ctid>`, which also
@@ -392,3 +409,95 @@ filesystem was tarred with `--numeric-owner --xattrs --acls` and created as the 
 Rollback: `pct stop 205; pct set 205 --onboot 0`, put `tap127i1` back in place of `veth205i0` in
 both `divide_guests` sets in `/etc/nftables.conf` (`nft -c -f`, then `nft -f`), then
 `qm set 127 --onboot 1; qm start 127`.
+
+## fg: Flying Gorilla, from giftshop (2026-11-17)
+
+The Flying Gorilla game API (`fg-api`, the owner's game, repository `Flying-Gorilla`, branch
+`v3.10.0-anticheat`) moved from giftshop (VM 111) to its own container on 2026-11-17, with the
+owner's approval. Its database moved to terp.db (`docs/terp-db.md`), and the static client to the
+edge (below).
+
+- **CT 206 `fg`**: unprivileged Debian 13 (`debian-13-standard_13.6-1`), 1 core
+  (`lxc.cgroup2.cpuset.cpus: 7,23`, one physical core with both its threads), 1024 MB, no swap,
+  rootfs `local:206` 8 GB, `nesting=1`, nameservers 1.1.1.1 and 1.0.0.1, `onboot: 1`,
+  172.16.5.206/24 (MAC `BC:24:11:4D:DA:F9`). root's `authorized_keys` is giftshop's. On giftshop
+  the service peaked at 26 MB and used 1 s of CPU in 16 hours; the unit caps it at 512 MB
+  (`MemoryMax`), and each password hash takes 64 MiB (Argon2 default), hence the 1 GB.
+- **Service**: `fg-api.service` (the repository's `server/deploy/fg-api.service`, unchanged, plus
+  `fg-api.service.d/network-online.conf`, because the database is remote), binary
+  `/opt/fg-api/fg-api` (the 2026-10-11 build giftshop ran, sha256 `b2f264e3...`), config
+  `/etc/fg-api/` (`environment` root:fg-api 0640). Differences from giftshop: `FG_LISTEN=0.0.0.0:8787`,
+  `FG_TRUSTED_PROXY=172.16.5.10/32` (the edge sets `X-Real-IP`) and `FG_POSTGRES_DSN` for
+  `fg_api_beta` on terp.db (verify-full, `/etc/ssl/terp-db/ca.crt`, `80.93.219.21 terp.db` in
+  `/etc/hosts`). The bbolt file `/var/lib/fg-api/state.db` came along.
+- **Redis stays local** (`redis-server`, 127.0.0.1:6379, database 1, as on giftshop): sessions
+  revoked and live runs, a few keys with TTLs. fg-api's Redis client has no username setting, so
+  on terp.db's shared Redis it could only log in as `default`, which can read the edge's
+  certificate keys. Moving it needs `FG_REDIS_USERNAME` in fg-api and an ACL user limited to
+  `~fg:*`.
+- **Guest firewall**: `inet guestfw` (see "Guest firewalls"), tcp 8787 from the edge only.
+- **Deploys**: `server/deploy/deploy.sh` in the repository, run by hand (no CI), now defaults to
+  `TARGET_HOST=fg` (root over SSH through divide). The client build goes to the edge (below).
+- **Cutover**: the game was stopped on giftshop at 22:21:10 UTC and served from fg at 22:22:24.
+  All 18 tables had the same row counts after the restore. Copies: giftshop
+  `/root/fg-move-20261117T222110Z/` (dump, Redis RDB, state.db, row counts), terp.db
+  `/var/backups/migrate/fg_api_beta-cutover-20261117T222110Z.dump`.
+- **Not moved**: `fg-api-beta`, the retired `/fg/beta/` leftover (an older binary on the same
+  database, no client). The edge answers `/fg/beta/` with 404, as giftshop did.
+
+Rollback (while giftshop's disk exists): `systemctl disable --now fg-api` on fg; start VM 111,
+set `/etc/postgresql/17/main/start.conf` back to `auto`, enable and start `postgresql@17-main`,
+`redis-server` and `fg-api`; set host_vars `pages_fg_api_pass` and `pages_fg_socket_pass` back to
+`"http://172.16.5.78"`, add `ip daddr 172.16.5.78 tcp dport 80 accept` to `from_edge` and apply
+`playbooks/edge-static.yml`. Writes on terp.db since the cutover are lost unless dumped from
+there first.
+
+## Static sites on the edge (2026-11-17)
+
+`roles/edge_static` (`playbooks/edge-static.yml`; also in `playbooks/edges.yml`, tag `static`)
+serves sites from the edge's own disk: `conf.d/37-static.conf`, the listing filters in
+`conf/edge_static/`, and a delivery user `static` whose keys are forced through
+`rrsync /srv/static`. The sites are `edge_static_sites` in `host_vars/edge.yml`.
+
+- **Disk**: CT 201's `mp0: local:201/vm-201-disk-1.raw,mp=/srv/static,backup=1,size=40G`,
+  hot-plugged on 2026-11-17 (`pct set 201 -mp0 local:40,mp=/srv/static,backup=1`, no restart).
+  The role checks it is mounted and does not create it.
+- **pages.eli.gift** (from giftshop): the file listing (24 GB, 179 files) and the Flying Gorilla
+  client under `/fg/`, with `/fg/api/` and `/fg/socket` proxied to fg. DNS is a DNS-only A record
+  for 91.199.82.174 (it was a proxied CNAME to giftshop's tunnel; the old record is in
+  `~/.local/share/abulxt/pages-eli-gift-dns-before-20261117.json` on the operator's machine), so
+  abulxt-domains approves the certificate (`dns-match`) and no `edge_relay` change was needed.
+- **After a proxied record turns DNS-only, flush amph's resolver** (`resolvectl flush-caches` on
+  amph). On 2026-11-17 it kept Cloudflare's addresses for about 3 minutes after the change, the
+  validator answered `dns-no-match`, and clients that already resolved to the edge got the
+  fallback certificate from 22:12 to 22:16 UTC.
+- **Kept from giftshop**: the redirects (`/fg`, `/fg/api`), `Cache-Control` per path (`/fg/Build/`
+  revalidates, the rest of `/fg/` is `no-store`), the precompressed Unity files (`.br`, `.gz` with
+  their `Content-Encoding` and types), dotfiles under `/fg/` answering 404, the maintenance 503
+  for `/fg` while `/srv/static/.maintenance/pages.eli.gift` exists, and the styled directory
+  listing. OpenResty has no XSLT module, so `listing-body.lua` renders nginx's JSON listing into
+  the page giftshop's `superbindex.xslt` made (same entries and order, checked on three folders).
+- **Different**: no Cloudflare in front (no Cloudflare cache, no IPv6), the edge gzips text types,
+  and three files that were mode 600 (giftshop's nginx ran as root) are 644.
+- **Publishing**: `rsync -a --delete -e "ssh -J root@91.199.82.174" build/
+static@172.16.5.10:pages.eli.gift/fg/` (paths are relative to `/srv/static`). For a swap without
+  half-copied builds, create `.maintenance/pages.eli.gift` first and delete it after. The
+  repository's `publish_latest.py` still targets giftshop's paths.
+
+## giftshop: retired (2026-11-17)
+
+giftshop (VM 111, 172.16.5.78, Debian 13 cloud image) ran pages.eli.gift: nginx on :80 behind two
+Cloudflare tunnels (`cloudflared-giftshop`, locally managed, the one DNS pointed at, and a
+token-mode `cloudflared.service`), `fg-api` and `fg-api-beta`, PostgreSQL 17 (`fg_api_beta`) and
+Redis. Everything moved as above; it was shut down cleanly at 22:27:30 UTC on 2026-11-17 and set to
+`onboot: 0`, tags `app` `eli-gift`. Postgres and Redis inside were stopped and disabled first
+(`start.conf` `manual`), data intact.
+
+- **Backup**: a vzdump of the stopped VM in `/var/lib/vz/dump/vzdump-qemu-111-2026_11_17-22_27_39.vma.zst` (30.5 GB),
+  and the VM's disk itself. Keep both until 2026-12-01.
+- **Then**: `qm destroy 111`, delete the dump, remove `tap111i0` from both `divide_guests` sets,
+  and delete the two tunnels in Cloudflare (Zero Trust, Networks, Tunnels). The token-mode unit
+  had its tunnel token in plain text in a world-readable unit file; deleting the tunnel retires it.
+
+Rollback: `qm start 111` (and "Rollback" under fg above for the game), then put pages.eli.gift
+back to the proxied CNAME from the saved record.
