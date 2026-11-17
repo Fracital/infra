@@ -273,6 +273,38 @@ wg masquerades its VPN clients (172.16.8.0/24) to 172.16.5.11 on eth0, so mull s
 The bridge firewall lets wg's port (`veth200i0`) talk to anyone, and mull forwards to
 `wg0-mullvad` from the LAN.
 
+## Guest firewalls
+
+Besides the bridge firewall on divide, the guests filter their own input (2026-11-17). On the
+containers below it is one nft table, `inet guestfw`, in `/etc/nftables.d/guestfw.nft`, included
+from `/etc/nftables.conf`. Input policy is drop; it accepts `lo`, established and related
+traffic, ICMP, SSH from divide (172.16.5.1) and the VPN (172.16.5.11), and then:
+
+| Guest         | Also accepts                                              |
+| ------------- | --------------------------------------------------------- |
+| wispdev (122) | nothing                                                   |
+| vault (100)   | nothing (its tunnel reaches nginx over `lo`)              |
+| guca (117)    | nothing (its tunnel reaches nginx over `lo`)              |
+| holy (205)    | tcp 8080 from the edge 172.16.5.10 and amph 172.16.5.3    |
+| kn (203)      | tcp and udp 21015-21017, 21115 from anyone                |
+| runner (204)  | anything from `docker0` (job containers)                  |
+| kru (120)     | tcp 80, 443 from the edge; udp 21100 (kn-rtc, after DNAT) |
+
+The table is rendered and loaded by `divide/guestfw/apply.sh <ctid> [rule ...]` (run on divide,
+it arms a 180 s revert timer first) and kept by `divide/guestfw/persist.sh <ctid>`, which also
+deletes `flush ruleset` from `/etc/nftables.conf`. That line would otherwise wipe tables other
+services load on a restart of `nftables.service` (kru's `krurtc`, Docker's on the runner).
+
+- **eagler (VM 104)** keeps ufw, narrowed to: SSH from divide and the VPN; tcp 80, 443, 8080 from
+  amph (the panel and Wings are reached edge, amph, eagler); tcp 3306 from `pterodactyl0`
+  (172.18.0.0/16); tcp 2022 (Wings SFTP) from anyone. Minecraft 25565/25566 is Docker's DNAT and
+  does not pass ufw. The old rules are in `/root/ufw-bak-20261117/`.
+- **bs (CT 202)** already had its own default-deny table (`inet bsfilter`).
+- **amph** (`abulxt-firewall.sh`) and **terp** (ufw from `roles/fracital_origin`) are default-deny
+  through their roles.
+- **Not yet**: the edge (`roles/edge_firewall` has never been applied on divide), chat, wg and mull.
+  wg and divide carry the operator's own VPN; chat and mull carry chat's traffic.
+
 ## TCP tuning and modules
 
 The edge is a container. It can set its own per-namespace TCP keys (`roles/edge_network`,
