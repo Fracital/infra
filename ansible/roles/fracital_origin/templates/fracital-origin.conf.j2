@@ -20,7 +20,9 @@ server {
     }
 
     location / {
-        proxy_pass http://fracital_app;
+        # Fracital, or the app named in X-FRX-App ($frx_app_upstream, nginx.conf): the edge sets
+        # that header itself for a domain registered as stomp and strips any copy a client sent.
+        proxy_pass http://$frx_app_upstream;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $ws_upgrade;
         proxy_set_header Connection $connection_upgrade;
@@ -30,6 +32,7 @@ server {
         proxy_set_header X-Forwarded-For $http_x_real_ip;
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header X-FRX-Edge-Token "";
+        proxy_set_header X-FRX-App "";
         proxy_buffering off;
         proxy_read_timeout {{ fracital_proxy_timeout }};
         proxy_send_timeout {{ fracital_proxy_timeout }};
@@ -90,6 +93,7 @@ server {
         proxy_set_header X-Forwarded-For $http_x_real_ip;
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header X-FRX-Edge-Token "";
+        proxy_set_header X-FRX-App "";
         proxy_buffering off;
         proxy_read_timeout 300s;
         proxy_send_timeout 300s;

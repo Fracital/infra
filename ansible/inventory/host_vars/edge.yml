@@ -63,9 +63,10 @@ edge_extra_interface_ips_v6: []
 
 # The byod names get public_ip, which is not on the box, so nginx listens on the wildcard only.
 # byod.fracit.al has no address of its own any more: Fracital's names still match by server_name,
-# but an unknown Host on byod.fracit.al lands on the abulxt catch-all (00-edge-relay.conf), not
-# Fracital. Its Cloudflare A record (public_ip) is kept by hand; an address listed here would be
-# bound by nginx (fracital-routes.conf.j2), which public_ip cannot be.
+# and an unknown Host on either byod name lands on the catch-all (00-edge-relay.conf), whose link
+# routing (README.md "Link routing") sends it where it is registered, a placeholder page when not. Its
+# Cloudflare A record (public_ip) is kept by hand; an address listed here would be bound by nginx
+# (fracital-routes.conf.j2), which public_ip cannot be.
 edge_advertise_ips:
   - "{{ public_ip }}"
 edge_advertise_ips_v6: []

@@ -75,6 +75,11 @@ RestrictAddressFamilies=AF_INET AF_INET6
 # stream to such a name fail on its first datagram (EPERM) instead of leaving from this host.
 IPAddressDeny={{ abulxt_origin_ip }}
 {% endif %}
+{% if shared_redis_on_terp_db | default(false) | bool %}
+# The edges' shared Redis on terp.db (group_vars/all/main.yml) admits divide's NAT address, which a
+# relay client's direct stream leaves from too: only nginx on this box may reach it.
+IPAddressDeny={{ shared_redis_host }}
+{% endif %}
 # System calls: the common service set minus the dangerous groups, native ABI only.
 SystemCallArchitectures=native
 SystemCallFilter=@system-service

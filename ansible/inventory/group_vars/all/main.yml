@@ -110,6 +110,20 @@ wisp_sites:
 # issuance made multi-edge-safe via one central store).
 auto_ssl_redis_port: 6379
 
+# The edges' shared Redis: lua-resty-auto-ssl's certificates and challenge tokens, and link
+# routing's linkroute:v1 (roles/edge_relay nginx.conf.j2). A dedicated Redis on terp.db (G-Core,
+# port 6380, requirepass, noeviction, AOF, firewalled to divide_public_ip, which every divide guest
+# leaves from). false rolls the edges back to amph's auto-ssl Redis above (abulxt_origin_ip,
+# auto_ssl_redis_port, auto_ssl_redis_password); RUNBOOK.md "Shared Redis on terp.db" has the order,
+# keys copied first. wisp.baby's live stats stay on amph's Redis either way (its collector is there).
+shared_redis_on_terp_db: true
+shared_redis_host: "80.93.219.21"
+shared_redis_port: 6380
+# shared_redis_password: the vault (group_vars/all/secrets.yml, GitHub secret SHARED_REDIS_PASSWORD).
+edge_redis_host: "{{ shared_redis_host if shared_redis_on_terp_db | bool else abulxt_origin_ip }}"
+edge_redis_port: "{{ shared_redis_port if shared_redis_on_terp_db | bool else auto_ssl_redis_port }}"
+edge_redis_password: "{{ shared_redis_password if shared_redis_on_terp_db | bool else auto_ssl_redis_password }}"
+
 # Eaglercraft backend on amph's local subnet (not routable from remote edges).
 # amph relays the mc subdomains to it; edges forward to amph (see edge.yml).
 eaglercraft_backend_ip: 5.188.124.125

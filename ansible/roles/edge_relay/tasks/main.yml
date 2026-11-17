@@ -23,6 +23,18 @@
       ANSIBLE_PRIVATE_VARS secret). Copy private.example/private.yml there and fill it in.
     quiet: true
 
+# The edges' shared Redis (group_vars/all/main.yml shared_redis_*): nginx.conf's init_by_lua
+# (certificates, link routing) has no way to report a missing password other than failing to
+# start, so it is checked here.
+- name: The shared Redis password is set (vault, group_vars/all/secrets.yml)
+  ansible.builtin.assert:
+    that: edge_redis_password is defined and edge_redis_password | length > 0
+    fail_msg: >-
+      {{ 'shared_redis_password' if shared_redis_on_terp_db | bool else 'auto_ssl_redis_password' }}
+      is missing (vault; GitHub secret {{ 'SHARED_REDIS_PASSWORD' if shared_redis_on_terp_db | bool else 'AUTO_SSL_REDIS_PASSWORD' }}).
+    quiet: true
+  no_log: true
+
 - name: Create openresty config directories
   ansible.builtin.file:
     path: "{{ item }}"
@@ -36,6 +48,7 @@
     - "{{ openresty_conf_dir }}/snippets"
     - "{{ openresty_conf_dir }}/lua"
     - "{{ openresty_prefix }}/nginx/logs"
+    - "{{ edge_placeholder_dir }}"
 
 # Legacy per-edge catch-alls (from deploy/openresty-ashburn) declare their own
 # :80/:443 default servers and conflict with the unified 00-edge-relay.conf.
@@ -166,6 +179,47 @@
   when: not (wispstats_on | bool)
   notify: reload openresty
 
+# holywisp.fracit.al's / (30-fracital.conf) and, with link routing, any name nobody registered.
+# Served from disk: a change needs no reload.
+- name: Placeholder page
+  ansible.builtin.copy:
+    src: placeholder.html
+    dest: "{{ edge_placeholder_dir }}/index.html"
+    owner: root
+    group: root
+    mode: "0644"
+
+# Link routing (files/link_routes.lua, README.md "Link routing"). Like wispstats.lua, the module
+# is in place before nginx.conf, whose validate step runs init_by_lua and so loads it.
+- name: Link routing
+  when: link_routes_on | bool
+  block:
+    - name: Link routing sites are valid
+      ansible.builtin.assert:
+        that:
+          - link_routes_default_site in ['fracital', 'stomp', 'abstract', 'holy', 'holywisp']
+          - link_routes_unavailable_site in ['fracital', 'stomp', 'abstract', 'holy', 'holywisp']
+        fail_msg: >-
+          link_routes_default_site and link_routes_unavailable_site must each be fracital, stomp,
+          abstract, holy or holywisp.
+        quiet: true
+
+    - name: Link routing Lua module
+      ansible.builtin.copy:
+        src: link_routes.lua
+        dest: "{{ openresty_conf_dir }}/lua/link_routes.lua"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: reload openresty
+
+- name: Link routing absent (not enabled)
+  ansible.builtin.file:
+    path: "{{ openresty_conf_dir }}/lua/link_routes.lua"
+    state: absent
+  when: not (link_routes_on | bool)
+  notify: reload openresty
+
 # New and renewed certificates get a P-256 key: an RSA-4096 signature cost 1.03 ms of CPU per
 # full handshake (2026-11-16) and a 6.2 KB server flight. dehydrated sources conf.d/*.sh; the
 # certificates already issued stay RSA until they renew.
@@ -195,7 +249,10 @@
     dest: "{{ openresty_conf_dir }}/conf.d/00-edge-relay.conf"
     owner: root
     group: root
-    mode: "0644"
+    # Root-only like 30-fracital.conf and 35-holyunb.conf: it holds the byod token and, with link
+    # routing, Fracital's and holyunb's relay keys.
+    mode: "0640"
+  diff: false # holds the token and the gate keys
   notify: reload openresty
 
 # Other boxes' HTTP-01 on the shared public address (defaults edge_acme_forwards).

@@ -115,6 +115,7 @@ jobs:
           ANSIBLE_PRIVATE_VARS: ${{ secrets.ANSIBLE_PRIVATE_VARS }}
           BYOD_TOKEN: ${{ secrets.BYOD_TOKEN }}
           AUTO_SSL_REDIS_PASSWORD: ${{ secrets.AUTO_SSL_REDIS_PASSWORD }}
+          SHARED_REDIS_PASSWORD: ${{ secrets.SHARED_REDIS_PASSWORD }}
           GCORE_API_TOKEN: ${{ secrets.GCORE_API_TOKEN }}
           CLOUDFLARE_ZT_API_TOKEN: ${{ secrets.CLOUDFLARE_ZT_API_TOKEN }}
           SHADY_RELAY_PASSWORD: ${{ secrets.SHADY_RELAY_PASSWORD }}

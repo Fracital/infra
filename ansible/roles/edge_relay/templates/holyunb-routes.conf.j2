@@ -20,6 +20,7 @@ map $http_upgrade $holyunb_connection {
     default       "";
 }
 
+{% if not (link_routes_replace_holy | bool) %}
 server {
     listen 80;
     listen [::]:80;
@@ -117,3 +118,8 @@ server {
         proxy_send_timeout {{ holyunb_proxy_timeout }};
     }
 }
+{% else %}
+# link_routes_replace_static: holyunb_hosts have no server blocks here. They reach holy through
+# 00-edge-relay.conf's link routing (@link_holy, the keyed path and the 403 for a wrong key are
+# there), which uses the upstream and the map above.
+{% endif %}

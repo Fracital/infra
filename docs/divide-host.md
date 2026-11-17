@@ -31,7 +31,7 @@ authorization, like any other live host (AGENTS.md "Servers").
 | 172.16.5.48 | blockshooter (CT 202) | blockshooter relay (`[bs_ct_divide]`)                      |
 | 172.16.5.62 | terp                  | Fracital origin, VM 116 (moved from meal 2026-11-16)       |
 | 172.16.5.64 | chat                  | estro.help backend (`host_vars/amph.yml` `estro_upstream`) |
-| 172.16.5.79 | holy                  | holyunb.locker site (website2 :8080), VM 127               |
+| 172.16.5.79 | holy (CT 205)         | holyunb.locker site (website2 :8080), was VM 127           |
 | 172.16.5.94 | kn (CT 203)           | KrunkNative game servers (`[kn_ct_divide]`)                |
 | (tap101i0)  | mull (VM 101)         | may only talk to chat and sm (bridge firewall below)       |
 
@@ -70,12 +70,12 @@ The software a guest runs is its name and the table above, not a tag.
 | kru (120)              | `origin` `krunk` `in-edge` `in-tunnel` `in-dnat`  |
 | wispdev (122)          | `dev` `wisp-baby`                                 |
 | mac (126)              | `ci`                                              |
-| holy (127)             | `origin` `holyunb` `in-edge`                      |
 | wg (200)               | `vpn` `in-dnat`                                   |
 | edge (201)             | `edge` `in-dnat` `out-warp`                       |
 | blockshooter (202)     | `game` `blockshooter` `in-edge` `in-dnat`         |
 | kn (203)               | `game` `krunk` `in-dnat`                          |
 | runner (204)           | `ci`                                              |
+| holy (205)             | `origin` `holyunb` `in-edge` `in-tunnel`          |
 | templates (9000, 9001) | `template`                                        |
 
 A guest that gains or loses a port forward, a tunnel or an edge route gets its `in-` tags changed
@@ -99,7 +99,7 @@ rebalancing them), VMs with `qm set --affinity`.
 | 7, 23        | guca (117)                       |
 | 7            | vault (100), wg (CT 200)         |
 | 23           | chat (106)                       |
-| 0-7, 16-23   | every VM except mac              |
+| 0-7, 16-23   | every VM except mac, holy (205)  |
 | 8-11, 24-27  | mac (126), runner (204)          |
 | 12-15, 28-31 | wispdev (122), exclusive         |
 
@@ -210,15 +210,20 @@ The stateless equivalent of Proxmox's per-NIC `ipfilter`, on the `vmbr1` bridge:
 
   - other guest-to-guest paths:
 
-    | From                | To               | Ports                                    | Why                                              |
-    | ------------------- | ---------------- | ---------------------------------------- | ------------------------------------------------ |
-    | runner 172.16.5.204 | terp 172.16.5.62 | tcp 22                                   | CI deploys (stomp deploy gate)                   |
-    | runner 172.16.5.204 | chat 172.16.5.64 | tcp 22                                   | CI deploys (estro deploy gate)                   |
-    | kru 172.16.5.47     | kn 172.16.5.94   | tcp + udp 21015-21017, 21115             | kn-bridge (tcp) and kn-rtc (udp) to game servers |
-    | kn 172.16.5.94      | kru 172.16.5.47  | udp from source ports 21015-21017, 21115 | the game servers' udp replies (stateless chain)  |
+    | From                | To                 | Ports                                    | Why                                                                                                     |
+    | ------------------- | ------------------ | ---------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+    | runner 172.16.5.204 | terp 172.16.5.62   | tcp 22                                   | CI deploys (stomp deploy gate)                                                                          |
+    | runner 172.16.5.204 | chat 172.16.5.64   | tcp 22                                   | CI deploys (estro deploy gate)                                                                          |
+    | kru 172.16.5.47     | kn 172.16.5.94     | tcp + udp 21015-21017, 21115             | kn-bridge (tcp) and kn-rtc (udp) to game servers                                                        |
+    | kn 172.16.5.94      | kru 172.16.5.47    | udp from source ports 21015-21017, 21115 | the game servers' udp replies (stateless chain)                                                         |
+    | amph 172.16.5.3     | chat 172.16.5.64   | tcp 80                                   | estro.help origin behind amph :9080                                                                     |
+    | amph 172.16.5.3     | eagler 172.16.5.76 | tcp 443, 8080, 25565                     | mc, mcpanel, mcnode relay (25-mc-relay.conf)                                                            |
+    | amph 172.16.5.3     | holy 172.16.5.79   | tcp 8080                                 | abulxt `/cdn/` (theatre) via `abulxt_cdn_backend`; added 2026-11-17, it had been dropped since the move |
 
   Traffic between a guest and divide (its gateway, DNS, the NAT) is not bridged and does not
   pass this chain.
+
+holy's pair is `veth205i0` (it was `tap127i1`, VM 127's second NIC, until 2026-11-17).
 
 A new edge-to-origin path needs a line here as well as the origin's own firewall (amph:
 `abulxt-firewall.sh`, `EDGE_SUBNETS="172.16.5.0/24"`; terp: ufw, `roles/fracital_origin`).
@@ -361,3 +366,29 @@ not leave through WARP. `roles/edge_warp` adds `to 91.199.82.174 tcp dport 80 lo
 `conf.d/05-divide-acme.conf` on the edge answers ACME for divide itself:
 `divide.eli.gift` `/.well-known/acme-challenge/` goes to 172.16.5.1:80, and the rest of that name
 is a 301 to `:8006`.
+
+## holy: VM 127 to CT 205 (2026-11-17)
+
+holy was converted from VM 127 (Debian 13 cloud image) to the unprivileged container CT 205 on
+2026-11-17 (21:25 to 21:31 UTC, about 4 minutes of downtime), with the owner's approval. It keeps
+its address (172.16.5.79), its MAC (`BC:24:11:71:5D:B1`) and its SSH host keys. The VM's root
+filesystem was tarred with `--numeric-owner --xattrs --acls` and created as the CT with
+`pct create --unprivileged 1`, so ownership is shifted by 100000.
+
+- **Config**: 2 cores, 2048 MB, no swap, rootfs `local:205` 24 GB, `nesting=1`, nameservers
+  1.1.1.1 and 1.0.0.1, `lxc.cgroup2.cpuset.cpus: 0-7,16-23` (the VM's old affinity), `onboot: 1`.
+- **Inside**: cloud-init, the kernels, grub, shim and netplan are purged and `/etc/fstab` is empty.
+  Networking is ifupdown2 with the `/etc/network/interfaces` Proxmox writes (systemd-networkd is
+  disabled), like the other CTs. `pm2-holy.service.d/lxc-limits.conf` sets `LimitNOFILE=524288`
+  and `LimitNPROC=131072`, because systemd in an unprivileged CT cannot set `infinity`.
+  `sys-kernel-config.mount` and `sys-kernel-debug.mount` are masked.
+- **Unchanged**: website2 under `pm2-holy` on :8080, PostgreSQL 17 (local database `holy`) and
+  the token-file `cloudflared` tunnel.
+- **Backups** (on divide): `/var/lib/vz/dump/vzdump-qemu-127-2026_11_17-21_26_03.vma.zst` (the
+  stopped VM), and `/root/holy-ct-20261117T212522/` (the rootfs tarball, the VM config, the old
+  `nftables.conf` and holy's SSH host keys).
+- **VM 127** is kept stopped with `onboot: 0`, disk intact, until it is deleted.
+
+Rollback: `pct stop 205; pct set 205 --onboot 0`, put `tap127i1` back in place of `veth205i0` in
+both `divide_guests` sets in `/etc/nftables.conf` (`nft -c -f`, then `nft -f`), then
+`qm set 127 --onboot 1; qm start 127`.

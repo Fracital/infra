@@ -6,24 +6,25 @@ nothing here deploys the app itself (that stays in CI/CD per repo policy).
 
 ## What's managed
 
-| Layer           | Role                                                                 | Hosts                                   | What it does                                                                                                                                                                                                                                                                  |
-| --------------- | -------------------------------------------------------------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Origin          | `abulxt_origin`                                                      | `amph`                                  | Shared auto-ssl Redis store + firewall open to all edge subnets (9080/8822/6379)                                                                                                                                                                                              |
-| Edge install    | `openresty`                                                          | all `edge`                              | OpenResty from openresty.org apt repo + lua-resty-auto-ssl via luarocks + fallback cert                                                                                                                                                                                       |
-| Edge relay      | `edge_relay`                                                         | all `edge`                              | On-demand TLS (shared Redis) + reverse-proxy to amph `:9080` with `X-BYOD-Token`                                                                                                                                                                                              |
-| krunk.io routes | `edge_relay` (`krunkio_enabled`)                                     | all `edge`                              | `assets.`/`coordinator.`/`matchmaker.`/`play.krunk.io` relayed straight to KrunkNative's kru over pinned TLS, assets cached on the edge. See [krunk.io routes](#krunkio-routes)                                                                                               |
-| Fracital routes | `edge_relay` (`fracital_enabled`)                                    | all `edge`                              | `fracital_hosts` (+ `www.`) relayed to Fracital's terp over pinned TLS; the keyed relay path goes to the edge's own holyWisp; `fracital_wisp_hosts` (`holywisp.fracit.al`) serve only holyWisp's web client, that path and `/health`. See [Fracital routes](#fracital-routes) |
-| holyunb routes  | `edge_relay` (`holyunb_enabled`)                                     | `wisp_edge`                             | `holyunb.locker`: the keyed relay path `/wisp/<holyunb_wisp_gate_key>/` goes to the box's own holyWisp (tag `holyunb`); everything else to the site on holy (`172.16.5.79:8080`). See [holyunb routes](#holyunb-routes)                                                       |
-| Fracital origin | `fracital_origin` (`playbooks/fracital-origin.yml`)                  | `terp`                                  | OpenResty in place of nginx; ufw admits only the edge /24s on :443. See [Fracital routes](#fracital-routes)                                                                                                                                                                   |
-| Deploy user     | `deploy_user` (tag `deploy_user`)                                    | `amph`, `terp`                          | The unprivileged `deploy` user CI logs in as: root-owned authorized_keys with forced-command keys, fixed sudo rules. See [Deploy user](#deploy-user)                                                                                                                          |
-| Edge firewall   | `edge_firewall` (vendored; `playbooks/firewall.yml`, tag `firewall`) | all `edge` (`edge_firewall_manage`)     | Host nftables, edge-firewall-contract v1 shared with KrunkNative: base policy drop + ssh 22, abulxt drop-in tcp 80/443/8080 + udp 443. See [Edge firewall](#edge-firewall)                                                                                                    |
-| fail2ban        | `fail2ban` (vendored; `playbooks/fail2ban.yml`, tag `fail2ban`)      | all `edge` + `amph` (`fail2ban_manage`) | sshd + recidive jails banning into nftables `inet f2b-table`, fail2ban-contract v1 shared with KrunkNative; edges also get sshd MaxStartups 50:30:200. See [fail2ban](#fail2ban)                                                                                              |
-| DNS             | `gcore_dns`                                                          | localhost                               | Round-robin A/AAAA RRsets for the two byod names, `byod.abstracteducation.loan` and `byod.fracit.al` (`byod_names`), each on its half of the edge IPs; per-site records for abulxt. See [Two byod names](#two-byod-names)                                                     |
-| Edge DNS        | `edge_dns`                                                           | `wisp_edge`                             | PowerDNS on every wisp box: authoritative for every `byod_names` zone, the apex answering with the healthy addresses of the box nearest the client. See [Edge DNS](#edge-dns)                                                                                                 |
-| DNS classifier  | `gateway_dns`                                                        | localhost                               | Locks the Cloudflare Gateway DoH classifier locations to the edge fleet's source networks                                                                                                                                                                                     |
-| Edge Wisp       | `edge_wisp`                                                          | all `edge`                              | Edge-local holyWisp + classifying SOCKS5 router for TCP streams (adult → refuse, shady → amph Mullvad hop, clean → direct); UDP streams leave the edge directly (`proxy-udp = direct`), refused for a shady name (the router's name gate, `edge_router_dns_port`)             |
-| Origin Wisp     | `edge_wisp` (tag `wisp`, vars in `host_vars/amph.yml`)               | `amph`                                  | Same holyWisp build as `abulxt-edge-wisp.service` on `127.0.0.1:6001`, TCP egress straight into `mullvad-pool` (`:1080`), UDP direct (`proxy-udp = direct`), no router; retires the old npm wrapper `abulxt-wisp.service`                                                     |
-| Shady relay     | `abulxt_origin`                                                      | `amph`                                  | Authenticated SOCKS5 on `:1082` chaining into `mullvad-pool`; firewall opened to edge /24s                                                                                                                                                                                    |
+| Layer           | Role                                                                 | Hosts                                   | What it does                                                                                                                                                                                                                                                                          |
+| --------------- | -------------------------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Origin          | `abulxt_origin`                                                      | `amph`                                  | Shared auto-ssl Redis store + firewall open to all edge subnets (9080/8822/6379)                                                                                                                                                                                                      |
+| Edge install    | `openresty`                                                          | all `edge`                              | OpenResty from openresty.org apt repo + lua-resty-auto-ssl via luarocks + fallback cert                                                                                                                                                                                               |
+| Edge relay      | `edge_relay`                                                         | all `edge`                              | On-demand TLS (shared Redis) + reverse-proxy to amph `:9080` with `X-BYOD-Token`                                                                                                                                                                                                      |
+| krunk.io routes | `edge_relay` (`krunkio_enabled`)                                     | all `edge`                              | `assets.`/`coordinator.`/`matchmaker.`/`play.krunk.io` relayed straight to KrunkNative's kru over pinned TLS, assets cached on the edge. See [krunk.io routes](#krunkio-routes)                                                                                                       |
+| Fracital routes | `edge_relay` (`fracital_enabled`)                                    | all `edge`                              | `fracital_hosts` (+ `www.`) relayed to Fracital's terp over pinned TLS; the keyed relay path goes to the edge's own holyWisp; `fracital_wisp_hosts` (`holywisp.fracit.al`) serve only a placeholder page, the relay, that path and `/health`. See [Fracital routes](#fracital-routes) |
+| holyunb routes  | `edge_relay` (`holyunb_enabled`)                                     | `wisp_edge`                             | `holyunb.locker`: the keyed relay path `/wisp/<holyunb_wisp_gate_key>/` goes to the box's own holyWisp (tag `holyunb`); everything else to the site on holy (`172.16.5.79:8080`). See [holyunb routes](#holyunb-routes)                                                               |
+| Link routing    | `edge_relay` (`link_routes_enabled`)                                 | all `edge`                              | A Host with no server block of its own goes to the site registered for it in the shared Redis (`linkroute:v1`, abulxt's Discord bot): fracital, stomp, abstract or holy; unregistered names get a placeholder page. See [Link routing](#link-routing)                                 |
+| Fracital origin | `fracital_origin` (`playbooks/fracital-origin.yml`)                  | `terp`                                  | OpenResty in place of nginx; ufw admits only the edge /24s on :443. See [Fracital routes](#fracital-routes)                                                                                                                                                                           |
+| Deploy user     | `deploy_user` (tag `deploy_user`)                                    | `amph`, `terp`                          | The unprivileged `deploy` user CI logs in as: root-owned authorized_keys with forced-command keys, fixed sudo rules. See [Deploy user](#deploy-user)                                                                                                                                  |
+| Edge firewall   | `edge_firewall` (vendored; `playbooks/firewall.yml`, tag `firewall`) | all `edge` (`edge_firewall_manage`)     | Host nftables, edge-firewall-contract v1 shared with KrunkNative: base policy drop + ssh 22, abulxt drop-in tcp 80/443/8080 + udp 443. See [Edge firewall](#edge-firewall)                                                                                                            |
+| fail2ban        | `fail2ban` (vendored; `playbooks/fail2ban.yml`, tag `fail2ban`)      | all `edge` + `amph` (`fail2ban_manage`) | sshd + recidive jails banning into nftables `inet f2b-table`, fail2ban-contract v1 shared with KrunkNative; edges also get sshd MaxStartups 50:30:200. See [fail2ban](#fail2ban)                                                                                                      |
+| DNS             | `gcore_dns`                                                          | localhost                               | Round-robin A/AAAA RRsets for the two byod names, `byod.abstracteducation.loan` and `byod.fracit.al` (`byod_names`), each on its half of the edge IPs; per-site records for abulxt. See [Two byod names](#two-byod-names)                                                             |
+| Edge DNS        | `edge_dns`                                                           | `wisp_edge`                             | PowerDNS on every wisp box: authoritative for every `byod_names` zone, the apex answering with the healthy addresses of the box nearest the client. See [Edge DNS](#edge-dns)                                                                                                         |
+| DNS classifier  | `gateway_dns`                                                        | localhost                               | Locks the Cloudflare Gateway DoH classifier locations to the edge fleet's source networks                                                                                                                                                                                             |
+| Edge Wisp       | `edge_wisp`                                                          | all `edge`                              | Edge-local holyWisp + classifying SOCKS5 router for TCP streams (adult → refuse, shady → amph Mullvad hop, clean → direct); UDP streams leave the edge directly (`proxy-udp = direct`), refused for a shady name (the router's name gate, `edge_router_dns_port`)                     |
+| Origin Wisp     | `edge_wisp` (tag `wisp`, vars in `host_vars/amph.yml`)               | `amph`                                  | Same holyWisp build as `abulxt-edge-wisp.service` on `127.0.0.1:6001`, TCP egress straight into `mullvad-pool` (`:1080`), UDP direct (`proxy-udp = direct`), no router; retires the old npm wrapper `abulxt-wisp.service`                                                             |
+| Shady relay     | `abulxt_origin`                                                      | `amph`                                  | Authenticated SOCKS5 on `:1082` chaining into `mullvad-pool`; firewall opened to edge /24s                                                                                                                                                                                            |
 
 Every relay (4 edges + amph) runs the same fully static
 [holyWisp](https://github.com/Fracital/holyWisp) binary (C11 Wisp v1/v2 server;
@@ -118,7 +119,8 @@ the same files in plain text, in the runner only, from GitHub Actions secrets
 | File (gitignored)                               | Variable                           | GitHub secret                | What it is                                                                                                                                                       |
 | ----------------------------------------------- | ---------------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `inventory/group_vars/all/secrets.yml`          | `byod_token`                       | `BYOD_TOKEN`                 | Shared `X-BYOD-Token` the edges send to amph's origin-internal listener.                                                                                         |
-|                                                 | `auto_ssl_redis_password`          | `AUTO_SSL_REDIS_PASSWORD`    | `requirepass` for the shared auto-ssl Redis.                                                                                                                     |
+|                                                 | `auto_ssl_redis_password`          | `AUTO_SSL_REDIS_PASSWORD`    | `requirepass` for amph's auto-ssl Redis (wisp.baby live stats; the edges' certificates with `shared_redis_on_terp_db: false`).                                   |
+|                                                 | `shared_redis_password`            | `SHARED_REDIS_PASSWORD`      | `requirepass` for the edges' shared Redis on terp.db (certificates, link routing's `linkroute:v1`); the same value in abulxt's writer config.                    |
 |                                                 | `gcore_api_token`                  | `GCORE_API_TOKEN`            | Gcore API token for `dns.yml` (the Gcore rollback zones).                                                                                                        |
 |                                                 | `cloudflare_zt_api_token`          | `CLOUDFLARE_ZT_API_TOKEN`    | Cloudflare Account API token `abulxt-gateway-ansible` (Account, Zero Trust, Edit, one account). `gateway_dns` PUTs the DoH source-IP allowlist with it.          |
 |                                                 | `shady_relay_password`             | `SHADY_RELAY_PASSWORD`       | RFC 1929 password the edge routers present to amph's `shady-relay` on `:1082` (`/etc/abulxt/edge-router.json` on edges, `/etc/abulxt/shady-relay.json` on amph). |
@@ -415,8 +417,8 @@ client -> Cloudflare (proxied CNAME -> byod.abstracteducation.loan, SSL Full) ->
   everything else         -> https://terp:443 (pinned cert, X-FRX-Edge-Token) -> OpenResty -> :8080
 
 holywisp.fracit.al (fracital_wisp_hosts) -> edge :443
-  GET /                   -> holyWisp's built-in browser client; a WebSocket upgrade on / is the relay
-                             itself (wss://holywisp.fracit.al/, the public demo endpoint, no key)
+  GET /                   -> the placeholder page (files/placeholder.html); a WebSocket upgrade on / is
+                             the relay itself (wss://holywisp.fracit.al/, the public endpoint, no key)
   /pipe/<WISP_GATE_KEY>/  -> this edge's holyWisp, as above
   GET /health             -> holyWisp's /health ({"status":"ok"}); monitoring target
   everything else         -> 403 on the edge (no terp, no /stats)
@@ -424,7 +426,9 @@ holywisp.fracit.al (fracital_wisp_hosts) -> edge :443
 
 - **Names.** `fracital_hosts` (apex; `www.` is added). Both direct hosts (`fracit.al`,
   `fracital.xyz`) and the cloak domains. A new cloak domain: add it here, run
-  `playbooks/edges.yml --tags relay`, then repoint DNS. No terp change is needed (terp's
+  `playbooks/edges.yml --tags relay`, then repoint DNS. With `link_routes_replace_static` the
+  lists leave the edge config and a new name is registered in the bot instead
+  ([Link routing](#replacing-the-static-lists)). No terp change is needed (terp's
   vhost is a catch-all; Fracital picks the decoy by `Host`, after a restart for new folders).
 - **Certificates.** Proxied CNAMEs resolve to Cloudflare, so the validator's DNS match can never
   approve them: the edge's `allow_domain` approves `fracital_server_names` locally. LE's http-01
@@ -432,14 +436,16 @@ holywisp.fracit.al (fracital_wisp_hosts) -> edge :443
   (not strict) also accepts the fallback cert, so a failed issuance does not take a site down.
 - **Relay.** The edge's own holyWisp serves the keyed path, so Fracital's relay traffic never
   reaches terp. `fracital_wisp_hosts` are extra names for the same relay (certificates approved
-  locally like the app names) that expose only holyWisp's web client on `/` (paste the keyed
-  `wss://` URL into its server field), the keyed path and `GET /health`. The client builds the relay URL from `location.origin` + the path terp injects
+  locally like the app names) that expose only the placeholder page and the keyless relay on `/`,
+  the keyed path and `GET /health`. The client builds the relay URL from `location.origin` + the path terp injects
   (`window.__FRX_CFG__`), so it lands on whichever edge served the page. Key =
   `fracital_wisp_gate_key` = terp's `WISP_GATE_KEY`; segment `fracital_wisp_path` (`pipe`).
 - **terp** (`fracital_origin`, `playbooks/fracital-origin.yml`). OpenResty (pinned bookworm
   .debs, as on the Debian 13 edges) replaces the hand-made nginx site; nginx is stopped and
   disabled, not removed. `:443` is the edge listener: pinned cert, `X-FRX-Edge-Token` checked,
-  then stripped; `X-Real-IP` comes from the edge. The edge reaches terp on its private
+  then stripped; `X-Real-IP` comes from the edge. Its default server proxies to the app named in
+  `X-FRX-App` (a `fracital_origin_apps` name; anything else is Fracital), which only the edge's
+  link routing sets ([Link routing](#link-routing)). The edge reaches terp on its private
   `172.16.5.62` (`fracital_origin_ip`), and ufw admits `:443` and `:8443` only from
   `fracital_edge_subnets` (each edge's `edge_origin_source`, else `edge_subnet`: `172.16.5.10/32`
   since the move to divide; the old public-IP edge ranges are obsolete, delete their leftover
@@ -509,6 +515,98 @@ Rollback: point the `holyunb.locker` record back at holy's Cloudflare tunnel
 (`<tunnel id>.cfargotunnel.com`, proxied) and remove `separateWispServer` from holy's config.js
 (rebuild, restart). `holyunb_enabled: false` and `playbooks/wisp.yml --tags relay` drop the routes.
 
+## Link routing
+
+Staff register a domain in abulxt's Discord bot and pick the site it leads to. The edge's `:443`
+default server (`00-edge-relay.conf`, the catch-all for every Host without a server block of its
+own) looks the Host up and proxies it there. Inputs: `link_routes_*` in
+`roles/edge_relay/defaults/main.yml`, switched on in `inventory/group_vars/edge.yml`. Code:
+`roles/edge_relay/files/link_routes.lua` (tests: `roles/edge_relay/tests/link_routes_test.lua`).
+
+| Answer     | Where it goes                                                                                                                      |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `abstract` | `@link_abstract`: amph `:9080` with `X-BYOD-Token`, the same proxy as before, `www.` still redirected to the apex                  |
+| `fracital` | `@link_fracital`: terp, as `30-fracital.conf`'s `location /` (pinned TLS, `X-FRX-Edge-Token`, `/ads.txt` to rev.iq); bundles below |
+| `stomp`    | the same, with `X-FRX-App: stomp`, which terp's default server routes to the stomp app (`fracital_origin_apps`)                    |
+| `holy`     | `@link_holy`: holy `172.16.5.79:8080`, as `35-holyunb.conf`'s `location /`                                                         |
+| `holywisp` | `@link_holywisp`: the placeholder page (`files/placeholder.html`, "Nothing is set up here yet."), any path, `no-store`             |
+
+- **Contract.** The edges' shared Redis (`edge_redis_host`: terp.db, see below), hash
+  `linkroute:v1`. Field: the domain, lowercase, punycode, no trailing dot, no leading `www.`.
+  Value: `fracital`, `stomp`, `abstract` or `holy`. An entry covers the domain and every name under
+  it, and the longest match wins. Field `__ready` is the unix time of the bot's last full sync
+  (every 60 s). abulxt's bot is the only writer. `holywisp` is never stored.
+- **Lookup.** One `HMGET linkroute:v1 __ready <name> <parent>...` (200 ms timeouts, pooled
+  connections). The answer is cached in `lua_shared_dict link_routes` for 30 s
+  (`link_routes_fresh_ttl`), so a fresh hit costs no Redis call and a change in the bot reaches
+  the edge within 30 s, and kept 24 h as a stale copy (`link_routes_stale_ttl`). No entry:
+  `link_routes_default_site` (`holywisp`, the placeholder), so a domain shows nothing until staff
+  register it.
+- **Failure.** Redis unreachable, or no `__ready` (the hash is gone): the stale copy answers, else
+  `link_routes_unavailable_site` (`abstract`, the edge's behaviour before link routing). Such an
+  answer is reused for 5 s (`link_routes_retry_ttl`) and never replaces the stale copy; when Redis
+  does not answer it is skipped for 2 s. One warning a minute in the error log (`link_routes: ...`).
+  A reload keeps the cache; a restart during an outage sends every name without a fresh entry to
+  amph.
+- **Equal to the sites' own server blocks.** Their keyed relay paths are in the default server
+  (`/pipe/<fracital_wisp_gate_key>/`, `/wisp/<holyunb_wisp_gate_key>/`, to the edge's holyWisp,
+  stats tags `fracital` and `holyunb`); a wrong key under `/pipe/` (fracital, stomp) or `/wisp/`
+  (holy) is a 403; ACME http-01 over `:443` is answered from the shared Redis; Fracital bundles
+  matching `fracital_asset_regex` go to `@link_fracital_assets`, which caches them for the Fracital
+  app names only (`$fracital_asset_skip`), as `30-fracital.conf` does. abulxt's HSTS and other
+  server-level headers stay on abulxt's answers, and only abulxt's names have `www.` redirected to
+  the apex (on `:80` too). Each site keeps its body size limit: `location /` allows the largest
+  (`link_routes_body_max`) and `link_routes.lua` refuses a `Content-Length` over the site's own with
+  a 413; a chunked body is held to the named location's `client_max_body_size`. stomp's own relay
+  is the app's same-origin `/wisp/`, which goes to terp.
+- **X-FRX-App.** Set or removed by `link_routes.lua` for every request it sends to terp, and
+  cleared in every static Fracital location, so a client's copy never reaches terp; terp reads it
+  only after the token check.
+- **Disabled targets.** A site's named location exists only when its routes do
+  (`fracital_enabled`; `holyunb_on`; stomp also needs a `fracital_origin_apps` entry named
+  `stomp`). An answer for a site that is off is served by amph.
+- **Certificates.** A registered name gets its certificate through amph's validator (`/ask`),
+  which approves the names the bot registered. `allow_domain` in nginx.conf needs no change.
+- **Existing domains.** Before the switch the bot seeds every name with an edge certificate as
+  `abstract`. A Host that relied on the catch-all and is missing from the table (a new abulxt BYOD
+  name, estro.help if the seed missed it) shows the placeholder until it is registered.
+- **holywisp.fracit.al** shows the same placeholder on a plain `GET /` (holyWisp's web client is
+  not published any more). A WebSocket upgrade on `/` is still the keyless relay, the keyed path and
+  `GET /health` are unchanged.
+
+### Replacing the static lists
+
+`link_routes_replace_static: true` takes these names out of the static server blocks and their
+local certificate approval, so they reach their site through the default server like any
+registered name. Import each list into `linkroute:v1` first, with the site shown (apex only: an
+entry covers `www.` and every subdomain):
+
+| Variable                                      | Site       |
+| --------------------------------------------- | ---------- |
+| `fracital_direct_hosts` (`all/fracital.yml`)  | `fracital` |
+| `fracital_cloak_hosts` (private.yml, private) | `fracital` |
+| `fracital_extra_hosts` (`stomp.fracit.al`)    | `stomp`    |
+| `holyunb_hosts` (`all/holyunb.yml`)           | `holy`     |
+
+What stays static, and why:
+
+- `holywisp.fracit.al` (`fracital_wisp_hosts`): its own server (placeholder, keyless relay,
+  `/health`, 403 elsewhere), not the Fracital app. `byod.fracit.al`: the app server keeps it, so
+  the app server, its maps and `30-fracital.conf` stay. wisp.baby, krunk.io, blockshooter, the mc
+  names and the ACME forwards keep their own servers.
+- The upstreams, `$fracital_connection`, `$holyunb_connection`, `$fracital_asset_skip` (still keyed
+  on `fracital_hosts`, which keeps the bundle cache for the Fracital names) and the cache zone stay
+  in `30-fracital.conf` and `35-holyunb.conf`, which `@link_*` use.
+- A `fracital_extra_hosts` name that is not a stomp host (`fracital_origin_apps`) keeps its static
+  entry: the table has no way to name another terp app.
+
+Differences that remain with the flag on: during a Redis outage with no stale copy (a restart in
+the outage) these names go to amph, not their site; and their certificates depend on amph's
+validator approving registered names. Rollback: the flag back to false and `--tags relay`.
+
+Ship (link routing and the Redis move): RUNBOOK.md "Shared Redis on terp.db" and "Link routing".
+Rollback: `link_routes_enabled: false` and `--tags relay`; every unknown Host goes to amph again.
+
 ## Two byod names
 
 The edge's advertised addresses are split between two names. Since 2026-11-16 both are plain
@@ -521,7 +619,8 @@ the Gcore subzones under `gcore_api_token` are only a rollback copy:
 | `byod.fracit.al`              | A 91.199.82.174 (fracit.al zone), kept by hand: the lists are empty | `edge_advertise_ips_fracital` / `_v6_fracital` | Fracital's names (proxied CNAMEs), holywisp.fracit.al                |
 
 Neither has an AAAA record (divide gives guests no public IPv6). With one shared address an
-unknown Host on byod.fracit.al lands on the abulxt catch-all, not Fracital (host_vars/edge.yml).
+unknown Host on either name lands on `00-edge-relay.conf`, and [Link routing](#link-routing) picks
+its site (the placeholder page when nobody registered it; host_vars/edge.yml).
 
 Each half has its own catch-all. abulxt's `00-edge-relay.conf` is the wildcard
 `default_server`, so it is the default on the abstract addresses; the Fracital app server in
@@ -549,7 +648,8 @@ each name's RRset is small enough to stay honest. Rules:
 `estro.help` and `www.` are DNS-only CNAMEs (apex flattened) to `byod.abstracteducation.loan`
 in estro.help's own Cloudflare account (amph's Cloudflare key does not see that zone). No edge
 change: the byod catch-all terminates TLS (validator DNS match) and relays to amph `:9080`, and
-redirects `www.` to the apex, so the apex record is required. amph's `conf.d/57-estro.conf`
+redirects `www.` to the apex, so the apex record is required. It reaches amph only while
+`linkroute:v1` has it as `abstract` ([Link routing](#link-routing)). amph's `conf.d/57-estro.conf`
 (`abulxt_origin`, tag `estro`) forwards to `estro_upstream` (`host_vars/amph.yml`,
 172.16.5.64:80 on the meal VLAN), dropping `X-BYOD-Token`. Check per edge IP with
 `curl -skI --resolve estro.help:443:<edge-ip> https://estro.help/`.
@@ -998,8 +1098,8 @@ Per-edge on-demand HTTP-01 issuance would normally split-brain: Let's Encrypt
 resolves the name to _any_ of the 4 IPs, but only the edge that started the
 order holds the challenge token.
 
-The fix: every edge points `lua-resty-auto-ssl` at a **single Redis on amph**
-(`auto_ssl:*` keys). Certificates **and** ACME http-01 challenge tokens live in
+The fix: every edge points `lua-resty-auto-ssl` at a **single Redis**, amph's or, with
+`shared_redis_on_terp_db`, the dedicated one on terp.db (`auto_ssl:*` keys). Certificates **and** ACME http-01 challenge tokens live in
 that one namespace, so:
 
 - whichever edge receives LE's validation request can answer it, and

@@ -7,7 +7,61 @@
 # half (edge_advertise_ips_fracital) is listened on explicitly by the Fracital
 # servers in conf.d/30-fracital.conf, which are the default there, so an unknown
 # Host on a byod.fracit.al address renders Fracital, never abulxt.
+#
+# Link routing (link_routes_on, files/link_routes.lua, README.md "Link routing"): location / of the
+# :443 default server looks the Host up in the edges' shared Redis (hash linkroute:v1, written by
+# abulxt's Discord bot) and sends it to @link_<site> below, which answers the way that site's own
+# server block does: abstract (amph, as before), fracital, stomp or holy. A site this box does not
+# render goes to amph. A domain nobody registered gets link_routes_default_site
+# ({{ link_routes_default_site }}; holywisp means the placeholder page).
 
+{# The proxy to amph: location / without link routing, @link_abstract (and location /'s fallback) with it. #}
+{% macro amph_proxy() %}
+        proxy_pass http://{{ abulxt_origin_ip }}:{{ abulxt_origin_internal_port }};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $ws_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header CF-Connecting-IP $remote_addr;
+        proxy_set_header X-BYOD-Token "{{ byod_token }}";
+
+        proxy_set_header Sec-WebSocket-Protocol $http_sec_websocket_protocol;
+        proxy_set_header Sec-WebSocket-Extensions $http_sec_websocket_extensions;
+        proxy_set_header Sec-WebSocket-Key $http_sec_websocket_key;
+        proxy_set_header Sec-WebSocket-Version $http_sec_websocket_version;
+
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout {{ edge_proxy_read_timeout }};
+        proxy_send_timeout {{ edge_proxy_send_timeout }};
+        proxy_connect_timeout {{ edge_proxy_connect_timeout }};
+{% endmacro %}
+{# A keyed relay location's body (the location line and its stats tag differ). #}
+{% macro relay_body() %}
+        set $relay_tail $1;
+        if ($relay_tail = "") {
+            set $relay_tail "/";
+        }
+        proxy_pass http://127.0.0.1:{{ edge_wisp_port }}$relay_tail;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $ws_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_buffering off;
+        # An upgraded connection is relayed through one buffer of proxy_buffer_size each way: the
+        # 4-8 KiB default held one WebSocket to about 400 MiB/s at a full core (defaults/main.yml).
+        proxy_buffer_size {{ edge_ws_proxy_buffer }};
+        proxy_buffers 4 {{ edge_ws_proxy_buffer }};
+        proxy_busy_buffers_size {{ edge_ws_proxy_buffer }};
+        proxy_cache off;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        proxy_connect_timeout 10s;
+{% endmacro %}
 # Internal lua-resty-auto-ssl hook server. Dehydrated (the ACME client) calls
 # this on loopback to deploy/clean up http-01 challenge tokens into the shared
 # Redis store before telling the CA to validate.
@@ -40,10 +94,19 @@ server {
     # challenges too, so www.* certs could never issue (Cloudflare Full
     # (strict) then 526s on www).
     location / {
+{% if link_routes_on | bool %}
+        # Link routing: abulxt's names lose www. as before, the other sites keep the Host as their
+        # own :80 servers do (files/link_routes.lua redirect_https).
+        # (The rewrite-phase `if` below would run first, so it is left out.)
+        access_by_lua_block {
+            require("link_routes").redirect_https()
+        }
+{% else %}
         if ($host ~* ^www\.(.+)$) {
             return 301 https://$1$request_uri;
         }
         return 301 https://$host$request_uri;
+{% endif %}
     }
 }
 
@@ -58,7 +121,7 @@ server {
     server_name _;
     # nginx's default is 1m, which rejected chat sends (/api/ai) with 413 before they reached the origin. Matches the
     # origin's /api/ai and /v1 limit (abulxt deploy/openresty/snippets/routes-common.conf).
-    client_max_body_size 16m;
+    client_max_body_size {{ edge_client_max_body_size }};
 
     ssl_certificate_by_lua_block {
         auto_ssl_instance:ssl_certificate()
@@ -74,15 +137,26 @@ server {
     add_header X-Content-Type-Options "nosniff" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 
+{% if not (link_routes_on | bool) %}
     if ($host ~* ^www\.(.+)$) {
         return 301 https://$1$request_uri;
     }
 
+{% else %}
+    # abulxt's www. to apex redirect is per location with link routing (here in its relay locations,
+    # in link_routes.route() for location /): the other sites' server blocks never redirect www.
+
+{% endif %}
     # Edge-local relay: the keyed path is served by holyWisp on this box (no
     # hop to amph). Its router classifies every stream via Gateway DoH and
     # sends only "shady" ones through amph's Mullvad egress. The path is
     # /{{ wisp_path }}/<key>/ and nothing else on the relay exists.
     location ~* ^/{{ wisp_path }}/{{ wisp_gate_key }}(/.*)?$ {
+{% if link_routes_on | bool %}
+        if ($host ~* ^www\.(.+)$) {
+            return 301 https://$1$request_uri;
+        }
+{% endif %}
         set $relay_tail $1;
         if ($relay_tail = "") {
             set $relay_tail "/";
@@ -118,29 +192,159 @@ server {
     # Any other request under the relay segment (wrong or missing key) is
     # refused. Must stay: without it these fall through to the app server.
     location ~* ^/{{ wisp_path }}(/.*)?$ {
+{% if link_routes_on | bool %}
+        if ($host ~* ^www\.(.+)$) {
+            return 301 https://$1$request_uri;
+        }
+{% endif %}
         return 403 "Forbidden";
     }
+{% if link_routes_fracital_on | bool %}
+
+    # Fracital's keyed relay path (as in 30-fracital.conf), so a domain registered for Fracital or
+    # stomp reaches the relay its client builds from location.origin. A wrong key under
+    # /{{ fracital_wisp_path }}/ is refused by link_routes.route() on those domains only.
+    location ~ ^/{{ fracital_wisp_path }}/{{ fracital_wisp_gate_key }}(/.*)?$ {
+        # Not abulxt's HSTS and other server-level headers: 30-fracital.conf sends none.
+        add_header X-Link-Route "";
+{{ relay_body() -}}
+{% if wispstats_on | bool %}
+        # wisp.baby live stats: a 101 is a relay session starting, the log phase its end (lua/wispstats.lua).
+        header_filter_by_lua_block {
+            require("wispstats").relay_open("fracital", true)
+        }
+        log_by_lua_block {
+            require("wispstats").relay_close()
+        }
+{% endif %}
+    }
+{% endif %}
+{% if link_routes_holy_on | bool %}
+
+    # Holy Unblocker's keyed relay path (as in 35-holyunb.conf), for a domain registered as holy.
+    # Only the exact key matches here: abulxt's own /wisp/ paths on amph are left alone.
+    location ~ ^/{{ holyunb_wisp_path }}/{{ holyunb_wisp_gate_key }}(/.*)?$ {
+        add_header X-Link-Route "";
+{{ relay_body() -}}
+{% if wispstats_on | bool %}
+        # wisp.baby live stats: a 101 is a relay session starting, the log phase its end (lua/wispstats.lua).
+        header_filter_by_lua_block {
+            require("wispstats").relay_open("holyunb")
+        }
+        log_by_lua_block {
+            require("wispstats").relay_close()
+        }
+{% endif %}
+    }
+{% endif %}
 
     location / {
-        proxy_pass http://{{ abulxt_origin_ip }}:{{ abulxt_origin_internal_port }};
+{% if link_routes_on | bool %}
+        # Link routing: every request leaves for its site's @link_<site> location below
+        # (files/link_routes.lua route()), which applies that site's own body size limit; this one is
+        # the largest of them, because nginx checks Content-Length against it before the lookup.
+        # The proxy below only answers if route() returned without a site.
+        client_max_body_size {{ link_routes_body_max }};
+        access_by_lua_block {
+            require("link_routes").route()
+        }
+{% endif %}
+{{ amph_proxy() }}    }
+{% if link_routes_on | bool %}
+
+    # Link routing targets (link_routes.route() ngx.exec()s these). Each repeats what the site's
+    # own server block does. The server's add_header lines above (HSTS with includeSubDomains and
+    # preload, among others) are abulxt's: an add_header in a location stops nginx inheriting them,
+    # and an empty value adds nothing, so the other sites answer with their own server blocks'
+    # headers.
+
+    # abulxt, exactly as location / without link routing (the server's 16m body limit included).
+    location @link_abstract {
+{{ amph_proxy() }}    }
+
+    # A name nobody registered (link_routes_default_site holywisp): the placeholder page, whatever
+    # the path. no-store, so a browser shows the real site as soon as the name is registered.
+    location @link_holywisp {
+        add_header Cache-Control "no-store" always;
+        root {{ edge_placeholder_dir }};
+        try_files /index.html =404;
+    }
+
+    # ACME http-01 over :443 (zones with Always Use HTTPS), as the Fracital and holyunb servers answer it.
+    location @link_acme {
+        add_header X-Link-Route "";
+        content_by_lua_block {
+            auto_ssl_instance:challenge_server()
+        }
+    }
+
+    # A wrong or missing relay key on a Fracital, stomp or holy domain: refused, never relayed.
+    location @link_refuse {
+        add_header X-Link-Route "";
+        return 403 "Forbidden";
+    }
+{% endif %}
+{% if link_routes_fracital_on | bool %}
+
+    # Fracital and stomp: 30-fracital.conf's location / (and its /ads.txt) and its bundle cache.
+    # link_routes.route() has set X-FRX-App (stomp) or removed it (Fracital), replacing whatever the
+    # client sent; terp's default server picks the app by it.
+    location @link_fracital {
+        add_header X-Link-Route "";
+        client_max_body_size {{ fracital_client_max_body_size }};
+        if ($uri = /ads.txt) {
+            return 302 https://rev.iq/$host/ads.txt;
+        }
+        include {{ openresty_conf_dir }}/snippets/fracital-origin.conf;
+        proxy_set_header X-FRX-App $http_x_frx_app;
+        proxy_buffering off;
+        proxy_read_timeout {{ fracital_proxy_timeout }};
+        proxy_send_timeout {{ fracital_proxy_timeout }};
+    }
+
+    # 30-fracital.conf's /assets/ location, for a path matching fracital_asset_regex. The cache is
+    # used only for the Fracital app names ($fracital_asset_skip keys on the Host), as there.
+    location @link_fracital_assets {
+        client_max_body_size {{ fracital_client_max_body_size }};
+        include {{ openresty_conf_dir }}/snippets/fracital-origin.conf;
+        proxy_set_header X-FRX-App $http_x_frx_app;
+        proxy_set_header Accept-Encoding "";
+        proxy_buffering on;
+        proxy_cache fracital_assets;
+        proxy_cache_key $host$uri;
+        proxy_cache_bypass $fracital_asset_skip $http_authorization;
+        proxy_no_cache $fracital_asset_skip $http_authorization $fracital_asset_mutable;
+        proxy_cache_lock on;
+        proxy_cache_lock_timeout 30s;
+        proxy_cache_revalidate on;
+        proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;
+        proxy_cache_background_update on;
+        add_header X-Cache-Status $upstream_cache_status always;
+        proxy_read_timeout 120s;
+        proxy_send_timeout 120s;
+    }
+{% endif %}
+{% if link_routes_holy_on | bool %}
+
+    # 35-holyunb.conf's location /.
+    location @link_holy {
+        add_header X-Link-Route "";
+        client_max_body_size {{ holyunb_client_max_body_size }};
+        proxy_pass http://holyunb_origin;
         proxy_http_version 1.1;
-        proxy_set_header Upgrade $ws_upgrade;
-        proxy_set_header Connection $connection_upgrade;
         proxy_set_header Host $host;
+        proxy_set_header Upgrade $ws_upgrade;
+        proxy_set_header Connection $holyunb_connection;
+        # $remote_addr is the end client (realip already rewrote it for Cloudflare ranges).
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
         proxy_set_header CF-Connecting-IP $remote_addr;
-        proxy_set_header X-BYOD-Token "{{ byod_token }}";
-
-        proxy_set_header Sec-WebSocket-Protocol $http_sec_websocket_protocol;
-        proxy_set_header Sec-WebSocket-Extensions $http_sec_websocket_extensions;
-        proxy_set_header Sec-WebSocket-Key $http_sec_websocket_key;
-        proxy_set_header Sec-WebSocket-Version $http_sec_websocket_version;
-
         proxy_buffering off;
-        proxy_cache off;
-        proxy_read_timeout {{ edge_proxy_read_timeout }};
-        proxy_send_timeout {{ edge_proxy_send_timeout }};
         proxy_connect_timeout {{ edge_proxy_connect_timeout }};
+        proxy_next_upstream off;
+        proxy_read_timeout {{ holyunb_proxy_timeout }};
+        proxy_send_timeout {{ holyunb_proxy_timeout }};
     }
+{% endif %}
 }

@@ -7,7 +7,7 @@
 #            (baseline: ansible/.ansible-lint-ignore), the vendored roles' VERSION,
 #            and scripts/check-public.py against the private values (ANSIBLE_PRIVATE_VARS;
 #            a fork's pull request gets no secrets and skips that step)
-#   scripts  shellcheck, Python and Node tests, infra.js
+#   scripts  shellcheck, Python, Node and Lua tests, infra.js
 name: CI
 
 on:
@@ -138,6 +138,12 @@ jobs:
 
       - name: wisp.baby tests
         run: node --test wispbaby/test/*.test.mjs
+
+      - name: link routing tests
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends luajit
+          luajit ansible/roles/edge_relay/tests/link_routes_test.lua
 
       - name: infra.js runs
         run: node infra.js

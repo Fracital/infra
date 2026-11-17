@@ -153,7 +153,9 @@ Architecture facts (`ansible/RUNBOOK.md` has the detail):
 
 - **Shared certificates.** Every edge keeps its Let's Encrypt certs in one Redis on
   amph (`auto_ssl:*`), so any edge can answer an http-01 challenge and a cert issued on
-  one is served by all.
+  one is served by all. With `shared_redis_on_terp_db` (group_vars/all/main.yml) that Redis is a
+  dedicated one on terp.db (`80.93.219.21:6380`), which also holds link routing's `linkroute:v1`
+  (`ansible/RUNBOOK.md` "Shared Redis on terp.db").
 - **Plain Cloudflare DNS.** Since 2026-11-16 each byod apex and wisp.baby is a set of
   DNS-only A records in Cloudflare for the edge's one address, edited by hand when it
   changes. The self-hosted geo nameservers (`ns-<site>.wisp.baby`, `roles/edge_dns`,
@@ -210,6 +212,7 @@ ansible/roles/edge_firewall/check-vendored.sh && ansible/roles/fail2ban/check-ve
 git ls-files -z '*.sh' | xargs -0 shellcheck
 python3 -m unittest discover -s edge-wisp -p 'test_*.py'
 node --test wispbaby/test/*.test.mjs
+luajit ansible/roles/edge_relay/tests/link_routes_test.lua
 node infra.js
 ```
 

@@ -609,6 +609,82 @@ abulxt-edge-wisp.service` on a host that has never had the unit, a
   roles with `--start-at-task` or a role-limited play so the apt step is
   skipped.
 
+## Link routing
+
+Which site a domain on the edge's catch-all leads to (README.md "Link routing"). The table is in
+the edges' shared Redis, terp.db `80.93.219.21:6380` (amph's `127.0.0.1:6379` with
+`shared_redis_on_terp_db: false`). terp.db admits only divide's address, so ask from a divide
+guest with `redis-cli`, amph for one. Paste `shared_redis_password` at the prompt: in the
+environment it never shows in `ps` or the shell history.
+
+```sh
+# on amph
+read -rs REDISCLI_AUTH && export REDISCLI_AUTH
+r() { redis-cli -h 80.93.219.21 -p 6380 "$@"; }
+r HGET linkroute:v1 example.com     # the entry for that name, nil when none
+r HGET linkroute:v1 __ready         # last full sync (unix s); nil = table lost, edges use their stale cache
+r HLEN linkroute:v1
+date +%s                            # __ready should be under ~60 s behind
+```
+
+A name with no entry of its own takes its nearest registered parent (`a.b.example.com`, then
+`b.example.com`, then `example.com`); none means the placeholder page. The edge caches each
+answer for 30 s (`link_routes_fresh_ttl`): a change in the bot shows within that. A reload keeps
+the cache (shared dicts survive it); only a restart empties it, stale copies included.
+What the edge actually does, without a certificate request for an unready name (send the Host
+header only, as in "Fracital routes"):
+
+```sh
+# from the edge
+curl -sk -o /dev/null -w '%{http_code}\n' -H 'Host: example.com' https://127.0.0.1/
+curl -sk -H 'Host: example.com' https://127.0.0.1/ | grep -c __FRX_OBF__          # 1 on fracital, 0 elsewhere
+curl -sk -H 'Host: example.com' https://127.0.0.1/ | grep -c 'Nothing is set up'  # 1: nobody registered it
+grep 'link_routes:' /usr/local/openresty/nginx/logs/error.log | tail              # Redis trouble, one line a minute
+```
+
+## Shared Redis on terp.db
+
+The edges keep their certificates (`auto-ssl:*`) and link routing's `linkroute:v1` in one Redis.
+It was amph's auto-ssl Redis (`allkeys-lru`, which could evict either); with this change it is
+a dedicated Redis on terp.db (`shared_redis_*` in `group_vars/all/main.yml`: `noeviction`, AOF,
+`requirepass` = `shared_redis_password`, firewalled to divide's `91.199.82.174`). wisp.baby's live
+stats stay on amph's Redis. One switch, `shared_redis_on_terp_db`, picks the side.
+
+Order (each step needs the go-ahead for that host):
+
+1. terp.db's Redis answers from amph (`r PING` above), and `shared_redis_password` is in the
+   vault and in GitHub (`scripts/sync-ci-secrets.py`, secret `SHARED_REDIS_PASSWORD`). Without
+   the secret, `apply.yml` stops at "Write the vars files".
+2. abulxt points its link-routing writer and `/ask` at terp.db (abulxt `config.js`) and the bot's
+   first full sync has written `__ready` with every existing name seeded as `abstract`.
+3. `playbooks/fracital-origin.yml`: terp's default server learns `X-FRX-App`.
+4. Right before step 5, copy the certificates from amph (it reaches both). `MIGRATE ... COPY`
+   leaves amph's copy for a rollback; `-x` hands the password over stdin, so it is not in `ps`:
+
+   ```sh
+   # on amph
+   export REDISCLI_AUTH="$(awk '/^requirepass /{print $2}' /etc/redis/redis.conf)"   # amph's
+   read -rs DST && export DST                                                         # shared_redis_password
+   redis-cli --scan --pattern 'auto-ssl:*' | while read -r k; do
+     printf '%s' "$DST" | redis-cli -x MIGRATE 80.93.219.21 6380 "$k" 0 5000 COPY REPLACE AUTH >/dev/null
+   done
+   redis-cli --scan --pattern 'auto-ssl:*' | wc -l
+   REDISCLI_AUTH="$DST" redis-cli -h 80.93.219.21 -p 6380 --scan --pattern 'auto-ssl:*' | wc -l   # the same
+   ```
+
+5. `playbooks/edges.yml --tags relay` (the edge reads terp.db from here on), then `--tags wisp`
+   (holyWisp may not reach terp.db: `IPAddressDeny`; restarting it drops the relay sessions).
+6. Run the copy loop once more without `REPLACE`: it adds what the edge issued on amph between
+   steps 4 and 5 and leaves terp.db's newer keys alone (`BUSYKEY` for those).
+
+Check: `curl -skI --resolve <any byod name>:443:127.0.0.1 https://<name>/` from the edge serves
+its real certificate, and `grep -c 'auto-ssl' /usr/local/openresty/nginx/logs/error.log` does not
+grow.
+
+Rollback: `shared_redis_on_terp_db: false`, `--tags relay` and `--tags wisp`. Copy back first the
+certificates terp.db issued (the same loop on amph with source and destination swapped, without
+`REPLACE`). abulxt's writer goes back to amph too, or link routing answers from its stale cache.
+
 ## Rollback
 
 - **DNS:** re-run `playbooks/dns.yml` after trimming `groups['edge']`, or set

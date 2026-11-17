@@ -17,7 +17,7 @@ http {
     include {{ openresty_prefix }}/nginx/conf/mime.types;
     default_type application/octet-stream;
 
-    lua_package_path "{% if wispstats_on | bool %}{{ openresty_conf_dir }}/lua/?.lua;{% endif %}/usr/local/share/lua/5.1/?.lua;/usr/local/share/lua/5.1/?/init.lua;;";
+    lua_package_path "{% if wispstats_on | bool or link_routes_on | bool %}{{ openresty_conf_dir }}/lua/?.lua;{% endif %}/usr/local/share/lua/5.1/?.lua;/usr/local/share/lua/5.1/?/init.lua;;";
     lua_package_cpath "/usr/local/lib/lua/5.1/?.so;;";
 
     log_format edge_combined '$remote_addr - $remote_user [$time_local] '
@@ -86,20 +86,26 @@ http {
     lua_shared_dict wispstats 8m;
     lua_shared_dict wispstats_you 32m;
 {% endif %}
+{% if link_routes_on | bool %}
+
+    # Link routing (lua/link_routes.lua): each Host's site, fresh for link_routes_fresh_ttl and as a
+    # stale copy for link_routes_stale_ttl, the answer when amph's Redis is down or lost the table.
+    lua_shared_dict link_routes {{ link_routes_dict_size }};
+{% endif %}
 
     init_by_lua_block {
         local auto_ssl = require("resty.auto-ssl")
         auto_ssl_instance = auto_ssl.new()
 
-        -- Shared Redis storage on amph: certs + ACME http-01 challenge tokens
-        -- live in one namespace across ALL edges, so issuance on any edge is
-        -- immediately valid everywhere and LE can validate via any edge IP.
-        -- storage_adapter = module path; init_master does require(...).new(instance),
+        -- Shared Redis storage (edge_redis_host: terp.db, or amph with shared_redis_on_terp_db
+        -- false): certs + ACME http-01 challenge tokens live in one namespace across ALL edges,
+        -- so issuance on any edge is immediately valid everywhere and LE can validate via any
+        -- edge IP. storage_adapter = module path; init_master does require(...).new(instance),
         -- and the redis adapter's .new reads instance:get("redis") for its opts.
         auto_ssl_instance:set("redis", {
-            host = "{{ abulxt_origin_ip }}",
-            port = {{ auto_ssl_redis_port }},
-            auth = "{{ auto_ssl_redis_password }}",
+            host = "{{ edge_redis_host }}",
+            port = {{ edge_redis_port }},
+            auth = "{{ edge_redis_password }}",
             prefix = "auto-ssl",
         })
         auto_ssl_instance:set("storage_adapter", "resty.auto-ssl.storage_adapters.redis")
@@ -118,9 +124,11 @@ http {
 {% if fracital_enabled | bool %}
         -- Fracital names (conf.d/30-fracital.conf): proxied Cloudflare CNAMEs resolve to
         -- Cloudflare, never to an edge, so the validator's DNS match cannot approve them.
-        -- Includes the dedicated relay names (fracital_wisp_hosts).
+        -- Includes the dedicated relay names (fracital_wisp_hosts). With
+        -- link_routes_replace_static the app names are approved by amph's validator instead, which
+        -- approves the names registered for link routing.
         local fracital_names = {
-{% for h in fracital_server_names + (fracital_wisp_hosts | default([])) %}
+{% for h in fracital_edge_server_names + (fracital_wisp_hosts | default([])) %}
             ["{{ h }}"] = true,
 {% endfor %}
         }
@@ -135,7 +143,7 @@ http {
         }
 
 {% endif %}
-{% if holyunb_on | bool %}
+{% if holyunb_on | bool and not (link_routes_replace_holy | bool) %}
         -- Holy Unblocker names (conf.d/35-holyunb.conf): proxied Cloudflare CNAMEs, like Fracital's.
         local holyunb_names = {
 {% for h in holyunb_hosts %}
@@ -157,7 +165,7 @@ http {
                 return true
             end
 {% endif %}
-{% if holyunb_on | bool %}
+{% if holyunb_on | bool and not (link_routes_replace_holy | bool) %}
             if holyunb_names[domain] then
                 return true
             end
@@ -190,6 +198,51 @@ http {
         -- wisp.baby live stats (wispbaby/README.md "Live stats"). wispstats.json is root-only:
         -- it holds the Redis password and the client-hash salt.
         require("wispstats").init("{{ openresty_conf_dir }}/wispstats.json")
+{% endif %}
+{% if link_routes_on | bool %}
+
+        -- Link routing (README.md "Link routing"): the same Redis as the certificates above.
+        -- Only the sites whose named locations 00-edge-relay.conf renders are listed; any other
+        -- answer is served by amph.
+        require("link_routes").init({
+            redis = {
+                host = "{{ edge_redis_host }}",
+                port = {{ edge_redis_port }},
+                auth = "{{ edge_redis_password }}",
+                db = 0,
+                timeout_ms = {{ link_routes_redis_timeout_ms | int }},
+            },
+            default_site = "{{ link_routes_default_site }}",
+            unavailable_site = "{{ link_routes_unavailable_site }}",
+            fresh_ttl = {{ link_routes_fresh_ttl | int }},
+            stale_ttl = {{ link_routes_stale_ttl | int }},
+            retry_ttl = {{ link_routes_retry_ttl | int }},
+            sites = {
+                fracital = {{ link_routes_fracital_on | bool | lower }},
+                stomp = {{ link_routes_stomp_on | bool | lower }},
+                holy = {{ link_routes_holy_on | bool | lower }},
+                holywisp = true,
+            },
+            refuse = {
+{% if link_routes_fracital_on | bool %}
+                fracital = "{{ fracital_wisp_path }}",
+{% endif %}
+{% if link_routes_stomp_on | bool %}
+                stomp = "{{ fracital_wisp_path }}",
+{% endif %}
+{% if link_routes_holy_on | bool %}
+                holy = "{{ holyunb_wisp_path }}",
+{% endif %}
+            },
+            limits = {
+{% for site, n in link_routes_body_limits.items() %}
+                {{ site }} = {{ n | int }},
+{% endfor %}
+            },
+{% if link_routes_fracital_on | bool %}
+            assets = [[{{ fracital_asset_regex }}]],
+{% endif %}
+        })
 {% endif %}
     }
 

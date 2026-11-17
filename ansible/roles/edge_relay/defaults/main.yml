@@ -38,6 +38,71 @@ wispstats_tags: "{{ ['wispbaby', 'abstract', 'fracital'] + (['holyunb'] if holyu
 wispstats_app_hosts: "{{ fracital_origin_apps | default([]) | subelements('hosts') }}"
 wispstats_host_tags: "{{ dict(wispstats_app_hosts | map('last') | map('lower') | zip(wispstats_app_hosts | map('first') | map(attribute='name') | map('lower') | map('regex_replace', '[^a-z0-9]', ''))) }}"
 
+# Link routing (files/link_routes.lua, README.md "Link routing"): the :443 default server looks
+# each Host up in the edges' shared Redis (hash linkroute:v1, written by abulxt's Discord bot) and
+# proxies it to the site staff registered it for: fracital, stomp, abstract (amph) or holy
+# (holyunb). Off by default; on for the edge in inventory/group_vars/edge.yml. Off, every unknown
+# Host goes to amph.
+link_routes_enabled: false
+link_routes_on: "{{ link_routes_enabled | bool }}"
+# A Host with no entry (and a Host that is not a plain DNS name). holywisp: the placeholder page
+# (files/placeholder.html), so a domain shows nothing until it is registered. It is never a value
+# in Redis, only what a miss means here.
+link_routes_default_site: holywisp
+# Redis down, or the hash lost (no __ready field), and no stale copy cached: amph, as before link
+# routing, so an outage never sends an abulxt domain elsewhere.
+link_routes_unavailable_site: abstract
+# Seconds. fresh: an answer is reused without Redis for this long (so a bot change reaches the edge
+# within it). stale: the last good answer, kept for outages. retry: how long an outage answer is
+# reused before Redis is asked again.
+link_routes_fresh_ttl: 30
+link_routes_stale_ttl: 86400
+link_routes_retry_ttl: 5
+# Connect, send and read timeout of the lookup. terp.db is a few ms away; amph (the rollback) is on
+# the same bridge.
+link_routes_redis_timeout_ms: 200
+link_routes_dict_size: 4m
+# The targets this box can serve: each needs the upstream its own routes file renders (Fracital's
+# 30-fracital.conf, holyunb's 35-holyunb.conf) and, for stomp, a terp app of that name. A site
+# that is off here is served by amph instead.
+link_routes_fracital_on: "{{ (link_routes_on | bool) and (fracital_enabled | default(false) | bool) }}"
+link_routes_stomp_on: "{{ (link_routes_fracital_on | bool) and ('stomp' in (fracital_origin_apps | default([]) | map(attribute='name') | list)) }}"
+link_routes_holy_on: "{{ (link_routes_on | bool) and (holyunb_on | bool) }}"
+# true: the long static name lists leave the edge config and those names go through the default
+# server and the route table like any registered domain: fracital_hosts (with the private
+# fracital_cloak_hosts, and every www.), fracital_extra_hosts (stomp.fracit.al) and holyunb_hosts
+# lose their server_name entries and their local certificate approval (amph's /ask approves
+# registered names). Import those names into linkroute:v1 first (README.md "Link routing",
+# "Replacing the static lists"). holywisp.fracit.al and byod.fracit.al stay static, and so do
+# wisp.baby, krunk.io, blockshooter, the mc names and the ACME forwards.
+link_routes_replace_static: false
+link_routes_replace_fracital: "{{ (link_routes_replace_static | bool) and (link_routes_fracital_on | bool) }}"
+# fracital_extra_hosts go only when every one of them is a stomp name the table can route.
+link_routes_replace_extra: "{{ (link_routes_replace_fracital | bool) and (link_routes_stomp_on | bool) and (fracital_extra_hosts | default([]) | difference(fracital_origin_apps | default([]) | selectattr('name', 'equalto', 'stomp') | map(attribute='hosts') | flatten) | length == 0) }}"
+link_routes_replace_holy: "{{ (link_routes_replace_static | bool) and (link_routes_holy_on | bool) }}"
+# What 30-fracital.conf's app servers answer by name and nginx.conf approves locally.
+fracital_edge_server_names: >-
+  {{ (([fracital_byod_fqdn] + ([] if link_routes_replace_extra | bool else fracital_extra_hosts | default([])))
+      if link_routes_replace_fracital | bool else fracital_server_names) }}
+# Fracital's content-hashed bundles (30-fracital.conf's cached /assets/ location, and link routing's
+# @link_fracital_assets).
+fracital_asset_regex: '^/assets/[A-Za-z0-9_-]{6,64}\.(?:js|mjs|css|wasm|woff2?|ttf|otf|png|jpe?g|gif|webp|avif|svg|ico)$'
+# The :443 default server's client_max_body_size (abulxt). nginx's default is 1m, which rejected
+# chat sends (/api/ai) with 413 before they reached the origin. Matches the origin's /api/ai and
+# /v1 limit (abulxt deploy/openresty/snippets/routes-common.conf).
+edge_client_max_body_size: 16m
+# Each link routing target's limit in bytes (link_routes.lua checks Content-Length against it), and
+# the largest, which location / needs so that nginx does not refuse a body before the lookup.
+link_routes_body_limits:
+  abstract: "{{ edge_client_max_body_size | upper | human_to_bytes }}"
+  fracital: "{{ fracital_client_max_body_size | default(edge_client_max_body_size) | upper | human_to_bytes }}"
+  stomp: "{{ fracital_client_max_body_size | default(edge_client_max_body_size) | upper | human_to_bytes }}"
+  holy: "{{ holyunb_client_max_body_size | default(edge_client_max_body_size) | upper | human_to_bytes }}"
+link_routes_body_max: "{{ link_routes_body_limits.values() | map('int') | max }}"
+# The placeholder page (files/placeholder.html): holywisp.fracit.al's / and, with link routing, any
+# name nobody registered.
+edge_placeholder_dir: /var/www/edge-placeholder
+
 # The buffer nginx relays an upgraded (WebSocket) connection through, one per direction, in the
 # locations that proxy to holyWisp. Measured 2026-11-13 on wispdev, plain ws through nginx to
 # holyWisp, one connection: default (4-8 KiB) 295-498 MiB/s at a full core, 64k 1,750-1,920,

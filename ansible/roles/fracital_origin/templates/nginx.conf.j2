@@ -68,5 +68,15 @@ http {
     }
 {% endfor %}
 
+    # The app the edge asks for on the default server (conf.d/10-fracital.conf): a domain staff
+    # registered for stomp has no server_name here, so the edge's link routing names the app in
+    # X-FRX-App. Read only after the edge token check. Anything else is Fracital.
+    map $http_x_frx_app $frx_app_upstream {
+        default fracital_app;
+{% for app in fracital_origin_apps | default([]) %}
+        {{ app.name }} {{ app.name }}_app;
+{% endfor %}
+    }
+
     include {{ fracital_openresty_conf_dir }}/conf.d/*.conf;
 }
