@@ -398,9 +398,17 @@ test('Wisp: socket close fails the pending request', async () => {
 	const { FakeWS } = fakeWispFactory({ window: 8 });
 	const conn = new WispConnection('ws://fake/', { WebSocket: FakeWS });
 	await conn.open();
+	// Drop the socket on the first response packet, so the close always lands mid-body. A
+	// timer raced the fake server, which queues all 2000 body packets at once and could
+	// finish the request before the timer fired (CI run 44040143805, 2026-11-17).
+	const ws = conn.ws;
+	const deliver = ws.onmessage;
+	ws.onmessage = (ev) => {
+		deliver(ev);
+		if (!ws.closed) ws.close();
+	};
 	const http = new HttpConnection(async () => conn, target);
 	const pending = http.request({ method: 'GET', path: '/r/0-1999999' });
-	setTimeout(() => conn.ws.close(), 5);
 	await assert.rejects(pending, /closed/);
 });
 
