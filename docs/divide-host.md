@@ -248,6 +248,7 @@ The stateless equivalent of Proxmox's per-NIC `ipfilter`, on the `vmbr1` bridge:
     | amph 172.16.5.3     | holy 172.16.5.79   | tcp 8080                                 | abulxt `/cdn/` (theatre) via `abulxt_cdn_backend`; added 2026-11-17, it had been dropped since the move |
     | amph 172.16.5.3     | edge 172.16.5.10   | tcp 443                                  | pages.eli.gift through the hairpin (abulxt `/cdn/html5/fg`, Flying Gorilla), 2026-11-17                 |
     | holy 172.16.5.79    | edge 172.16.5.10   | tcp 443                                  | the same for website2's `/cdn/html5/fg`                                                                 |
+    | kn 172.16.5.94      | edge 172.16.5.10   | tcp 443                                  | edge-served names (krunk.io and the rest) through the hairpin, 2026-11-17                               |
 
   Traffic between a guest and divide (its gateway, DNS, the NAT) is not bridged and does not
   pass this chain.
@@ -260,7 +261,8 @@ The stateless equivalent of Proxmox's per-NIC `ipfilter`, on the `vmbr1` bridge:
   22:21 UTC on 2026-11-17, `inet divide hairpin_mark` marks every DNATed connection from `vmbr1` with
   0x4000 and this chain accepts the mark, which is the same exposure as from the internet. Before
   that, every guest's hairpin was dropped from 22:10 UTC (pve-firewall started) unless a pair rule
-  allowed it, which is why amph and holy also have their own tcp 443 lines to the edge.
+  allowed it, which is why amph, holy and kn (whose SYNs to the edge's 443 were
+  dropped until 22:20) also have their own tcp 443 lines to the edge.
 
 holy's pair is `veth205i0` (it was `tap127i1`, VM 127's second NIC, until 2026-11-17). fg's is
 `veth206i0` . 172.16.5.206 (CT 206, 2026-11-17).

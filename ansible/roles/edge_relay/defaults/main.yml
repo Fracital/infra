@@ -140,3 +140,7 @@ edge_acme_forwards_conf: 05-acme-forwards.conf
 # krunk.io names kru serves with its own vhost and certificate (krunkio-routes.conf.j2): proxied
 # with SNI = the name, no pinned cert, no token. Set in group_vars/edge.yml (dl.krunk.io).
 krunkio_direct_hosts: []
+
+# Name of a cloudflared tunnel running on the edge itself (installed by hand, not by this role), or
+# empty. When set, realip also trusts CF-Connecting-IP from loopback, where cloudflared connects.
+edge_local_cloudflared_tunnel: ""

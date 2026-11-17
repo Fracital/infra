@@ -77,6 +77,10 @@ link_routes_unavailable_site: abstract
 # (README.md "Replacing the static lists"), so those names route like any registered domain.
 link_routes_replace_static: true
 
+# cloudflared tunnel divide-edge runs on the edge (every Cloudflare Tunnel hostname on divide), set up
+# by hand on 2026-11-17: realip trusts its loopback connections.
+edge_local_cloudflared_tunnel: divide-edge
+
 # Relay tuning
 edge_proxy_read_timeout: 1800s
 edge_proxy_send_timeout: 1800s
