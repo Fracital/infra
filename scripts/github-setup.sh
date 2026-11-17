@@ -29,10 +29,10 @@ done
 here=$(cd "$(dirname "$0")" && pwd)
 key=~/.ssh/infra_ci_ed25519
 # The hosts apply.yml connects to: divide (the jump), edge, amph, terp.
-hosts=(91.199.82.174 172.16.5.10 172.16.5.3 5.188.124.62)
-# amph has no known_hosts entry under its private address on most machines; its key is the
-# same VM's, recorded under its ssh alias.
-declare -A alias=([172.16.5.3]=amph)
+hosts=(91.199.82.174 172.16.5.10 172.16.5.3 172.16.5.62)
+# amph and terp have no known_hosts entry under their private addresses on most machines; their
+# keys are the same VMs', recorded under the ssh alias (amph) or the old public address (terp).
+declare -A alias=([172.16.5.3]=amph [172.16.5.62]=5.188.124.62)
 
 run() {
 	if $dry; then printf 'would run: gh %s\n' "$*"; else gh "$@" >/dev/null; fi

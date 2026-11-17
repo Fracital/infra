@@ -1,7 +1,7 @@
 # divide, the Proxmox host
 
-divide (alias wisp.baby) is the Proxmox host that every abulxt host except terp and holy has been a
-guest of since 2026-11-16 (G-Core Labs AS202422, Ashburn/Manassas). It has one public IPv4,
+divide (alias wisp.baby) is the Proxmox host that every abulxt host, terp and holy have been
+guests of since 2026-11-16 (G-Core Labs AS202422, Ashburn/Manassas). It has one public IPv4,
 **91.199.82.174** (`divide_public_ip`, on `bond0`), and no public IPv6 for guests. The guests sit
 behind NAT on `vmbr1`, **172.16.5.0/24**, with divide at **172.16.5.1** as their gateway.
 
@@ -20,20 +20,20 @@ authorization, like any other live host (AGENTS.md "Servers").
 
 ## Guests on vmbr1
 
-| Address     | Guest                 | What                                                                       |
-| ----------- | --------------------- | -------------------------------------------------------------------------- |
-| 172.16.5.1  | divide                | gateway, NAT, its own ACME client (`divide.eli.gift`)                      |
-| 172.16.5.3  | amph                  | abulxt origin (`[origin]`)                                                 |
-| 172.16.5.10 | edge (CT 201)         | the only abulxt edge (`[wisp_edge]`, `host_vars/edge.yml`)                 |
-| 172.16.5.11 | wg                    | WireGuard, udp 51820                                                       |
-| 172.16.5.37 | sm                    |                                                                            |
-| 172.16.5.47 | kru                   | KrunkNative central node (krunk.io origin)                                 |
-| 172.16.5.48 | blockshooter (CT 202) | blockshooter relay (`[bs_ct_divide]`)                                      |
-| 172.16.5.62 | terp                  | Fracital origin; stays on meal, reached on this subnet                     |
-| 172.16.5.64 | chat                  | estro.help backend (`host_vars/amph.yml` `estro_upstream`)                 |
-| 172.16.5.79 | holy                  | holyunb.locker site (website2 :8080); stays on run, reached on this subnet |
-| 172.16.5.94 | kn (CT 203)           | KrunkNative game servers (`[kn_ct_divide]`)                                |
-| (tap101i0)  | mull (VM 101)         | may only talk to chat and sm (bridge firewall below)                       |
+| Address     | Guest                 | What                                                       |
+| ----------- | --------------------- | ---------------------------------------------------------- |
+| 172.16.5.1  | divide                | gateway, NAT, its own ACME client (`divide.eli.gift`)      |
+| 172.16.5.3  | amph                  | abulxt origin (`[origin]`)                                 |
+| 172.16.5.10 | edge (CT 201)         | the only abulxt edge (`[wisp_edge]`, `host_vars/edge.yml`) |
+| 172.16.5.11 | wg                    | WireGuard, udp 51820                                       |
+| 172.16.5.37 | sm                    |                                                            |
+| 172.16.5.47 | kru                   | KrunkNative central node (krunk.io origin)                 |
+| 172.16.5.48 | blockshooter (CT 202) | blockshooter relay (`[bs_ct_divide]`)                      |
+| 172.16.5.62 | terp                  | Fracital origin, VM 116 (moved from meal 2026-11-16)       |
+| 172.16.5.64 | chat                  | estro.help backend (`host_vars/amph.yml` `estro_upstream`) |
+| 172.16.5.79 | holy                  | holyunb.locker site (website2 :8080), VM 127               |
+| 172.16.5.94 | kn (CT 203)           | KrunkNative game servers (`[kn_ct_divide]`)                |
+| (tap101i0)  | mull (VM 101)         | may only talk to chat and sm (bridge firewall below)       |
 
 Ansible reaches the guests with `ProxyJump root@91.199.82.174` (`group_vars/divide_guests.yml`).
 
@@ -164,6 +164,15 @@ The stateless equivalent of Proxmox's per-NIC `ipfilter`, on the `vmbr1` bridge:
     | terp 172.16.5.62         | 443, 8443                       |
     | holy 172.16.5.79         | 8080                            |
 
+  - other guest-to-guest paths:
+
+    | From                | To               | Ports                                    | Why                                              |
+    | ------------------- | ---------------- | ---------------------------------------- | ------------------------------------------------ |
+    | runner 172.16.5.204 | terp 172.16.5.62 | tcp 22                                   | CI deploys (stomp deploy gate)                   |
+    | runner 172.16.5.204 | chat 172.16.5.64 | tcp 22                                   | CI deploys (estro deploy gate)                   |
+    | kru 172.16.5.47     | kn 172.16.5.94   | tcp + udp 21015-21017, 21115             | kn-bridge (tcp) and kn-rtc (udp) to game servers |
+    | kn 172.16.5.94      | kru 172.16.5.47  | udp from source ports 21015-21017, 21115 | the game servers' udp replies (stateless chain)  |
+
   Traffic between a guest and divide (its gateway, DNS, the NAT) is not bridged and does not
   pass this chain.
 
@@ -219,7 +228,11 @@ DNATs the port locally to it:
 - **kru** (KrunkNative's repo owns this): `kru-public-ip.service` adds the address,
   `/etc/nftables.d/kru-rtc.nft` DNATs udp 21100 to it, and `rtc.env` has
   `KRUNK_NATIVE_RTC_ICE_ADDR=91.199.82.174:21100`. kru's `krunknative-edge-origin.conf` allowlist
-  admits the edge as `allow 172.16.5.10;  # divide edge CT 201`.
+  admits the edge as `allow 172.16.5.10;  # divide edge CT 201`. Because the address is local,
+  kn-bridge and kn-rtc dialing `ashburn-N.krunk.io` would connect to kru itself (ECONNREFUSED, the
+  2026-11-17 outage), so the same file has an `output` NAT chain that rewrites 91.199.82.174 on tcp
+  and udp 21015-21017 and 21115 to kn 172.16.5.94, plus a `postrouting` masquerade for it. That
+  needs the kru-to-kn bridge rules above.
 - **blockshooter**: `bs-public-ip.service`, nft table `bsnat` (udp 8443), and
   `BS_RELAY_PUBLIC_IP=91.199.82.174`. Its Let's Encrypt IP certificate is issued with lego over
   HTTP-01. The edge forwards `Host: 91.199.82.174` `/.well-known/acme-challenge/` to

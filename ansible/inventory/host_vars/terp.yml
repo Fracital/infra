@@ -1,5 +1,5 @@
 ---
-# terp: Fracital's origin, on meal (5.188.124.62, managed on its public address).
+# terp: Fracital's origin, VM 116 on divide (172.16.5.62, private only, reached through divide).
 
 # --- Deploy user (role deploy_user via playbooks/fracital-origin.yml) -------
 # Fracital's and cloaks-fracital's CI log in as `deploy`, forced through

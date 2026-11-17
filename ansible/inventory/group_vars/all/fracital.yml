@@ -45,8 +45,8 @@ fracital_origin_apps:
 
 # terp: the OpenResty :443 the edges relay to, on terp's private address on the 172.16.5.0/24
 # VLAN (the edge on divide reaches it there since 2026-11-16; divide's guest firewall admits
-# edge -> terp tcp 443/8443, docs/divide-host.md). terp's public 5.188.124.62 stays its SSH
-# address (hosts.ini).
+# edge -> terp tcp 443/8443, docs/divide-host.md). terp has no public address: SSH reaches it
+# through divide (hosts.ini [divide_guests]).
 fracital_origin_ip: 172.16.5.62
 fracital_origin_port: 443
 # SAN of the pinned self-signed cert (roles/edge_relay/files/fracital-origin.crt).

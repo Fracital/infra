@@ -89,7 +89,7 @@ stay on wispurr for longer, check out the pre-holyWisp `edge_wisp` role from git
 ## Hosts (all G-Core Labs AS202422)
 
 Everything is in Ashburn/Manassas, VA since 2026-11-16, when the overseas wisp cloud (iev, mia,
-jnb, ams) was dismantled. The same day everything on the Proxmox host meal except terp and holy
+jnb, ams) was dismantled. The same day everything on the Proxmox host meal, terp and holy included,
 moved to the Proxmox host **divide** (alias wisp.baby, `divide_public_ip` 91.199.82.174, its only
 public address, no public IPv6 for guests). Guests are NATed on divide's `vmbr1` 172.16.5.0/24
 (gateway 172.16.5.1) and reached by ProxyJump `root@91.199.82.174`
@@ -99,12 +99,12 @@ blockshooter, tcp 8443 to terp (dev.fracit.al); its tcp 22 is its own sshd. divi
 nftables, the guest bridge firewall, fail2ban, TCP tuning) is not managed by this repo:
 [docs/divide-host.md](../docs/divide-host.md).
 
-| Alias                | What                   | IP                                                   | Notes                                                                          |
-| -------------------- | ---------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `amph` (origin)      | VM on divide           | 172.16.5.3 (private only)                            | OpenResty + app + Postgres + auto-ssl Redis                                    |
-| `edge`               | CT 201 on divide       | 172.16.5.10, public 91.199.82.174 (`public_ip`)      | the only edge: abulxt byod, Fracital, wisp.baby (replaced wisp-mnz on meal)    |
-| `terp`               | VM 116 on meal         | 5.188.124.62 (the edge uses its private 172.16.5.62) | Fracital's origin (`[fracital_origin]`), stays on meal                         |
-| `kn`, `blockshooter` | CTs 203, 202 on divide | 172.16.5.94, 172.16.5.48                             | KrunkNative and blockshooter game servers, not edges (replaced kn-mnz, bs-mnz) |
+| Alias                | What                   | IP                                              | Notes                                                                          |
+| -------------------- | ---------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------ |
+| `amph` (origin)      | VM on divide           | 172.16.5.3 (private only)                       | OpenResty + app + Postgres + auto-ssl Redis                                    |
+| `edge`               | CT 201 on divide       | 172.16.5.10, public 91.199.82.174 (`public_ip`) | the only edge: abulxt byod, Fracital, wisp.baby (replaced wisp-mnz on meal)    |
+| `terp`               | VM 116 on divide       | 172.16.5.62 (private only)                      | Fracital's origin (`[fracital_origin]`), moved from meal                       |
+| `kn`, `blockshooter` | CTs 203, 202 on divide | 172.16.5.94, 172.16.5.48                        | KrunkNative and blockshooter game servers, not edges (replaced kn-mnz, bs-mnz) |
 
 See [INVENTORY.md](INVENTORY.md) for the full catalog with geolocations.
 
@@ -405,7 +405,7 @@ back to the Cloudflare tunnel (KrunkNative `ansible/README.md` "Edge origin").
 
 ## Fracital routes
 
-Fracital (`github.com/NovaAppsInc/Fracital`, one Node server on terp `5.188.124.62`, pm2
+Fracital (`github.com/NovaAppsInc/Fracital`, one Node server on terp `172.16.5.62`, pm2
 `fracital` on `:8080`) uses the fleet as its edge. Inputs: `inventory/group_vars/all/fracital.yml`.
 
 ```

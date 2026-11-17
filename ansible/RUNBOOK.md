@@ -588,7 +588,9 @@ abulxt-edge-wisp.service` on a host that has never had the unit, a
   replace amph's `conf.d/` wholesale from abulxt's `deploy/openresty/conf.d/`, deleting
   every host-only file. It did that on 2026-10-09 and again on 2026-10-19
   (`conf.d.bak.1792369984/` holds the last good copy); restored 2026-10-25 with
-  `cp -p` from that backup, `openresty -t`, reload. Check with
+  `cp -p` from that backup, `openresty -t`, reload. Since 2026-11-17 abulxt's deploy syncs
+  amph's OpenResty itself (`sync_openresty` in its `deploy/abulxt-deploy-root.sh`) and keeps
+  this role's files by name (`OR_HOST_FILES`); `deploy/openresty-deploy.sh` is gone. Check with
   `curl -sk --resolve mcpanel.abstracteducation.loan:443:<edge-ip> https://mcpanel.abstracteducation.loan/`
   per edge IP (expect the Pterodactyl title; `mcnode.` answers `401` JSON).
   The script now carries host-only `conf.d/*.conf` files over (the mc relay,

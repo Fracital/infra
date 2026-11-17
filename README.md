@@ -10,7 +10,7 @@ public 91.199.82.174), with its guests behind NAT on 172.16.5.0/24:
 | ---------------------------- | -------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
 | `edge` (CT 201, 172.16.5.10) | OpenResty edge and holyWisp: abulxt byod, Fracital, wisp.baby, holyunb.locker, blockshooter.io, krunk.io | `playbooks/edges.yml`, `wisp.yml`, `firewall.yml`, `fail2ban.yml` |
 | `amph` (VM, 172.16.5.3)      | abulxt's origin: shared auto-ssl Redis, firewall, origin holyWisp, shady-relay                           | `playbooks/origin.yml`                                            |
-| `terp` (meal, 5.188.124.62)  | Fracital's origin OpenResty                                                                              | `playbooks/fracital-origin.yml`                                   |
+| `terp` (VM, 172.16.5.62)     | Fracital's origin OpenResty                                                                              | `playbooks/fracital-origin.yml`                                   |
 | divide                       | NAT, guest firewall, ACME                                                                                | by hand, `docs/divide-host.md`                                    |
 
 `ansible/README.md` is the reference for every role, `ansible/RUNBOOK.md` has the

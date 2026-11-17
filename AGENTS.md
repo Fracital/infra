@@ -142,7 +142,7 @@ root@91.199.82.174`:
   names share the one address; `host_vars/edge.yml` says what that costs Fracital),
   wisp.baby, holyunb.locker, blockshooter.io and the krunk.io routes.
 - `amph` (172.16.5.3): abulxt's origin, private only.
-- `terp` stays on meal (5.188.124.62); the edge reaches it on 172.16.5.62.
+- `terp` (VM 116, 172.16.5.62): Fracital's origin, private only.
 
 The overseas wisp cloud (`wisp-iev`, `wisp-mia`, `wisp-jnb`, `wisp-ams` and their
 Proxmox hosts) was dismantled on 2026-11-16, and the VPSs santaclara, losangeles,
@@ -240,7 +240,11 @@ template or a variable it reads, render it for a real host without connecting
 ## Related repositories
 
 - `y9x/abulxt` (`~/src/abulxt`): the app, its site deploy, amph's OpenResty
-  routes (`deploy/openresty/`, installed by `deploy/openresty-deploy.sh`).
+  routes (`deploy/openresty/`, synced to amph by every abulxt deploy). The
+  `conf.d` files the `abulxt_origin` role renders (`25-mc-relay.conf`,
+  `57-estro.conf`) are kept by that sync as long as abulxt's deploy lists them as
+  owned elsewhere (`OR_HOST_FILES` in `deploy/abulxt-deploy-root.sh`); a new file
+  this repo renders into amph's `conf.d` must be added there too.
 - KrunkNative (`~/src/KrunkNative`): the vendored roles' other copy and the kn
   game servers' own CI.
 - holyWisp (`~/src/holyWisp`): the relay `roles/edge_wisp` builds or fetches.
