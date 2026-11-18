@@ -28,13 +28,13 @@ edge_public_ip_on_box: false
 edge_primary_if: eth0
 
 # Sizing: the CT has 6 cores (threads 0-2 and 16-18 on divide, since 2026-11-18; it had 8).
-# OpenResty gets 4 worker threads and holyWisp 2 instead of one per CPU apiece (edge_relay
+# OpenResty and holyWisp get 3 worker threads each instead of one per CPU apiece (edge_relay
 # edge_openresty_workers, edge_wisp holywisp_workers). Measured on 2026-11-18 over 19 hours,
 # holyWisp averaged 0.014 cores (57,058 connections, 222 GB to clients) and the edge's busiest
 # minute used 4.2 threads, almost all of it OpenResty's TLS for a polling endpoint.
-edge_openresty_workers: 4
-holywisp_workers: 2
-holywisp_workers_note: "divide edge: 2 of the CT's 6 cores; OpenResty has the other 4"
+edge_openresty_workers: 3
+holywisp_workers: 3
+holywisp_workers_note: "divide edge: 3 of the CT's 6 cores; OpenResty has the other 3"
 
 # TCP for the client legs (roles/edge_network), as live in the CT. Only per-namespace keys can be
 # set there: net.core.rmem_max / wmem_max (32 MiB) are divide's /etc/sysctl.d/90-divide-tcp.conf,
