@@ -94,19 +94,19 @@ divide is a Ryzen 9 7950X: CCD0 is threads 0-7 and 16-23, CCD1 is 8-15 and 24-31
 are pinned with `lxc.cgroup2.cpuset.cpus` in `/etc/pve/lxc/<id>.conf` (which stops pvestatd
 rebalancing them), VMs with `qm set --affinity`.
 
-| Threads      | Guests                                                        |
-| ------------ | ------------------------------------------------------------- |
-| 0-2, 16-18   | edge (CT 201), exclusive (since 2026-11-18; was 0-3, 16-19)   |
-| 3, 6, 19, 22 | amph (CT 213)                                                 |
-| 4-5, 20-21   | kn (CT 203)                                                   |
-| 7            | vault (100), wg (CT 200)                                      |
-| 23           | chat (106), fg (CT 206)                                       |
-| 0-7, 16-23   | every VM except mac                                           |
-| 8-9, 24-25   | mac (VM 126)                                                  |
-| 10, 26       | runner (204)                                                  |
-| 11           | kru (120), guca (117)                                         |
-| 27           | terp (CT 216), holy (205), blockshooter (CT 202)              |
-| 12-15, 28-31 | wispdev (122), exclusive                                      |
+| Threads      | Guests                                                      |
+| ------------ | ----------------------------------------------------------- |
+| 0-2, 16-18   | edge (CT 201), exclusive (since 2026-11-18; was 0-3, 16-19) |
+| 3, 6, 19, 22 | amph (CT 213)                                               |
+| 4-5, 20-21   | kn (CT 203)                                                 |
+| 7            | vault (100), wg (CT 200)                                    |
+| 23           | chat (106), fg (CT 206)                                     |
+| 0-7, 16-23   | every VM except mac                                         |
+| 8-9, 24-25   | mac (VM 126)                                                |
+| 10, 26       | runner (204)                                                |
+| 11           | kru (120), guca (117)                                       |
+| 27           | terp (CT 216), holy (205), blockshooter (CT 202)            |
+| 12-15, 28-31 | wispdev (122), exclusive                                    |
 
 Re-pinned 2026-11-18 (about 23:23 UTC) after guests were resized: a raw
 `lxc.cgroup2.cpuset.cpus` overrides `cores` entirely (pvestatd skips the container and lxcfs
