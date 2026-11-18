@@ -4,11 +4,8 @@
 #      to the public interface, password-protected, the shared lua-resty-auto-ssl store (certs +
 #      ACME http-01 tokens) and wisp.baby's stats for all edges. Otherwise it is stopped: since
 #      2026-11-17 that Redis is on terp.db (docs/terp-db.md).
-#   2. Open amph's firewall so every edge subnet can reach:
-#        6379  shared auto-ssl Redis (only with abulxt_origin_redis_on)
-#        8822  abulxt-domains validator (/ask?target=edge)
-#        9080  origin-internal reverse-proxy target (edge → amph traffic)
-#      Previously only the 45.82.161.0/24 (ashburn) subnet was allowed.
+#   2. Remove amph's retired in-guest firewall (abulxt-firewall.sh): divide's pve-firewall
+#      (213.fw) decides who reaches 8822 (abulxt-domains), 9080 (origin-internal) and 1082.
 
 # Read amph's own ed25519 pubkey so the edge play can revoke it on the edges
 # (the removed byod watchdog's login, roles/edge_network).
@@ -57,77 +54,57 @@
   when: not (abulxt_origin_redis_on | bool)
   failed_when: false
 
-# The address amph sees an edge's traffic from: edge_origin_source when the edge reaches amph
-# over a private network (the edge on divide's vmbr1, 172.16.5.10/32), else its edge_subnet.
-# abulxt_edge_subnets_override (host_vars/amph.yml), when set, replaces the computed list.
-- name: Build the list of edge source subnets
-  ansible.builtin.set_fact:
-    abulxt_edge_subnets: "{{ abulxt_edge_subnets | default([]) + [hostvars[item].edge_origin_source | default(hostvars[item].edge_subnet)] }}"
-  loop: "{{ groups['edge'] }}"
-  when:
-    - abulxt_edge_subnets_override | default([]) | length == 0
-    - hostvars[item].edge_origin_source is defined or hostvars[item].edge_subnet is defined
+# amph's in-guest firewall (abulxt-firewall.sh, iptables chain ABULXT_INPUT, v4 and v6) is
+# retired since 2026-11-18: divide's pve-firewall filters amph's NIC (/etc/pve/firewall/213.fw:
+# only the edge reaches 80, 443, 1082, 8822 and 9080; ssh only from divide and wg), and guest
+# rules belong there, not inside the guest (docs/divide-host.md "Guest firewalls"). This removes
+# the old one wherever it is still installed.
+- name: Look for the retired abulxt-firewall.service
+  ansible.builtin.stat:
+    path: /etc/systemd/system/abulxt-firewall.service
+  register: abulxt_firewall_unit
 
-- name: Use the edge subnets set for this host (abulxt_edge_subnets_override)
-  ansible.builtin.set_fact:
-    abulxt_edge_subnets: "{{ abulxt_edge_subnets_override }}"
-  when: abulxt_edge_subnets_override | default([]) | length > 0
+- name: Stop and disable the retired abulxt-firewall.service
+  ansible.builtin.systemd_service:
+    name: abulxt-firewall.service
+    state: stopped
+    enabled: false
+  when: abulxt_firewall_unit.stat.exists
 
-- name: Install updated abulxt firewall script on amph
-  ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../../origin/abulxt-firewall.sh"
-    dest: /usr/local/sbin/abulxt-firewall.sh
-    owner: root
-    group: root
-    mode: "0755"
+- name: Remove the ABULXT_INPUT chains (pve-firewall on divide filters amph)
+  ansible.builtin.shell: |
+    set -eu
+    changed=0
+    for t in iptables ip6tables; do
+      if $t -n -L ABULXT_INPUT >/dev/null 2>&1; then
+        while $t -C INPUT -j ABULXT_INPUT 2>/dev/null; do $t -D INPUT -j ABULXT_INPUT; done
+        $t -F ABULXT_INPUT
+        $t -X ABULXT_INPUT
+        changed=1
+      fi
+    done
+    echo "changed=$changed"
+  args:
+    executable: /bin/bash
+  register: abulxt_firewall_chains
+  changed_when: "'changed=1' in abulxt_firewall_chains.stdout"
+  when: not ansible_check_mode
 
-- name: Persist edge subnets for the boot-time firewall service
-  # abulxt-firewall.service re-runs the script at boot; without this file it
-  # only allows ashburn's subnet and the other edges lose Redis (fallback cert)
-  # and the 9080 relay.
-  ansible.builtin.copy:
-    dest: /etc/abulxt/firewall.env
-    owner: root
-    group: root
-    mode: "0644"
-    content: |
-      # Managed by Ansible (abulxt_origin). Read by abulxt-firewall.service.
-      EDGE_SUBNETS="{{ abulxt_edge_subnets | join(' ') }}"
-      AUTO_SSL_REDIS_PORT={{ abulxt_origin_redis_port }}
-      SHADY_RELAY_PORT={{ shady_relay_port }}
-
-- name: Create the abulxt-firewall drop-in directory
+- name: Remove the retired firewall's script, unit and settings
   ansible.builtin.file:
-    path: /etc/systemd/system/abulxt-firewall.service.d
-    state: directory
-    owner: root
-    group: root
-    mode: "0755"
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /usr/local/sbin/abulxt-firewall.sh
+    - /etc/systemd/system/abulxt-firewall.service
+    - /etc/systemd/system/abulxt-firewall.service.d
+    - /etc/abulxt/firewall.env
+  register: abulxt_firewall_files
 
-- name: Make abulxt-firewall.service read the edge subnets
-  ansible.builtin.copy:
-    dest: /etc/systemd/system/abulxt-firewall.service.d/edge-subnets.conf
-    owner: root
-    group: root
-    mode: "0644"
-    content: |
-      [Service]
-      EnvironmentFile=-/etc/abulxt/firewall.env
-  register: abulxt_firewall_dropin
-
-- name: Reload systemd after the firewall drop-in changes
-  ansible.builtin.systemd:
+- name: Reload systemd after removing the firewall unit
+  ansible.builtin.systemd_service:
     daemon_reload: true
-  when: abulxt_firewall_dropin.changed
-
-- name: Open firewall for edge subnets (9080, 8822, 1082, and 6379 with abulxt_origin_redis_on)
-  ansible.builtin.command: /usr/local/sbin/abulxt-firewall.sh
-  environment:
-    EDGE_SUBNETS: "{{ abulxt_edge_subnets | join(' ') }}"
-    AUTO_SSL_REDIS_PORT: "{{ abulxt_origin_redis_port }}"
-    SHADY_RELAY_PORT: "{{ shady_relay_port }}"
-  # The script is installed to /usr/local/sbin (where amph's abulxt-firewall
-  # systemd unit runs it from); we re-run it with the widened edge subnets.
+  when: abulxt_firewall_files is changed
 
 # amph relays the mc subdomains to the Eaglercraft backend on its local subnet
 # (the remote edges can't route to it). Edges forward here with the original

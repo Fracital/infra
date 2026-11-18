@@ -276,8 +276,8 @@ holy's pair is `veth205i0` (it was `tap127i1`, VM 127's second NIC, until 2026-1
 was `tap116i0` until 2026-11-17).
 
 A new edge-to-origin path needs a line here, a rule in the guest's `/etc/pve/firewall/<id>.fw`
-(below), and the origin's own firewall where it has one (amph: `abulxt-firewall.sh`,
-`EDGE_SUBNETS="172.16.5.0/24"`; terp: ufw, `roles/fracital_origin`).
+(below), and the origin's own firewall where it has one (terp: ufw, `roles/fracital_origin`; amph
+has none since 2026-11-18).
 
 ## CI keys on divide
 
@@ -341,8 +341,9 @@ on that bridge. Not filtered: giftshop (VM 111, retired) and fum (VM 110, stoppe
 Earlier that day the guests filtered themselves (an nft table `inet guestfw` in 7 CTs, and a
 narrowed ufw on eagler). That is all removed, and `divide/guestfw/` with it: guest rules belong in
 `/etc/pve/firewall`, not inside the guest. The firewalls the guests' own roles install are
-unchanged: amph's `abulxt-firewall.sh`, terp's ufw (`roles/fracital_origin`, it admits tcp 8443 only
-from Cloudflare), blockshooter's `inet bsfilter`, eagler's original ufw.
+unchanged: terp's ufw (`roles/fracital_origin`, it admits tcp 8443 only from Cloudflare),
+blockshooter's `inet bsfilter`, eagler's original ufw. amph's `abulxt-firewall.sh` (iptables chain
+`ABULXT_INPUT`, looser than `213.fw`) was retired on 2026-11-18: `roles/abulxt_origin` removes it.
 
 - `/etc/pve/firewall/cluster.fw`: `enable: 1`; ipsets `mgmt` (divide 172.16.5.1, wg 172.16.5.11)
   and `bs_game` (blockshooter's three game servers); security group `base`: icmp, ipv6-icmp, and
@@ -610,8 +611,9 @@ Unprivileged is enough because nothing on amph needs a kernel feature a containe
 - **mullvad-pool** (`/opt/mullvad-pool`, 127.0.0.1:1080) is a userspace SOCKS5 balancer over
   Mullvad's in-tunnel SOCKS relays. It has no WireGuard, network namespace or policy routing of
   its own: the tunnel is mull's (VM 101), reached by four static routes via 172.16.5.6.
-- **abulxt-firewall.sh** uses iptables-nft in the CT's own network namespace; the `xt_*`
-  modules it needs are already loaded on divide. fail2ban's `inet f2b-table` works the same way.
+- **abulxt-firewall.sh** used iptables-nft in the CT's own network namespace (retired
+  2026-11-18, "Guest firewalls"). fail2ban's `inet f2b-table` works the same way; the `xt_*`
+  modules are already loaded on divide.
 - **Docker** only ran the retired `abulxt-db` container (stopped by hand at 21:56 that day; the
   app uses terp.db). `docker.service`, `docker.socket` and `containerd.service` are masked. The
   volumes (`/var/lib/docker/volumes`, the database rollback) came along; the images and layers

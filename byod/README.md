@@ -14,10 +14,10 @@ network; the legacy reverse SSH tunnel has been removed for abulxt's path.
   A domain is approved only when its DNS A/AAAA already resolves to this box's
   IP (`45.82.161.87`), so bogus SNIs never burn CA rate limits.
 - `50-origin-internal.conf` (installed on **amph**) is the `:9080` target. It
-  listens on the public interface, is restricted to this edge's IP by the
-  abulxt firewall, and only accepts requests carrying `X-BYOD-Token`.
-- amph's firewall (`origin/abulxt-firewall.sh`) opens `9080` and `8822` **only**
-  to `45.82.161.87`. Set `ABULXT_ORIGIN` (default `172.16.5.3`, amph on divide's private vmbr1, the
+  listens on the public interface, is restricted to the edge by divide's
+  pve-firewall (`213.fw`), and only accepts requests carrying `X-BYOD-Token`.
+- divide's pve-firewall opens `9080` and `8822` on amph **only** to the edge
+  (172.16.5.10; amph's own `abulxt-firewall.sh` is retired). Set `ABULXT_ORIGIN` (default `172.16.5.3`, amph on divide's private vmbr1, the
   only address it has since 2026-11-16) in the edge
   environment (`/etc/caddy/byod-proxy.env` on the Ashburn box) to point at amph.
 
@@ -45,8 +45,7 @@ instead of this box (or the origin's own IP).
 SOCKS5 username/password auth and chains every CONNECT into the pool above.
 The edges' Wisp routers send only their "shady" verdicts here, so those
 streams exit via Mullvad while clean traffic leaves the edge directly. The
-port is opened to the edge /24s only by `abulxt-firewall.sh`
-(`SHADY_RELAY_PORT`). Installed by the `abulxt_origin` Ansible role; the
+port is open only to the edge, in divide's pve-firewall (`213.fw`). Installed by the `abulxt_origin` Ansible role; the
 credential lives in the vault (`shady_relay_password`). See
 `ansible/RUNBOOK.md` Phase 6.
 

@@ -284,7 +284,7 @@ On amph (role `abulxt_origin`, playbook `origin.yml`):
 - `/opt/abulxt/shady-relay.py` on `0.0.0.0:1082`: RFC 1929 username/password
   (`shady_relay_user` + vaulted `shady_relay_password`), then chains every
   CONNECT into `mullvad-pool` at `127.0.0.1:1080`. `shady-relay.service`.
-- `abulxt-firewall.sh` opens `1082` to the edge /24s only (`SHADY_RELAY_PORT`).
+- Only the edge reaches `1082`: divide's pve-firewall (`213.fw`); amph has no firewall of its own.
 
 amph's own relay on `127.0.0.1:6001` serves the main-domain `/wisp/<key>/`
 path on amph itself (the edges never forward `/wisp` to it). OpenResty is the
@@ -599,9 +599,8 @@ abulxt-edge-wisp.service` on a host that has never had the unit, a
   writes `conf.d/.repo-files`, so a conf the repo later removes is dropped
   rather than carried. A conf removed from the repo before the first deploy
   that writes `.repo-files` is carried as host-only: delete it on amph by hand.
-  Note the `abulxt_origin` role re-runs `abulxt-firewall.sh` (flush + rebuild
-  of the `ABULXT_INPUT` chain, same rules) on every run, so to re-render only
-  the relay prefer the `cp` above over a full `origin.yml`.
+  To re-render only the relay, `origin.yml --tags origin` does it (the role no
+  longer rebuilds a firewall on amph).
 - **abulxt-ashburn: `openresty` role fails in the apt cache update** (observed
   2026-10-10). A Cloudsmith Caddy apt source
   (`dl.cloudsmith.io/public/caddy/stable/deb/debian`) returns `402` / "no

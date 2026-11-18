@@ -5,12 +5,9 @@
 # (group_vars/divide_guests.yml). Its old public addresses on meal are gone.
 # Debian 13 (trixie). OpenResty front; app, Postgres, mullvad-pool, shady-relay.
 
-# --- Firewall (abulxt_origin: /etc/abulxt/firewall.env EDGE_SUBNETS) ---
-# 9080/8822/1082 are open to divide's whole vmbr1 (6379 too with shared_redis_on_terp_db false), as live: the edge (172.16.5.10) is the
-# only guest divide's bridge firewall lets reach those ports (docs/divide-host.md), so the /24
-# adds nothing beyond the edge. Without this the role computes the edge's edge_origin_source.
-abulxt_edge_subnets_override:
-  - "172.16.5.0/24"
+# --- Firewall ---
+# None in the guest since 2026-11-18: divide's pve-firewall (/etc/pve/firewall/213.fw) lets only
+# the edge (172.16.5.10) reach 80, 443, 1082, 8822 and 9080 (docs/divide-host.md "Guest firewalls").
 # abulxt-domains (/ask) is reached on 172.16.5.3:8822 (abulxt deploy/openresty/conf.d/60-domains-proxy.conf).
 
 # --- Wisp relay (role edge_wisp via playbooks/origin.yml) -------------------

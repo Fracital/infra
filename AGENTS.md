@@ -228,7 +228,6 @@ template or a variable it reads, render it for a real host without connecting
 | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ansible/`                 | Inventory, playbooks and roles for the edge, amph, terp and the (empty) Proxmox path. `README.md` is the reference, `RUNBOOK.md` the procedures, `INVENTORY.md` the host catalog. |
 | `ansible/private.example/` | The shape of every gitignored vars file.                                                                                                                                          |
-| `origin/`                  | amph's firewall script and unit (installed by `roles/abulxt_origin`).                                                                                                             |
 | `byod/`                    | amph's shady-relay and mullvad-pool, and the legacy Caddy byod configs.                                                                                                           |
 | `edge-wisp/`               | The edge's classifying SOCKS5 router (`edge-router.py`), its tests, and historical wispurr patches.                                                                               |
 | `wispbaby/`                | The wisp.baby speed test page, its dev harness and tests (installed by `roles/edge_relay`).                                                                                       |
