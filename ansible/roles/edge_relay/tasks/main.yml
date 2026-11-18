@@ -342,7 +342,7 @@
         path: "{{ krunkio_cache_dir }}"
         state: directory
         owner: "{{ openresty_user }}"
-        group: root
+        group: "{{ openresty_group }}"
         mode: "0700"
 
     - name: krunk.io origin proxy snippet
@@ -401,7 +401,7 @@
         path: "{{ fracital_cache_dir }}"
         state: directory
         owner: "{{ openresty_user }}"
-        group: root
+        group: "{{ openresty_group }}"
         mode: "0700"
 
     - name: Fracital origin proxy snippet

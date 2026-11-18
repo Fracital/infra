@@ -196,9 +196,9 @@ DNAT of the public address:
 | tcp       | 2022, 25565, 25566                                                | eagler 172.16.5.76 (wings SFTP, Abstract Anarchy, RLCraft)         |
 | udp       | 25565, 25566                                                      | eagler 172.16.5.76 (game UDP; Simple Voice Chat shares 25565)      |
 
-tcp 22 is not forwarded: it is divide's own sshd. The edge's firewall (`edge_firewall_dropins`)
-does not open 53, so the tcp/udp 53 forward reaches a closed port. PowerDNS is retired. udp 443
-is for holyWisp's WebTransport listener on the edge (prepared 2026-11-18, not live yet: "WebTransport
+tcp 22 is not forwarded: it is divide's own sshd. Nothing on the edge listens on 53, so the
+tcp/udp 53 forward reaches a closed port. PowerDNS is retired. udp 443
+is for holyWisp's WebTransport listener on the edge (live since about 23:30 UTC on 2026-11-18: "WebTransport
 on udp 443" below).
 
 NAT:
@@ -489,8 +489,8 @@ divide changes:
 - **The listener.** holyWisp binds **172.16.5.10:443/udp** (`webtransport-host`, from
   `host_vars/edge.yml`), one `SO_REUSEPORT` socket per worker, with `CAP_NET_BIND_SERVICE` in
   `abulxt-edge-wisp.service`. No nft redirect on the edge: `group_vars/edge.yml` says why.
-  OpenResty has no QUIC listener, so nothing else wants the port. The edge's firewall already
-  admits udp 443 (`edge_firewall_dropins`), and so does `201.fw` (above).
+  OpenResty has no QUIC listener, so nothing else wants the port. `201.fw` admits udp 443 (above);
+  the edge has no firewall of its own (`host_vars/edge.yml` `edge_firewall_manage: false`).
 - **Client addresses.** The DNAT keeps the client's source address, and holyWisp keys its per-IP
   limits and reputation on it. No proxy is in front of this UDP, so holyWisp reads no proxy
   headers on it.

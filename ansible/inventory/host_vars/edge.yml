@@ -27,6 +27,13 @@ edge_origin_source: "172.16.5.10/32"
 edge_public_ip_on_box: false
 edge_primary_if: eth0
 
+# No firewall or fail2ban inside the CT (docs/divide-host.md "Guest firewalls"): divide's
+# pve-firewall (/etc/pve/firewall/201.fw) filters it, and its sshd is reachable only from divide and
+# the admin VPN. These override group_vars/edge.yml (the contract shared with KrunkNative, which
+# skips its divide guests the same way: kn_host_firewall false). Neither runs here since 2026-11-17.
+edge_firewall_manage: false
+fail2ban_manage: false
+
 # Sizing: the CT has 6 cores (threads 0-2 and 16-18 on divide, since 2026-11-18; it had 8).
 # OpenResty and holyWisp get 3 worker threads each instead of one per CPU apiece (edge_relay
 # edge_openresty_workers, edge_wisp holywisp_workers). Measured on 2026-11-18 over 19 hours,
