@@ -455,7 +455,7 @@ not leave through WARP. `roles/edge_warp` adds `to 91.199.82.174 tcp dport 80 lo
 (priority 30400) for that (ansible/README.md "Kernel mode"). They must not leave the box either: a
 guest's hairpin to itself is dropped (above). `roles/edge_network` runs `edge-own-address.service`,
 which loads the nft table `ip edge_own_address` (nat output: `ip daddr 91.199.82.174 tcp dport 80
-dnat to 172.16.5.10`) from `/etc/abulxt/edge-own-address.nft`. It is NAT only, not a firewall.
+dnat to 172.16.5.10`) from `/etc/edge-own-address.nft`. It is NAT only, not a firewall.
 
 `conf.d/05-divide-acme.conf` on the edge answers ACME for divide itself:
 `divide.eli.gift` `/.well-known/acme-challenge/` goes to 172.16.5.1:80, and the rest of that name

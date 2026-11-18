@@ -9,8 +9,8 @@ ReloadPropagatedFrom=nftables.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/sbin/nft -f /etc/abulxt/edge-own-address.nft
-ExecReload=/usr/sbin/nft -f /etc/abulxt/edge-own-address.nft
+ExecStart=/usr/sbin/nft -f /etc/edge-own-address.nft
+ExecReload=/usr/sbin/nft -f /etc/edge-own-address.nft
 ExecStop=-/usr/sbin/nft delete table ip edge_own_address
 
 [Install]

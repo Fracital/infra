@@ -139,18 +139,10 @@
         fail_msg: public_ip and edge_own_address_target must be IPv4 literals, with at least one port.
         quiet: true
 
-    - name: Directory for the own-address table
-      ansible.builtin.file:
-        path: /etc/abulxt
-        state: directory
-        owner: root
-        group: root
-        mode: "0755"
-
-    - name: Render the own-address table (/etc/abulxt/edge-own-address.nft)
+    - name: Render the own-address table (/etc/edge-own-address.nft)
       ansible.builtin.template:
         src: edge-own-address.nft.j2
-        dest: /etc/abulxt/edge-own-address.nft
+        dest: /etc/edge-own-address.nft
         owner: root
         group: root
         mode: "0644"
@@ -197,4 +189,4 @@
         state: absent
       loop:
         - /etc/systemd/system/edge-own-address.service
-        - /etc/abulxt/edge-own-address.nft
+        - /etc/edge-own-address.nft
