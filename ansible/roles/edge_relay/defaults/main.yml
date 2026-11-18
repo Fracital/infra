@@ -3,7 +3,7 @@
 
 # OpenResty `worker_processes` (nginx.conf.j2). auto = one per CPU, right for a box whose cores
 # are all OpenResty's. A box that shares its cores with holyWisp pins both (host_vars: the edge on
-# divide gives OpenResty 4 of its CT's 8 cores, edge_wisp holywisp_workers the other 4).
+# divide gives OpenResty 4 of its CT's 6 cores, edge_wisp holywisp_workers the other 2).
 edge_openresty_workers: auto
 
 # The edge="..." field of every access-log line (nginx.conf.j2 log_format edge_combined). The

@@ -96,7 +96,7 @@ rebalancing them), VMs with `qm set --affinity`.
 
 | Threads      | Guests                                                        |
 | ------------ | ------------------------------------------------------------- |
-| 0-3, 16-19   | edge (CT 201), exclusive                                      |
+| 0-2, 16-18   | edge (CT 201), exclusive (since 2026-11-18; was 0-3, 16-19)   |
 | 4-5, 20-21   | kn (CT 203)                                                   |
 | 6, 22        | kru (120), blockshooter (CT 202)                              |
 | 7, 23        | guca (117), fg (CT 206)                                       |
@@ -449,7 +449,7 @@ The kn game servers (CT 203) listen on 172.16.5.94 (`listen_host`) and advertise
 
 ## The edge's view
 
-The edge (CT 201, 8 cores) does not have 91.199.82.174 on any interface (`edge_public_ip_on_box:
+The edge (CT 201, 6 cores) does not have 91.199.82.174 on any interface (`edge_public_ip_on_box:
 false`). Its own streams to that address, such as wisp.baby's speed test through holyWisp, must
 not leave through WARP. `roles/edge_warp` adds `to 91.199.82.174 tcp dport 80 lookup main`
 (priority 30400) for that (ansible/README.md "Kernel mode"). They must not leave the box either: a
