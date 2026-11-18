@@ -164,8 +164,10 @@ Never `flush ruleset`: fail2ban keeps its bans in its own table, and a flush dro
   - `vmbr1` tcp 80: divide's ACME HTTP-01. The edge forwards `divide.eli.gift` to it, see below.
   - icmp
   - tcp 22 (divide's own sshd, from anywhere; fail2ban watches it)
-  - tcp 8006 (web UI, VNC/xterm.js) and 3128 (spiceproxy) from the admin IPs
-    `{ 5.188.124.57, 108.217.204.73 }` only
+  - tcp 8006 (web UI and API, VNC/xterm.js, `https://divide.eli.gift:8006`) from anywhere on the
+    WAN (`bond0`, v4 and v6) since 2026-11-18. fail2ban's `proxmox` jail watches the logins. The
+    guests (`vmbr1`) do not get it: they are untrusted. The rule has a counter.
+  - tcp 3128 (spiceproxy) from the admin IPs `{ 5.188.124.57, 108.217.204.73 }` only
 - **forward**: from the LAN (`vmbr1`) to the WAN and to the LAN is accepted. Traffic in from the
   WAN is accepted with `ct status dnat` (the port forwards below). The LAN's outbound connections
   also need their replies admitted (established/related): check the live file when you rebuild.
@@ -314,6 +316,9 @@ sshd reads only `/root/.ssh/authorized_keys`, so a key added to the pve copy alo
 
 Jails `sshd` and `proxmox` (the web UI login). `ignoreip` includes wg 172.16.5.11 and the admin IPs
 5.188.124.57 and 108.217.204.73. This is divide's own setup, not the vendored `roles/fail2ban`.
+`proxmox` reads pvedaemon's `authentication failure; rhost=` lines from the journal. Three in 10
+minutes ban the address from 8006 for an hour, and the ban grows on repeat (`bantime.increment`).
+That jail is what stands between the public 8006 and password guessing, so keep it enabled.
 
 ## Routes and networkd inside the containers
 
