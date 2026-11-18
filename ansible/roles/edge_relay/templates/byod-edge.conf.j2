@@ -122,6 +122,14 @@ server {
     # nginx's default is 1m, which rejected chat sends (/api/ai) with 413 before they reached the origin. Matches the
     # origin's /api/ai and /v1 limit (abulxt deploy/openresty/snippets/routes-common.conf).
     client_max_body_size {{ edge_client_max_body_size }};
+{% if edge_flood_guard_hosts | length > 0 %}
+
+    # Flood guard (conf.d/01-flood-guard.conf, defaults edge_flood_guard_*). Server level, so it
+    # runs before link routing and every location inherits it; other hosts get empty keys.
+    if ($edge_guard_block) { return 403; }
+    limit_req zone=edge_guard_ip   burst={{ edge_flood_guard_burst }} nodelay;
+    limit_req zone=edge_guard_post burst={{ edge_flood_guard_post_burst }} nodelay;
+{% endif %}
 
     ssl_certificate_by_lua_block {
         auto_ssl_instance:ssl_certificate()

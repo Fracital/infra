@@ -255,6 +255,40 @@
   diff: false # holds the token and the gate keys
   notify: reload openresty
 
+# Maps and zones for the :443 default server's flood guard and nginx.conf's access_log filter
+# (defaults edge_flood_guard_*). Always rendered: nginx.conf references $edge_loggable.
+- name: Render the flood guard
+  ansible.builtin.template:
+    src: flood-guard.conf.j2
+    dest: "{{ openresty_conf_dir }}/conf.d/01-flood-guard.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: reload openresty
+
+# Debian's packages ship no logrotate for /usr/local/openresty: under the 2026-11-18 flood the
+# edge's access.log reached 8.9 GB and nearly filled the CT.
+- name: Rotate OpenResty logs
+  ansible.builtin.copy:
+    dest: /etc/logrotate.d/openresty
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      {{ openresty_prefix }}/nginx/logs/*.log {
+          daily
+          maxsize {{ edge_log_maxsize }}
+          rotate {{ edge_log_rotate_days }}
+          missingok
+          notifempty
+          compress
+          delaycompress
+          sharedscripts
+          postrotate
+              [ ! -f {{ openresty_prefix }}/nginx/logs/nginx.pid ] || kill -USR1 $(cat {{ openresty_prefix }}/nginx/logs/nginx.pid)
+          endscript
+      }
+
 # Other boxes' HTTP-01 on the shared public address (defaults edge_acme_forwards).
 - name: Render the ACME forwards
   ansible.builtin.template:

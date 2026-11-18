@@ -608,6 +608,26 @@ validator approving registered names. Rollback: the flag back to false and `--ta
 Ship (link routing and the Redis move): RUNBOOK.md "Shared Redis on terp.db" and "Link routing".
 Rollback: `link_routes_enabled: false` and `--tags relay`; every unknown Host goes to amph again.
 
+## Flood guard
+
+The edge, not the origin, sheds HTTP floods: it is where the clients connect, and a request it
+refuses never costs amph a connection. `roles/edge_relay` renders `conf.d/01-flood-guard.conf`
+(maps and `limit_req` zones) and applies it at the top of the :443 default server, before link
+routing. Only the names in `edge_flood_guard_hosts` (and their `www.`) are guarded:
+
+- a POST with neither Referer nor Origin gets 403 (`edge_flood_guard_block_bare_post`);
+- each client address gets `edge_flood_guard_rate` (burst `edge_flood_guard_burst`) for every
+  request and `edge_flood_guard_post_rate` (burst `edge_flood_guard_post_burst`) for POSTs, 429
+  beyond. One address is often a whole school NAT, so the rates stay generous;
+- those 403s and 429s are not written to access.log.
+
+Why: on 2026-11-18 from 18:47 UTC, about 650 school and ISP NAT addresses (mostly ChromeOS) sent
+about 13k POSTs a second to abstracteducation.loan, never with a Referer, switching path on the
+minute (`/`, `/api/chat/me`, `/api/updates`). The single node process behind it on amph saturated
+and the site answered 502; the edge ran out of worker connections (now `edge_worker_connections` 16384) and its access.log grew 3 MB/s toward a full disk (OpenResty's logs now rotate daily or past
+`edge_log_maxsize`). Add a name to the list to guard it; an attacker who starts sending a Referer
+still meets the per-address limits. Rollback: an empty `edge_flood_guard_hosts` and `--tags relay`.
+
 ## Two byod names
 
 The edge's advertised addresses are split between two names. Since 2026-11-16 both are plain

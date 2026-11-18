@@ -3,12 +3,12 @@
 
 user www-data;
 worker_processes {{ edge_openresty_workers }};
-worker_rlimit_nofile 8192;
+worker_rlimit_nofile {{ edge_worker_rlimit_nofile }};
 pid {{ openresty_prefix }}/nginx/logs/nginx.pid;
 error_log {{ openresty_prefix }}/nginx/logs/error.log warn;
 
 events {
-    worker_connections 4096;
+    worker_connections {{ edge_worker_connections }};
     multi_accept on;
     use epoll;
 }
@@ -26,7 +26,8 @@ http {
                              'rt=$request_time uct="$upstream_connect_time" '
                              'uht="$upstream_header_time" urt="$upstream_response_time" '
                              'host="$host" edge="{{ edge_log_name }}"';
-    access_log {{ openresty_prefix }}/nginx/logs/access.log edge_combined;
+    # $edge_loggable (conf.d/01-flood-guard.conf) drops flood-guard 403s and 429s.
+    access_log {{ openresty_prefix }}/nginx/logs/access.log edge_combined buffer=256k flush=5s if=$edge_loggable;
 
     sendfile on;
     tcp_nopush on;

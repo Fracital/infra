@@ -91,6 +91,33 @@ fracital_asset_regex: '^/assets/[A-Za-z0-9_-]{6,64}\.(?:js|mjs|css|wasm|woff2?|t
 # chat sends (/api/ai) with 413 before they reached the origin. Matches the origin's /api/ai and
 # /v1 limit (abulxt deploy/openresty/snippets/routes-common.conf).
 edge_client_max_body_size: 16m
+
+# Per-worker connection cap and the file limit behind it (nginx.conf.j2). Every proxied request
+# holds two connections (client and upstream), so 4096 ran out under the 2026-11-18 flood.
+edge_worker_connections: 16384
+edge_worker_rlimit_nofile: 65535
+
+# L7 flood guard on the :443 default server (templates/flood-guard.conf.j2, byod-edge.conf.j2).
+# Only the hosts listed here (and their www.) are guarded; every other name gets an empty key and
+# is never limited or blocked. Added after the 2026-11-18 POST flood on abstracteducation.loan
+# (about 13k req/s from about 650 school and ISP NAT addresses, mostly ChromeOS, never a Referer):
+# - a POST with neither Referer nor Origin gets 403 (all of that flood, about 1% of real POSTs);
+# - per client address, edge_flood_guard_rate (burst edge_flood_guard_burst) for every request
+#   and edge_flood_guard_post_rate for POSTs. One address is often a whole school NAT, so these
+#   stay generous; the flood sent 130 to 580 req/s per address.
+# Blocked and rate-limited (429) requests are kept out of access.log (the flood wrote 3 MB/s).
+edge_flood_guard_hosts:
+  - abstracteducation.loan
+edge_flood_guard_block_bare_post: true
+edge_flood_guard_rate: 30r/s
+edge_flood_guard_burst: 300
+edge_flood_guard_post_rate: 5r/s
+edge_flood_guard_post_burst: 50
+
+# OpenResty's own logs (Debian's packages ship no logrotate for /usr/local/openresty): daily, or
+# sooner once a log passes edge_log_maxsize at the next logrotate run.
+edge_log_rotate_days: 7
+edge_log_maxsize: 1G
 # Each link routing target's limit in bytes (link_routes.lua checks Content-Length against it), and
 # the largest, which location / needs so that nginx does not refuse a body before the lookup.
 link_routes_body_limits:

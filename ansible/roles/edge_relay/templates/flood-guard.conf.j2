@@ -1,0 +1,37 @@
+# Flood guard. Managed by Ansible (edge_relay role, edge_flood_guard_*).
+# Maps and zones at http{} level: the :443 default server in 00-edge-relay.conf applies them, and
+# nginx.conf's access_log uses $edge_loggable.
+{% set guard_re = '(www\\.)?(' ~ (edge_flood_guard_hosts | map('regex_escape') | join('|')) ~ ')' %}
+
+# POST with neither Referer nor Origin, on a guarded host.
+map "$host|$request_method|$http_referer$http_origin" $edge_guard_block {
+    default 0;
+{% if edge_flood_guard_hosts | length > 0 and edge_flood_guard_block_bare_post | bool %}
+    "~^{{ guard_re }}\|POST\|$" 1;
+{% endif %}
+}
+
+# Per client address on a guarded host; an empty key is never limited.
+map $host $edge_guard_key {
+    default "";
+{% if edge_flood_guard_hosts | length > 0 %}
+    "~^{{ guard_re }}$" $binary_remote_addr;
+{% endif %}
+}
+map "$host|$request_method" $edge_guard_post_key {
+    default "";
+{% if edge_flood_guard_hosts | length > 0 %}
+    "~^{{ guard_re }}\|POST$" $binary_remote_addr;
+{% endif %}
+}
+limit_req_zone $edge_guard_key      zone=edge_guard_ip:20m   rate={{ edge_flood_guard_rate }};
+limit_req_zone $edge_guard_post_key zone=edge_guard_post:20m rate={{ edge_flood_guard_post_rate }};
+limit_req_status 429;
+limit_req_log_level info;
+
+# Blocked and rate-limited requests stay out of access.log.
+map "$edge_guard_block:$status" $edge_loggable {
+    default 1;
+    "~^1:" 0;
+    "~:429$" 0;
+}
