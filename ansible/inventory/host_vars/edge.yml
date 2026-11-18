@@ -133,7 +133,11 @@ edge_static_keys:
 # nginx ("http://172.16.5.78", full path).
 pages_fg_api_pass: "http://172.16.5.206:8787/"
 # systemya.fracit.al (2026-11-18): SystemYA, rebuilt under Fracital. The edge only carries its two
-# integrations; the frontend is SystemYA's, delivered into /srv/static/systemya.fracit.al.
+# integrations; the frontend is SystemYA's: its CI rsyncs it into /var/www/systemya as the edge
+# user `systemya` (rrsync, that folder only), jumping through divide on a forwarding-only key line
+# (docs/divide-host.md "CI keys on divide"). The key's private half is SystemYA's CI secret.
+# /api/ is Fracital's API: SystemYA signs in with Fracital Accounts (BETTER_AUTH_TRUSTED_ORIGINS on
+# terp lists https://systemya.fracit.al for the OAuth popups and the cross-site handoff).
 # /room/ is its holt chat: relayed to holt on amph's origin-internal listener, as the byod hosts
 # are (X-BYOD-Token), with SystemYA's license (systemya_secrets.yml); holt's platform is `systemya`.
 # /cdn/ and /v1/games/ are Holy Unblocker's theatre CDN and catalog API on holy, so its SDK
@@ -170,7 +174,22 @@ edge_static_sites:
       - /fg/
     unity_compressed: true
   - host: systemya.fracit.al
+    root: /var/www/systemya
+    fallback: /index.html
+    deploy:
+      user: systemya
+      keys:
+        - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICY6Q87ApKXOGOqd/0Pnb1nCoJ5+FT9yl5Bbg2uksNJd systemya-ci@edge
     proxies:
+      # Fracital Accounts: SystemYA has no backend, so Fracital answers /api/ for this host (sign-in,
+      # /api/me, and /api/me/chat, holt's userState). Through edge_relay's terp snippet; an empty
+      # X-FRX-App sends it to Fracital on terp's default server.
+      - at: "^~ /api/"
+        include: snippets/fracital-origin.conf
+        headers:
+          - { name: X-FRX-App, value: "" }
+        timeout: 120s
+        body_max: "{{ fracital_client_max_body_size }}"
       - at: "^~ /room/"
         pass: "{{ systemya_holt_pass }}"
         host: holt.abstracteducation.loan

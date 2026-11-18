@@ -6,7 +6,13 @@
     that:
       - edge_static_sites | map(attribute='host') | reject('match', '^[a-z0-9.-]+$') | list | length == 0
       - edge_static_keys | reject('match', '^restrict,command="/usr/bin/rrsync ' ~ edge_static_root ~ '" ssh-ed25519 ') | list | length == 0
-    fail_msg: "edge_static_sites hosts must be plain names, and edge_static_keys must each be forced through rrsync {{ edge_static_root }}."
+      - edge_static_sites | selectattr('deploy', 'defined') | map(attribute='deploy.user') | reject('match', '^[a-z][a-z0-9-]{1,30}$') | list | length == 0
+      - edge_static_sites | selectattr('deploy', 'defined') | map(attribute='deploy.keys') | flatten | reject('match', '^ssh-ed25519 [A-Za-z0-9+/=]+( [^\\s]+)?$') | list | length == 0
+      - edge_static_sites | selectattr('deploy', 'defined') | rejectattr('root', 'defined') | list | length == 0
+      - edge_static_sites | selectattr('fallback', 'defined') | map(attribute='fallback') | reject('match', '^/[A-Za-z0-9._/-]+$') | list | length == 0
+      - edge_static_sites | selectattr('fallback', 'defined') | selectattr('listing', 'defined') | selectattr('listing') | list | length == 0
+      - edge_static_sites | map(attribute='proxies', default=[]) | flatten | selectattr('include', 'defined') | map(attribute='include') | reject('match', '^snippets/[a-z0-9-]+\\.conf$') | list | length == 0
+    fail_msg: "edge_static_sites hosts must be plain names, edge_static_keys must each be forced through rrsync {{ edge_static_root }}, and a site with deploy needs a root, a plain user name and bare ssh-ed25519 keys, a fallback is a plain path on a site without listing, and a proxy include is snippets/<name>.conf."
     quiet: true
 
 - name: Static sites
@@ -74,7 +80,57 @@
         owner: "{{ edge_static_user }}"
         group: "{{ edge_static_user }}"
         mode: "0755"
-      loop: "{{ ['.maintenance'] + edge_static_sites | map(attribute='host') | list }}"
+      loop: "{{ ['.maintenance'] + edge_static_sites | rejectattr('root', 'defined') | map(attribute='host') | list }}"
+
+    # A site with its own delivery user (`deploy`): the user, its rrsync-only keys (root owns the
+    # file, so the user cannot loosen them) and the site's root, owned by it.
+    - name: Site delivery users
+      ansible.builtin.user:
+        name: "{{ item.deploy.user }}"
+        system: true
+        shell: /bin/sh
+        password: "*"
+        home: "/var/lib/{{ item.deploy.user }}"
+        create_home: true
+      loop: "{{ edge_static_sites | selectattr('deploy', 'defined') | list }}"
+      loop_control:
+        label: "{{ item.host }}: {{ item.deploy.user }}"
+
+    - name: Site delivery SSH directories
+      ansible.builtin.file:
+        path: "/var/lib/{{ item.deploy.user }}/.ssh"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop: "{{ edge_static_sites | selectattr('deploy', 'defined') | list }}"
+      loop_control:
+        label: "{{ item.host }}: {{ item.deploy.user }}"
+
+    - name: Site delivery keys
+      ansible.builtin.copy:
+        dest: "/var/lib/{{ item.deploy.user }}/.ssh/authorized_keys"
+        content: |
+          {% for key in item.deploy['keys'] | default([]) %}
+          restrict,command="/usr/bin/rrsync {{ item.root | default(edge_static_root ~ '/' ~ item.host) }}" {{ key }}
+          {% endfor %}
+        owner: root
+        group: root
+        mode: "0644"
+      loop: "{{ edge_static_sites | selectattr('deploy', 'defined') | list }}"
+      loop_control:
+        label: "{{ item.host }}: {{ item.deploy.user }}"
+
+    - name: Site roots of their own
+      ansible.builtin.file:
+        path: "{{ item.root }}"
+        state: directory
+        owner: "{{ item.deploy.user if item.deploy is defined else edge_static_user }}"
+        group: "{{ item.deploy.user if item.deploy is defined else edge_static_user }}"
+        mode: "0755"
+      loop: "{{ edge_static_sites | selectattr('root', 'defined') | list }}"
+      loop_control:
+        label: "{{ item.host }}: {{ item.root }}"
 
     - name: Listing filters directory
       ansible.builtin.file:

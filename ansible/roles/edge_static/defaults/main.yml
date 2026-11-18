@@ -15,9 +15,15 @@ edge_static_user: static
 edge_static_keys: []
 
 # Each site:
+#   root:        the content directory (default <edge_static_root>/<host>).
+#   deploy:      { user, keys }: a delivery user of this site alone, its keys forced through
+#                rrsync <root> (keys are bare `ssh-ed25519 AAAA... comment` lines), owning <root>.
+#                Without it the site's content comes in as edge_static_user.
 #   host:        the server_name. Its certificate comes from auto-ssl like the byod names: the
 #                name is a DNS-only A record for the edge, so abulxt-domains approves it.
 #   listing:     a styled directory listing for directories without index.html (files/listing-*.lua).
+#   fallback:    the page for paths with no file behind them (a single-page app: /index.html),
+#                served with 200. Without it they are 404. Not with listing.
 #   maintenance: regex of the URIs that answer 503 while <root>/.maintenance/<host> exists.
 #   cache_map:   [regex, Cache-Control] pairs for $es_<site>_cc, used by apps and unity_prefixes.
 #   redirects:   exact locations that redirect: { at, code, to }.
@@ -27,4 +33,7 @@ edge_static_keys: []
 #                Upgrade), or auto (Upgrade only when asked, one path for HTTP and WebSocket, 1 d
 #                timeouts). passthrough: true keeps the backend's Cache-Control and allows bodies
 #                up to body_max (1m), for assets; hide_headers drops response headers there.
+#                include: a snippet under the OpenResty dir that holds the whole upstream side
+#                (proxy_pass, TLS, client address, token) instead of pass/host, for an origin
+#                another role owns; timeout (60s) and body_max (1m) still apply.
 edge_static_sites: []
