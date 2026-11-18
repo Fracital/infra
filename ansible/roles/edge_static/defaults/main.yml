@@ -27,10 +27,4 @@ edge_static_keys: []
 #                Upgrade), or auto (Upgrade only when asked, one path for HTTP and WebSocket, 1 d
 #                timeouts). passthrough: true keeps the backend's Cache-Control and allows bodies
 #                up to body_max (1m), for assets; hide_headers drops response headers there.
-#   src:         a folder of this repository (from its root) installed as the site's content on
-#                every run, for a site whose files live here; omit it for content delivered by rsync.
-#   hidden:      regexes answered 404 (dotfiles inside an app).
-#   apps:        prefixes served with try_files =404, no listing and Cache-Control $es_<site>_cc.
-#   unity_prefixes: prefixes whose precompressed Unity WebGL files (.br, .gz) also get $es_<site>_cc.
-#   unity_compressed: Content-Encoding and types for precompressed Unity files anywhere on the site.
 edge_static_sites: []

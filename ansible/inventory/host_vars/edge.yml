@@ -132,13 +132,13 @@ edge_static_keys:
 # 22:22 UTC on 2026-11-17, while the game's database moved to terp.db, both went back to giftshop's
 # nginx ("http://172.16.5.78", full path).
 pages_fg_api_pass: "http://172.16.5.206:8787/"
-# systemya.fracit.al (2026-11-18): SystemYA, rebuilt under Fracital. Its frontend is static, from
-# systemya/site/ in this repository. /room/ is its holt chat: the edge relays it to holt on amph's
-# origin-internal listener, as the byod hosts do (X-BYOD-Token), with SystemYA's license
-# (systemya_secrets.yml); holt's platform is `systemya`. /v1/games/ and /cdn/ are Holy Unblocker's
-# API and theatre CDN on holy (the edge reaches 172.16.5.79:8080 already), so the SDK runs
-# same-origin. DNS: a DNS-only A record for divide_public_ip, so abulxt-domains approves the
-# certificate.
+# systemya.fracit.al (2026-11-18): SystemYA, rebuilt under Fracital. The edge only carries its two
+# integrations; the frontend is SystemYA's, delivered into /srv/static/systemya.fracit.al.
+# /room/ is its holt chat: relayed to holt on amph's origin-internal listener, as the byod hosts
+# are (X-BYOD-Token), with SystemYA's license (systemya_secrets.yml); holt's platform is `systemya`.
+# /cdn/ and /v1/games/ are Holy Unblocker's theatre CDN and catalog API on holy, so its SDK
+# (/cdn/index.js) runs same-origin (website2 docs/sdk.md). DNS: a DNS-only A record for
+# divide_public_ip, so abulxt-domains approves the certificate.
 systemya_holt_pass: "http://{{ abulxt_origin_ip }}:{{ abulxt_origin_internal_port }}/systemya/"
 systemya_holy_pass: "http://{{ holyunb_origin_ip }}:{{ holyunb_origin_port }}"
 pages_fg_socket_pass: "http://172.16.5.206:8787/socket"
@@ -170,9 +170,6 @@ edge_static_sites:
       - /fg/
     unity_compressed: true
   - host: systemya.fracit.al
-    src: systemya/site
-    redirects:
-      - { at: /room, code: 308, to: /room/ }
     proxies:
       - at: "^~ /room/"
         pass: "{{ systemya_holt_pass }}"

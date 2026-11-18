@@ -76,24 +76,6 @@
         mode: "0755"
       loop: "{{ ['.maintenance'] + edge_static_sites | map(attribute='host') | list }}"
 
-    # A site whose files are in this repository (`src`): installed on every run, owned by the
-    # delivery user like rsync'd content. Files dropped from the folder are removed too.
-    - name: Site content from the repository
-      ansible.posix.synchronize:
-        src: "{{ playbook_dir }}/../../{{ item.src }}/"
-        dest: "{{ edge_static_root }}/{{ item.host }}/"
-        delete: true
-        recursive: true
-        # The ProxyJump through divide is in ansible_ssh_common_args (group_vars/divide_guests.yml).
-        use_ssh_args: true
-        rsync_opts:
-          - "--chown={{ edge_static_user }}:{{ edge_static_user }}"
-          - "--chmod=D755,F644"
-          - "--exclude=.DS_Store"
-      loop: "{{ edge_static_sites | selectattr('src', 'defined') | list }}"
-      loop_control:
-        label: "{{ item.host }} <- {{ item.src }}"
-
     - name: Listing filters directory
       ansible.builtin.file:
         path: "{{ openresty_conf_dir }}/edge_static"
