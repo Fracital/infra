@@ -97,14 +97,25 @@ rebalancing them), VMs with `qm set --affinity`.
 | Threads      | Guests                                                        |
 | ------------ | ------------------------------------------------------------- |
 | 0-2, 16-18   | edge (CT 201), exclusive (since 2026-11-18; was 0-3, 16-19)   |
+| 3, 6, 19, 22 | amph (CT 213)                                                 |
 | 4-5, 20-21   | kn (CT 203)                                                   |
-| 6, 22        | kru (120), blockshooter (CT 202)                              |
-| 7, 23        | guca (117), fg (CT 206)                                       |
 | 7            | vault (100), wg (CT 200)                                      |
-| 23           | chat (106)                                                    |
-| 0-7, 16-23   | every VM except mac, holy (205), terp (CT 216), amph (CT 213) |
-| 8-11, 24-27  | mac (126), runner (204)                                       |
+| 23           | chat (106), fg (CT 206)                                       |
+| 0-7, 16-23   | every VM except mac                                           |
+| 8-9, 24-25   | mac (VM 126)                                                  |
+| 10, 26       | runner (204)                                                  |
+| 11           | kru (120), guca (117)                                         |
+| 27           | terp (CT 216), holy (205), blockshooter (CT 202)              |
 | 12-15, 28-31 | wispdev (122), exclusive                                      |
+
+Re-pinned 2026-11-18 (about 23:23 UTC) after guests were resized: a raw
+`lxc.cgroup2.cpuset.cpus` overrides `cores` entirely (pvestatd skips the container and lxcfs
+reports the pin's size as `nproc`), so each pin now has exactly `cores` threads and changing a
+container's `cores` alone does nothing. Resize by editing the pin too, and apply it live with
+`echo <cpus> > /sys/fs/cgroup/lxc/<id>/cpuset.cpus`. VMs: `qm set <id> --affinity` takes effect at
+the next start; `taskset -a -pc <cpus> $(cat /var/run/qemu-server/<id>.pid)` applies it now.
+mac and runner no longer share threads. Config backups from before the re-pin are in
+`divide:/root/alloc-backup-20261118T232333/`.
 
 Allocation changes (total allocated memory 104.5 of 125 GiB, was 122.5; every other guest
 unchanged):
