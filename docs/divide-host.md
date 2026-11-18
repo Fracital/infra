@@ -275,18 +275,20 @@ A new edge-to-origin path needs a line here, a rule in the guest's `/etc/pve/fir
 
 ## CI keys on divide
 
-divide's root `authorized_keys` (a symlink to `/etc/pve/priv/authorized_keys`) carries the CI keys
-that only jump through it, each as
+divide's `/root/.ssh/authorized_keys` carries the CI keys that only jump through it, each as
 `restrict,port-forwarding,command="/bin/false",permitopen="<guest>:22"`. `restrict` alone still lets
 a key run commands; the forced `/bin/false` is what blocks them. Back the file up before editing it.
+On divide it is a regular file, not the usual Proxmox symlink to `/etc/pve/priv/authorized_keys`;
+sshd reads only `/root/.ssh/authorized_keys`, so a key added to the pve copy alone is refused.
 
-| Key                               | May forward to                    | Logs in on the guest as                |
-| --------------------------------- | --------------------------------- | -------------------------------------- |
-| `infra-ci@Fracital/infra`         | `172.16.5.3:22`, `172.16.5.10:22` | root (Ansible)                         |
-| `abulxt-ci-vps@y9x/abulxt`        | `172.16.5.3:22`                   | `deploy` on amph, `abulxt-deploy-gate` |
-| `abulxt-ci-singlefile@y9x/abulxt` | `172.16.5.3:22`                   | `deploy` on amph, `abulxt-deploy-gate` |
-| `abulxt-cloaks-ci@y9x/cloaks`     | `172.16.5.3:22`                   | `deploy` on amph, `abulxt-deploy-gate` |
-| `holt-ci@y9x/holt`                | `172.16.5.3:22`                   | `deploy` on amph, `holt-deploy-gate`   |
+| Key                                   | May forward to                     | Logs in on the guest as                  |
+| ------------------------------------- | ---------------------------------- | ---------------------------------------- |
+| `infra-ci@Fracital/infra`             | `172.16.5.3:22`, `172.16.5.10:22`  | root (Ansible)                           |
+| `abulxt-ci-vps@y9x/abulxt`            | `172.16.5.3:22`                    | `deploy` on amph, `abulxt-deploy-gate`   |
+| `abulxt-ci-singlefile@y9x/abulxt`     | `172.16.5.3:22`                    | `deploy` on amph, `abulxt-deploy-gate`   |
+| `abulxt-cloaks-ci@y9x/cloaks`         | `172.16.5.3:22`                    | `deploy` on amph, `abulxt-deploy-gate`   |
+| `holt-ci@y9x/holt`                    | `172.16.5.3:22`                    | `deploy` on amph, `holt-deploy-gate`     |
+| `krunknative-ci@rebel10n/KrunkNative` | `172.16.5.47:22`, `172.16.5.94:22` | root on kru and kn (KrunkNative deploys) |
 
 ## fail2ban
 
