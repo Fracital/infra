@@ -777,6 +777,7 @@ not to the shared one. The local servers are stopped and disabled, their data ke
 | fg (206)     | `redis-server` (127.0.0.1:6379)             | `fg-api`, `terp.db:6381`                                    |
 | kru (120)    | `kn-redis` (127.0.0.1:6380, no persistence) | `kn-brain-coord`, `kn-brain-finder`, `redis://terp.db:6382` |
 | eagler (104) | `redis-server` (127.0.0.1:6379)             | Pterodactyl panel (`php8.3-fpm`, `pteroq`), `terp.db:6383`  |
+| chat (106)   | `redis-server` (127.0.0.1:6379)             | `labelsupplier-gateway`, `terp.db:6384`                     |
 
 - eagler got `80.93.219.21 terp.db` in `/etc/hosts` and in `/etc/cloud/templates/hosts.debian.tmpl`
   (cloud-init is disabled there, `/etc/cloud/cloud-init.disabled`, so only the first matters now).
@@ -788,7 +789,10 @@ not to the shared one. The local servers are stopped and disabled, their data ke
   shared instance (`docs/terp-db.md` "Shared Redis (6380)"), and 6379 left `from_edge` above and
   `213.fw` (backups `/root/nftables.conf.bak-wispredis-20261118004827`,
   `/root/213.fw.bak-wispredis-20261118004827`).
-- Still local: chat's (106) `redis-server` on 127.0.0.1:6379, the cache of
-  `labelsupplier-gateway` (empty). Its client cannot send `AUTH`, so it stays until the gateway is
-  rebuilt with a password setting. No other guest or VM (mull, mac and every CT checked) runs
-  Redis, KeyDB or Valkey.
+- chat (106): `redis-server` stopped and disabled since 2026-11-18 01:10 UTC, data in
+  `/var/lib/redis`. `labelsupplier-gateway` was rebuilt the same day with `REDIS_USERNAME` and
+  `REDIS_PASSWORD` (it could not send `AUTH` before) and reads them from `/opt/labelsupplier/.env`
+  (backup `.env.bak-terpdb-redis-*`, old binary `labelsupplier.bak-redis-*`). chat already had
+  `80.93.219.21 terp.db` in `/etc/hosts` and the host route to it via divide. Nothing else on chat
+  used its Redis. No guest or VM (mull, mac and every CT, checked 2026-11-17) runs Redis, KeyDB or
+  Valkey locally any more.

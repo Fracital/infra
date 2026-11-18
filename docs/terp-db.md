@@ -164,7 +164,7 @@ amph's firewall, CT 213's guest firewall and divide's `from_edge` chain. Its las
 (`amph:/root/redis-amph-retired-20261118004759.rdb`, also `/var/lib/redis/dump.rdb`; RUNBOOK.md has
 the steps).
 
-## App Redis instances (6381 to 6383)
+## App Redis instances (6381 to 6384)
 
 Since 2026-11-17 every app that had a Redis of its own on a divide guest has its own instance here
 instead of a user on the shared one: the shared `default` user can read the certificate store, the
@@ -175,11 +175,12 @@ same template unit, enabled), config `/etc/redis/redis-<app>.conf` (root:redis 0
 -hex 32`) are in `/root/terpdb-redis-<app>.secret` (`REDIS_APP_PASSWORD` for the app's user,
 `REDIS_ADMIN_PASSWORD` for `admin`, which has everything); the configs hold only SHA-256 hashes.
 
-| Port | Instance | App (client, config)                                                                                         | Policy                                        | App user's ACL                                                                                   |
-| ---- | -------- | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| 6381 | `fg`     | fg-api on fg (CT 206), go-redis; `/etc/fg-api/environment` `FG_REDIS_ADDR=terp.db:6381`, `FG_REDIS_PASSWORD` | RDB snapshots, no AOF, 256 MB, `noeviction`   | `default`: all but flush, `CONFIG`, `DEBUG`, `SHUTDOWN`, `MODULE`, `MONITOR`, replication, `ACL` |
-| 6382 | `kru`    | kn_brain on kru (CT 120), hiredis; `/etc/krunknative/redis.env`, `KN_REDIS_PASSWORD` in `secrets.env`        | no persistence, 128 MB, `volatile-lru`, 4 DBs | `kn_brain`: `~kn:* &kn:* +@all -@dangerous`; `default` is off                                    |
-| 6383 | `eagler` | Pterodactyl panel on eagler (VM 104), predis; `/var/www/pterodactyl/.env` `REDIS_HOST/PORT/PASSWORD`         | RDB snapshots, no AOF, 256 MB, `noeviction`   | `default`: as fg's, but `FLUSHDB` allowed (Laravel's `cache:clear`)                              |
+| Port | Instance | App (client, config)                                                                                                                                 | Policy                                        | App user's ACL                                                                                   |
+| ---- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| 6381 | `fg`     | fg-api on fg (CT 206), go-redis; `/etc/fg-api/environment` `FG_REDIS_ADDR=terp.db:6381`, `FG_REDIS_PASSWORD`                                         | RDB snapshots, no AOF, 256 MB, `noeviction`   | `default`: all but flush, `CONFIG`, `DEBUG`, `SHUTDOWN`, `MODULE`, `MONITOR`, replication, `ACL` |
+| 6382 | `kru`    | kn_brain on kru (CT 120), hiredis; `/etc/krunknative/redis.env`, `KN_REDIS_PASSWORD` in `secrets.env`                                                | no persistence, 128 MB, `volatile-lru`, 4 DBs | `kn_brain`: `~kn:* &kn:* +@all -@dangerous`; `default` is off                                    |
+| 6383 | `eagler` | Pterodactyl panel on eagler (VM 104), predis; `/var/www/pterodactyl/.env` `REDIS_HOST/PORT/PASSWORD`                                                 | RDB snapshots, no AOF, 256 MB, `noeviction`   | `default`: as fg's, but `FLUSHDB` allowed (Laravel's `cache:clear`)                              |
+| 6384 | `chat`   | labelsupplier-gateway on chat (CT 106), its own RESP client; `/opt/labelsupplier/.env` `REDIS_ADDR=terp.db:6384`, `REDIS_USERNAME`, `REDIS_PASSWORD` | no persistence, 128 MB, `allkeys-lru`, 1 DB   | `labelsupplier`: `~ls:* resetchannels -@all +get +set +ping`; `default` is off                   |
 
 - fg: in-flight state only (revoked sessions, live runs), database 1 (`FG_REDIS_DB=1`), every key
   has a TTL. `noeviction` so a revocation is never evicted.
@@ -191,29 +192,40 @@ same template unit, enabled), config `/etc/redis/redis-<app>.conf` (root:redis 0
 - eagler: Laravel cache, sessions and queue (databases 0 and 1, prefix `pterodactyl_database_`).
   Config is not cached (`bootstrap/cache/config.php` absent), so a `.env` change applies on the next
   request; `pteroq` needs a restart.
-- Not moved: chat's (CT 106) local Redis, the cache of `labelsupplier-gateway` (`REDIS_ADDR`,
-  empty). Its client (`labelsupplier/db/redis.go`) speaks only GET and SET, with no `AUTH`, so it
-  cannot use a password until the gateway is rebuilt with one.
+- chat (2026-11-18): the model-catalog cache of `labelsupplier-gateway`, keys `ls:models:*`, each
+  with a TTL (30 s; `status_counts_stale` 24 h). chat's own Redis had no `maxmemory`, `noeviction`
+  and default RDB snapshots; as a pure cache it got no persistence and `allkeys-lru` here, and it is
+  not in the nightly backup. The gateway could not send `AUTH` before 2026-11-18. Its client
+  (`labelsupplier/db/redis.go`) now reads `REDIS_URL` (`redis://` or `rediss://`) or `REDIS_ADDR`,
+  `REDIS_USERNAME` and `REDIS_PASSWORD`, and any connect or `AUTH` error is a cache miss served from
+  Postgres (logged at most once a minute). Its `--env .env` loader never exported `.env` to the
+  process environment, so the `REDIS_ADDR` there was ignored until the same rebuild, which exports
+  the `REDIS_*` keys. The binary is built locally (chat's Go is too old) and no repo deploys it; the
+  one it replaced is `/opt/labelsupplier/labelsupplier.bak-redis-*`.
 
 The data was copied key by key with its TTL (`SCAN`, `DUMP`, `PTTL`, `RESTORE` as `admin`; the
 script is `/root/rcopy.py` on fg, kru and eagler), with the app stopped (fg) or as a first pass, the
 switch and a second pass that adds only missing keys (kru, eagler).
 
-| Instance | From                                 | Keys | Downtime                                     |
-| -------- | ------------------------------------ | ---- | -------------------------------------------- |
-| `fg`     | fg `redis-server` 127.0.0.1:6379     | 16   | 0.1 s, 22:57:36 UTC (fg-api stop and start)  |
-| `kru`    | kru `kn-redis` 127.0.0.1:6380        | 1    | 0.4 s, 22:58:28 UTC (both kn_brain restarts) |
-| `eagler` | eagler `redis-server` 127.0.0.1:6379 | 16   | none, 23:00:56 UTC (`pteroq` restart)        |
+| Instance | From                                 | Keys | Downtime                                            |
+| -------- | ------------------------------------ | ---- | --------------------------------------------------- |
+| `fg`     | fg `redis-server` 127.0.0.1:6379     | 16   | 0.1 s, 22:57:36 UTC (fg-api stop and start)         |
+| `kru`    | kru `kn-redis` 127.0.0.1:6380        | 1    | 0.4 s, 22:58:28 UTC (both kn_brain restarts)        |
+| `eagler` | eagler `redis-server` 127.0.0.1:6379 | 16   | none, 23:00:56 UTC (`pteroq` restart)               |
+| `chat`   | chat `redis-server` 127.0.0.1:6379   | 0    | 1.7 s, 01:09:09 UTC on 2026-11-18 (gateway restart) |
 
-The old Redis on each guest is stopped and disabled, its data kept (`/var/lib/redis/dump.rdb` on fg
-and eagler; kru's had none). Config backups: fg `/etc/fg-api/environment.bak-terpdb-redis-*`, kru
+The old Redis on each guest is stopped and disabled, its data kept (`/var/lib/redis/dump.rdb` on fg,
+eagler and chat; kru's had none). chat's cache was not copied: its keys live 30 s and are rebuilt on
+the next request. Config backups: fg `/etc/fg-api/environment.bak-terpdb-redis-*`, kru
 `/etc/krunknative/{redis,secrets}.env.bak-terpdb-redis-*`, eagler
 `/root/pterodactyl.env.bak-terpdb-redis-*` and `/etc/hosts.bak-terpdb-redis-*`, plus each guest's
-old `redis.conf.bak-terpdb-redis-*`. Rollback: copy the config backup back, `systemctl enable --now
-redis-server` (fg, eagler) or `kn-redis` (kru), restart the app (`fg-api`; `kn-brain-coord` and
-`kn-brain-finder`; `pteroq` and a `php8.3-fpm` reload). On kru also set `kn_redis_remote_url: ""`
-in KrunkNative first, or its next deploy switches back to terp.db. Keys written on terp.db since
-are lost unless copied back with the same script.
+old `redis.conf.bak-terpdb-redis-*`; chat `/opt/labelsupplier/.env.bak-terpdb-redis-*` (0600).
+Rollback: copy the config backup back, `systemctl enable --now redis-server` (fg, eagler, chat) or
+`kn-redis` (kru), restart the app (`fg-api`; `kn-brain-coord` and `kn-brain-finder`; `pteroq` and a
+`php8.3-fpm` reload; `labelsupplier-gateway`). The new chat binary works with the old Redis too
+(the `.env` backup sets only `REDIS_ADDR`), so its binary backup is needed only to undo the code.
+On kru also set `kn_redis_remote_url: ""` in KrunkNative first, or its next deploy switches back
+to terp.db. Keys written on terp.db since are lost unless copied back with the same script.
 
 ## MariaDB (3307)
 
@@ -264,7 +276,7 @@ to it.
 - tcp 6380 also from **37.9.34.169**: divide sends the edge's own connections out the second
   uplink (`inet divide edge_out`, `docs/divide-host.md`), so the edge reaches the Redis from that
   address. It is not allowed on 5432.
-- tcp 6381, 6382 and 6383 (the app Redis instances) only from 91.199.82.174.
+- tcp 6381 to 6384 (the app Redis instances) only from 91.199.82.174.
 - tcp 3307 (the host MariaDB) only from 91.199.82.174. 3306 is not open.
 - mailcow's published ports are DNAT and pass the forward chain, not input.
 
@@ -272,8 +284,9 @@ fail2ban jails `sshd` and `postgresql` ban into `inet f2b-table`.
 
 Rollback copies: `/root/nftables.conf.bak-terpdb-harden-20261117212641` (before the address
 limits; `nft -f` it), `/root/nftables.conf.bak-terpdb-edge6380-*` and
-`/root/nftables.conf.bak-terpdb-redis-apps-*` (before 6381 to 6383) and
-`/root/nftables.conf.bak-terpdb-mariadb-*` (before 3307).
+`/root/nftables.conf.bak-terpdb-redis-apps-*` (before 6381 to 6383),
+`/root/nftables.conf.bak-terpdb-mariadb-*` (before 3307) and
+`/root/nftables.conf.bak-terpdb-redis-chat-*` (before 6384).
 
 ## Backups
 
@@ -283,8 +296,9 @@ On terp.db, `terpdb-backup.timer` (03:15 UTC) runs `/usr/local/sbin/terpdb-backu
   `globals.sql` (`pg_dumpall --globals-only`: roles and their password hashes), `VERSION`.
 - `/var/backups/redis/<UTC stamp>.rdb`: `redis-cli --rdb` of the shared Redis.
 - `/var/backups/redis/<UTC stamp>-fg.rdb` and `<UTC stamp>-eagler.rdb`: the same for those
-  instances, read as their `admin` user. kru's instance is left out on purpose (no persistence by
-  design). Script backup from before this: `/root/terpdb-backup.sh.bak-redis-apps-*`.
+  instances, read as their `admin` user. kru's and chat's instances are left out on purpose (no
+  persistence by design; the script's loop names only fg and eagler). Script backup from before
+  this: `/root/terpdb-backup.sh.bak-redis-apps-*`.
 - `/var/backups/mariadb/<UTC stamp>/`: `<db>.sql.gz` per database of the host MariaDB
   (`mariadb-dump --single-transaction --routines --triggers --events --hex-blob --databases`, as
   root over the socket), `users.sql` (`mariadb-dump --system=users`: accounts, grants, password
@@ -295,6 +309,9 @@ On terp.db, `terpdb-backup.timer` (03:15 UTC) runs `/usr/local/sbin/terpdb-backu
 Off the box, divide's `terpdb-pull.timer` (04:30 UTC) runs `/usr/local/sbin/terpdb-pull.sh`, which
 pulls `postgres/`, `redis/` and `mariadb/` into `divide:/var/backups/terp-db/` with rsync and keeps
 21 days (`mariadb/` added 2026-11-18, backup `divide:/root/terpdb-pull.sh.bak-mariadb-*`).
+Half-written dumps (`*.partial`) are excluded before the includes, because rsync takes the first
+rule that matches (they came after them until 2026-11-18 and never applied; backup
+`/usr/local/sbin/terpdb-pull.sh.bak-filter-*`).
 It never deletes to match terp.db, so a wiped terp.db cannot empty divide's copy. The key
 (`divide:/root/.ssh/terpdb-pull_ed25519`, host key pinned in `/root/.ssh/terpdb_known_hosts`) is
 limited on terp.db to `restrict,from="91.199.82.174",command="/usr/bin/rrsync -ro /var/backups"`:
