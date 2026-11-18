@@ -23,6 +23,15 @@ openresty_prefix: /usr/local/openresty
 openresty_conf_dir: "{{ openresty_prefix }}/nginx/conf"
 openresty_auto_ssl_dir: /etc/resty-auto-ssl
 
+# HTTP/2 on every OpenResty server block this repo renders (edge_relay, edge_static,
+# abulxt_origin's mc relay, fracital_origin). Off since 2026-11-18: nginx2root
+# (CVE-2026-123007, HTTP/2 flow-control underflow, RCE in default configs with HTTP/2 on;
+# CVE-2026-123633, HTTP/2 use-after-free when proxying) affects nginx 1.9.5 to 1.31.8, and
+# OpenResty had no fixed release (1.31.8.1 and older bundle the bug; openresty/openresty#1166).
+# Turn it back on only once every host runs an OpenResty built on nginx 1.30.7+ or 1.31.9+.
+# HTTP/3 (quic) is not configured anywhere (CVE-2026-121810 needs it).
+openresty_http2: false
+
 # Domains. abstracteducation.loan delegates a dedicated subzone
 # `byod.abstracteducation.loan` to Gcore: the round-robin lives at that zone's
 # APEX (an A record whose name equals the zone itself).

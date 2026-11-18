@@ -117,7 +117,7 @@ server {
     # and port may carry it, so it is here, on the default server.
     listen 443 ssl default_server reuseport;
     listen [::]:443 ssl default_server reuseport;
-    http2 on;
+    http2 {{ 'on' if (openresty_http2 | default(false) | bool) else 'off' }};
     server_name _;
     # nginx's default is 1m, which rejected chat sends (/api/ai) with 413 before they reached the origin. Matches the
     # origin's /api/ai and /v1 limit (abulxt deploy/openresty/snippets/routes-common.conf).

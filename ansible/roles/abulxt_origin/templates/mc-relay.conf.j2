@@ -16,7 +16,7 @@ map $http_x_real_ip $eagler_client_ip {
 server {
     listen 443 ssl;
     listen [::]:443 ssl;
-    http2 on;
+    http2 {{ 'on' if (openresty_http2 | default(false) | bool) else 'off' }};
     server_name mcpanel.abstracteducation.loan;
 
     ssl_certificate_by_lua_block {
@@ -54,7 +54,7 @@ server {
 server {
     listen 443 ssl;
     listen [::]:443 ssl;
-    http2 on;
+    http2 {{ 'on' if (openresty_http2 | default(false) | bool) else 'off' }};
     server_name mc.abstracteducation.loan;
 
     ssl_certificate_by_lua_block {
@@ -90,7 +90,7 @@ server {
 server {
     listen 443 ssl;
     listen [::]:443 ssl;
-    http2 on;
+    http2 {{ 'on' if (openresty_http2 | default(false) | bool) else 'off' }};
     server_name mcnode.abstracteducation.loan;
     # Panel file uploads (mods, worlds) POST straight to Wings. No proxy cap here: Wings enforces its own
     # api.upload_limit (MB, /etc/pterodactyl/config.yml on eagler, the node's "Upload limit" in the panel).

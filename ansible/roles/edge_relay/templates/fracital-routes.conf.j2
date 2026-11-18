@@ -86,7 +86,7 @@ server {
 {% for ip in edge_advertise_ips_v6_fracital | default([]) %}
     listen [{{ ip }}]:443 ssl default_server;
 {% endfor %}
-    http2 on;
+    http2 {{ 'on' if (openresty_http2 | default(false) | bool) else 'off' }};
     server_name {{ fracital_edge_server_names | join(' ') }};
 
     ssl_certificate_by_lua_block {
@@ -222,7 +222,7 @@ server {
 {% for ip in edge_advertise_ips_v6_fracital | default([]) %}
     listen [{{ ip }}]:443 ssl;
 {% endfor %}
-    http2 on;
+    http2 {{ 'on' if (openresty_http2 | default(false) | bool) else 'off' }};
     server_name {{ fracital_wisp_hosts | join(' ') }};
 
     ssl_certificate_by_lua_block {
