@@ -438,6 +438,15 @@ edge_warp_bypass_hosts:
   - "*.brave.com"
   - brave.app
   - "*.brave.app"
+  # fast.com (2026-11-18, the user's request): the page, its API (api.fast.com picks the test
+  # servers from the address that asks, so it and the servers must see the same one), the Netflix
+  # Open Connect servers it measures against (ipv4-cNNN-xxx-ix.1.oca.nflxvideo.net, which also
+  # serve Netflix video), and the two Netflix hosts its script reports to.
+  - fast.com
+  - "*.fast.com"
+  - "*.nflxvideo.net"
+  - ichnaea-web.netflix.com
+  - api-global.netflix.com
   # Internet Archive: the site, the Wayback Machine (web., web-static.) and the download servers
   # (*.us.archive.org), 2026-11-17, the user's request.
   - archive.org
