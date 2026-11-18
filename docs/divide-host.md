@@ -796,3 +796,22 @@ not to the shared one. The local servers are stopped and disabled, their data ke
   `80.93.219.21 terp.db` in `/etc/hosts` and the host route to it via divide. Nothing else on chat
   used its Redis. No guest or VM (mull, mac and every CT, checked 2026-11-17) runs Redis, KeyDB or
   Valkey locally any more.
+
+## goldenticket and labelsupplier: shut down (2026-11-18)
+
+Both are off for good, at the owner's request. On chat (CT 106), `goldenticket`,
+`goldenticket-queue` (:6981), `goldenticket-leaderboard`, `labelsupplier-gateway` (:8088) and
+`labelsupplier-scraper` are stopped and disabled. Their files stay in `/opt/goldenticket*`,
+`/opt/labelsupplier` and `/srv/git`. chat.eli.gift lost the `/queue`, `/shop/heroin`, the API
+prefixes (`/v1`, `/claude`, `/codex` and the rest) and the labelsupplier snippet; it keeps the SPA,
+the Stripe webhook and `/cpa/`, `/cpa2/` (cli-proxy-api). nginx backup
+`chat:/root/eli.gift.conf.bak-shutdown-*`. `106.fw` no longer opens 8088.
+
+The same day amph got tcp 8317 to chat (`from_amph` and `106.fw`): abulxt's AI provider uses
+cli-proxy-api at `172.16.5.64:8317` over vmbr1, which the guest firewall had dropped since 22:10
+UTC on 2026-11-17.
+
+On terp.db the `labelsupplier` database is kept but closed (`lsupplier` NOLOGIN, its `pg_hba`
+line commented out, a final dump `/var/backups/migrate/labelsupplier-shutdown-*.dump`), and
+`redis-server@chat` (6384) is stopped and disabled, its nft line removed. To bring it back, undo
+those three, start the units, and restore the nginx backup.

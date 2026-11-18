@@ -38,17 +38,17 @@ everything written since, including the migrated databases. Prefer restoring a d
 
 ### Databases and roles
 
-| Database        | Owner role       | Client                                                        | Locale                                 |
-| --------------- | ---------------- | ------------------------------------------------------------- | -------------------------------------- |
-| `fracital`      | Fracital's role  | terp, `/opt/fracital/repo/.env`                               | `en_US.UTF-8` (libc)                   |
-| `abulxt`        | `abulxt`         | amph, abulxt `config.js` `db.url`                             | builtin `C.UTF-8`                      |
-| `holt`          | `holt`           | amph, `/opt/holt/config.js` `db.url`                          | builtin `C.UTF-8`                      |
-| `holy`          | `holy`           | holy, website2 `config/config.js` `db`                        | `C.UTF-8` (libc), `pg_trgm`            |
-| `elichat`       | `elichat`        | chat, `/opt/elichat/.env` `DATABASE_URL`                      | `C`, `SQL_ASCII`                       |
-| `fg_api_beta`   | `fg_api`         | fg (CT 206), `/etc/fg-api/environment` `FG_POSTGRES_DSN`      | `C.UTF-8` (libc), `citext`, `pgcrypto` |
-| `labelsupplier` | `lsupplier`      | chat, `/opt/labelsupplier/.env` `DATABASE_URL`                | `C`, `SQL_ASCII`                       |
-| `guacamole_db`  | `guacamole_user` | guca (CT 117), `/etc/guacamole/guacamole.properties`          | `C`, `SQL_ASCII`                       |
-| `krunknative`   | `krunknative`    | kru (CT 120), `/etc/krunknative/coord-db.env` + `secrets.env` | `C.UTF-8` (libc)                       |
+| Database        | Owner role       | Client                                                                                                | Locale                                 |
+| --------------- | ---------------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| `fracital`      | Fracital's role  | terp, `/opt/fracital/repo/.env`                                                                       | `en_US.UTF-8` (libc)                   |
+| `abulxt`        | `abulxt`         | amph, abulxt `config.js` `db.url`                                                                     | builtin `C.UTF-8`                      |
+| `holt`          | `holt`           | amph, `/opt/holt/config.js` `db.url`                                                                  | builtin `C.UTF-8`                      |
+| `holy`          | `holy`           | holy, website2 `config/config.js` `db`                                                                | `C.UTF-8` (libc), `pg_trgm`            |
+| `elichat`       | `elichat`        | chat, `/opt/elichat/.env` `DATABASE_URL`                                                              | `C`, `SQL_ASCII`                       |
+| `fg_api_beta`   | `fg_api`         | fg (CT 206), `/etc/fg-api/environment` `FG_POSTGRES_DSN`                                              | `C.UTF-8` (libc), `citext`, `pgcrypto` |
+| `labelsupplier` | `lsupplier`      | closed 2026-11-18 (NOLOGIN, `pg_hba` line commented; divide-host.md "goldenticket and labelsupplier") | `C`, `SQL_ASCII`                       |
+| `guacamole_db`  | `guacamole_user` | guca (CT 117), `/etc/guacamole/guacamole.properties`                                                  | `C`, `SQL_ASCII`                       |
+| `krunknative`   | `krunknative`    | kru (CT 120), `/etc/krunknative/coord-db.env` + `secrets.env`                                         | `C.UTF-8` (libc)                       |
 
 Every app role is a plain login role (no superuser, createdb, createrole or replication) that
 owns its own database and everything in it. `CONNECT` and `TEMPORARY` are revoked from `PUBLIC`
@@ -175,12 +175,12 @@ same template unit, enabled), config `/etc/redis/redis-<app>.conf` (root:redis 0
 -hex 32`) are in `/root/terpdb-redis-<app>.secret` (`REDIS_APP_PASSWORD` for the app's user,
 `REDIS_ADMIN_PASSWORD` for `admin`, which has everything); the configs hold only SHA-256 hashes.
 
-| Port | Instance | App (client, config)                                                                                                                                 | Policy                                        | App user's ACL                                                                                   |
-| ---- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| 6381 | `fg`     | fg-api on fg (CT 206), go-redis; `/etc/fg-api/environment` `FG_REDIS_ADDR=terp.db:6381`, `FG_REDIS_PASSWORD`                                         | RDB snapshots, no AOF, 256 MB, `noeviction`   | `default`: all but flush, `CONFIG`, `DEBUG`, `SHUTDOWN`, `MODULE`, `MONITOR`, replication, `ACL` |
-| 6382 | `kru`    | kn_brain on kru (CT 120), hiredis; `/etc/krunknative/redis.env`, `KN_REDIS_PASSWORD` in `secrets.env`                                                | no persistence, 128 MB, `volatile-lru`, 4 DBs | `kn_brain`: `~kn:* &kn:* +@all -@dangerous`; `default` is off                                    |
-| 6383 | `eagler` | Pterodactyl panel on eagler (VM 104), predis; `/var/www/pterodactyl/.env` `REDIS_HOST/PORT/PASSWORD`                                                 | RDB snapshots, no AOF, 256 MB, `noeviction`   | `default`: as fg's, but `FLUSHDB` allowed (Laravel's `cache:clear`)                              |
-| 6384 | `chat`   | labelsupplier-gateway on chat (CT 106), its own RESP client; `/opt/labelsupplier/.env` `REDIS_ADDR=terp.db:6384`, `REDIS_USERNAME`, `REDIS_PASSWORD` | no persistence, 128 MB, `allkeys-lru`, 1 DB   | `labelsupplier`: `~ls:* resetchannels -@all +get +set +ping`; `default` is off                   |
+| Port | Instance | App (client, config)                                                                                                                                                                                                            | Policy                                        | App user's ACL                                                                                   |
+| ---- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| 6381 | `fg`     | fg-api on fg (CT 206), go-redis; `/etc/fg-api/environment` `FG_REDIS_ADDR=terp.db:6381`, `FG_REDIS_PASSWORD`                                                                                                                    | RDB snapshots, no AOF, 256 MB, `noeviction`   | `default`: all but flush, `CONFIG`, `DEBUG`, `SHUTDOWN`, `MODULE`, `MONITOR`, replication, `ACL` |
+| 6382 | `kru`    | kn_brain on kru (CT 120), hiredis; `/etc/krunknative/redis.env`, `KN_REDIS_PASSWORD` in `secrets.env`                                                                                                                           | no persistence, 128 MB, `volatile-lru`, 4 DBs | `kn_brain`: `~kn:* &kn:* +@all -@dangerous`; `default` is off                                    |
+| 6383 | `eagler` | Pterodactyl panel on eagler (VM 104), predis; `/var/www/pterodactyl/.env` `REDIS_HOST/PORT/PASSWORD`                                                                                                                            | RDB snapshots, no AOF, 256 MB, `noeviction`   | `default`: as fg's, but `FLUSHDB` allowed (Laravel's `cache:clear`)                              |
+| 6384 | `chat`   | stopped and disabled 2026-11-18 with labelsupplier (nft line removed); was labelsupplier-gateway on chat (CT 106), its own RESP client; `/opt/labelsupplier/.env` `REDIS_ADDR=terp.db:6384`, `REDIS_USERNAME`, `REDIS_PASSWORD` | no persistence, 128 MB, `allkeys-lru`, 1 DB   | `labelsupplier`: `~ls:* resetchannels -@all +get +set +ping`; `default` is off                   |
 
 - fg: in-flight state only (revoked sessions, live runs), database 1 (`FG_REDIS_DB=1`), every key
   has a TTL. `noeviction` so a revocation is never evicted.
