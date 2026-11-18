@@ -132,6 +132,15 @@ edge_static_keys:
 # 22:22 UTC on 2026-11-17, while the game's database moved to terp.db, both went back to giftshop's
 # nginx ("http://172.16.5.78", full path).
 pages_fg_api_pass: "http://172.16.5.206:8787/"
+# systemya.fracit.al (2026-11-18): SystemYA, rebuilt under Fracital. Its frontend is static, from
+# systemya/site/ in this repository. /room/ is its holt chat: the edge relays it to holt on amph's
+# origin-internal listener, as the byod hosts do (X-BYOD-Token), with SystemYA's license
+# (systemya_secrets.yml); holt's platform is `systemya`. /v1/games/ and /cdn/ are Holy Unblocker's
+# API and theatre CDN on holy (the edge reaches 172.16.5.79:8080 already), so the SDK runs
+# same-origin. DNS: a DNS-only A record for divide_public_ip, so abulxt-domains approves the
+# certificate.
+systemya_holt_pass: "http://{{ abulxt_origin_ip }}:{{ abulxt_origin_internal_port }}/systemya/"
+systemya_holy_pass: "http://{{ holyunb_origin_ip }}:{{ holyunb_origin_port }}"
 pages_fg_socket_pass: "http://172.16.5.206:8787/socket"
 edge_static_sites:
   - host: pages.eli.gift
@@ -160,3 +169,25 @@ edge_static_sites:
     unity_prefixes:
       - /fg/
     unity_compressed: true
+  - host: systemya.fracit.al
+    src: systemya/site
+    redirects:
+      - { at: /room, code: 308, to: /room/ }
+    proxies:
+      - at: "^~ /room/"
+        pass: "{{ systemya_holt_pass }}"
+        host: holt.abstracteducation.loan
+        websocket: auto
+        headers:
+          - { name: X-BYOD-Token, value: "{{ byod_token }}" }
+          - { name: X-Holt-License, value: "{{ systemya_holt_license }}" }
+      - at: "^~ /v1/games/"
+        pass: "{{ systemya_holy_pass }}"
+        host: holyunb.locker
+        timeout: 15s
+        body_max: 16k
+      - at: "^~ /cdn/"
+        pass: "{{ systemya_holy_pass }}"
+        host: holyunb.locker
+        passthrough: true
+        timeout: 3600s

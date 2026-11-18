@@ -74,10 +74,35 @@ server {
     location {{ p.at }} {
         proxy_pass {{ p.pass }};
         proxy_http_version 1.1;
-        proxy_set_header Host $host;
+        proxy_set_header Host {{ p.host | default('$host') }};
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $remote_addr;
-{%     if p.websocket | default(false) %}
+{%     for h in p.headers | default([]) %}
+        proxy_set_header {{ h.name }} "{{ h.value }}";
+{%     endfor %}
+{%     if p.websocket | default(false) == 'auto' %}
+        # HTTP and WebSocket on one path: Upgrade only when the client asks (nginx.conf's maps).
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Upgrade $ws_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_connect_timeout {{ p.connect_timeout | default('5s') }};
+        proxy_send_timeout {{ p.timeout | default('1d') }};
+        proxy_read_timeout {{ p.timeout | default('1d') }};
+        client_max_body_size {{ p.body_max | default('64k') }};
+        proxy_buffering off;
+        proxy_cache off;
+{%     elif p.passthrough | default(false) %}
+        # The backend's own caching and body limits: assets and downloads, not a small API.
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Connection "";
+        proxy_connect_timeout {{ p.connect_timeout | default('5s') }};
+        proxy_send_timeout {{ p.timeout | default('60s') }};
+        proxy_read_timeout {{ p.timeout | default('60s') }};
+        client_max_body_size {{ p.body_max | default('1m') }};
+{%       for h in p.hide_headers | default([]) %}
+        proxy_hide_header {{ h }};
+{%       endfor %}
+{%     elif p.websocket | default(false) %}
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";

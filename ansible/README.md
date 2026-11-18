@@ -132,6 +132,7 @@ the same files in plain text, in the runner only, from GitHub Actions secrets
 |                                                 | `fracital_wisp_gate_key`           | `FRACITAL_WISP_GATE_KEY`        | Same value as `WISP_GATE_KEY` in terp's `/opt/fracital/repo/.env`. Rotate both together.                                                                             |
 |                                                 | `fracital_origin_tls_key`          | `FRACITAL_ORIGIN_TLS_KEY`       | Key of the pinned `roles/edge_relay/files/fracital-origin.crt`.                                                                                                      |
 | `inventory/group_vars/all/holyunb_secrets.yml`  | `holyunb_wisp_gate_key`            | `HOLYUNB_WISP_GATE_KEY`         | holyunb.locker's keyed relay path.                                                                                                                                   |
+| `inventory/group_vars/all/systemya_secrets.yml` | `systemya_holt_license`            | `SYSTEMYA_HOLT_LICENSE`         | SystemYA's holt license (`X-Holt-License` on systemya.fracit.al `/room/`); its copy is `amph:/root/holt-licenses/systemya.license`.                                  |
 
 `private.example/secrets.yml` shows the shape. Edit a local file with:
 

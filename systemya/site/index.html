@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>SystemYA</title>
+		<meta name="description" content="SystemYA: games and chat." />
+		<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+		<link rel="stylesheet" href="/style.css" />
+	</head>
+	<body>
+		<header class="bar">
+			<a class="brand" href="/">SystemYA</a>
+			<nav>
+				<a href="/" aria-current="page">Games</a>
+				<a href="/chat/">Chat</a>
+			</nav>
+		</header>
+
+		<main class="page">
+			<form class="search" id="search" role="search">
+				<input
+					id="q"
+					type="search"
+					placeholder="Search games"
+					autocomplete="off"
+					aria-label="Search games"
+				/>
+				<select id="sort" aria-label="Sort">
+					<option value="popular">Popular</option>
+					<option value="name">A to Z</option>
+					<option value="new">Newest</option>
+				</select>
+			</form>
+			<p class="status" id="status">Loading games...</p>
+			<ul class="grid" id="grid"></ul>
+			<button class="more" id="more" type="button" hidden>Load more</button>
+		</main>
+
+		<!-- Holy Unblocker's SDK: /cdn/ is proxied to its theatre CDN on this origin, and this
+         script installs globalThis.HU with routes under /cdn/. -->
+		<script src="/cdn/index.js"></script>
+		<script src="/app.js"></script>
+	</body>
+</html>

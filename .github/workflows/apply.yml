@@ -127,6 +127,7 @@ jobs:
           FRACITAL_WISP_GATE_KEY: ${{ secrets.FRACITAL_WISP_GATE_KEY }}
           FRACITAL_ORIGIN_TLS_KEY: ${{ secrets.FRACITAL_ORIGIN_TLS_KEY }}
           HOLYUNB_WISP_GATE_KEY: ${{ secrets.HOLYUNB_WISP_GATE_KEY }}
+          SYSTEMYA_HOLT_LICENSE: ${{ secrets.SYSTEMYA_HOLT_LICENSE }}
         run: python3 scripts/write-ci-vars.py
 
       - name: SSH
