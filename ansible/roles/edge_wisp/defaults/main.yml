@@ -66,6 +66,8 @@ holywisp_npm_provenance_ref: "refs/tags/v{{ holywisp_npm_version }}"
 # stay at their defaults here: busy-poll-us (0, off) and stop-on-stdin-eof (off;
 # it must stay off under systemd, where stdin is /dev/null).
 holywisp_repo: https://github.com/Fracital/holyWisp.git
+# 2026-11-18 bumped to a37af7d: the demo page (GET / on holywisp.fracit.al) gets smoother fields
+# (Roboto in the inputs, Roboto Mono in the logs) and a whole row toggles its checkbox. No new keys.
 # 2026-11-18 bumped to 27a4c4a: a host list (warp-bypass-host, allow-host, block-host) holds 1024
 # names instead of 256, packed into a pool of the same 64 KiB, for every Google country domain in
 # edge_warp_bypass_hosts (group_vars/wisp_edge.yml, about 420 entries). No new keys.
@@ -104,7 +106,7 @@ holywisp_repo: https://github.com/Fracital/holyWisp.git
 # so a page asking the browser for a private address still does not score the client.
 # Deployed via build (npm has no version past 0.5.2 yet). Clear data/reputation.json
 # after, old scores persist.
-holywisp_ref: 27a4c4aa2a8f167e26a894d1947d72282243ef62
+holywisp_ref: a37af7d5fa811e9beef1811fb9fb695da7077679
 # Controller cache for both sources: built binaries, npm downloads, and the
 # per-host configs tasks/verify.yml checks.
 holywisp_build_dir: "{{ lookup('env', 'HOME') }}/.cache/abulxt/holywisp"
