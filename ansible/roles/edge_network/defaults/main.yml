@@ -24,3 +24,14 @@ edge_tcp_sysctl:
 edge_tcp_sysctl_file: /etc/sysctl.d/90-abulxt-edge-tcp.conf
 # Write /etc/modules-load.d/tcp_bbr.conf. false in a container: the host must load tcp_bbr.
 edge_network_load_bbr: true
+
+# A box behind NAT (edge_public_ip_on_box false: the edge, CT 201 on divide) cannot reach its own
+# public address public_ip through the NAT: divide DNATs the stream back to the box, the bridge
+# would have to send it out the port it came in on, and pve-firewall's bridge drops it. wisp.baby's
+# speed test is exactly such a stream (holyWisp here dials public_ip:80). edge-own-address.service
+# loads an nft table of its own (ip edge_own_address, nat output) that DNATs this box's own
+# connections to public_ip on these TCP ports to edge_own_address_target, so they never leave the
+# box. It filters nothing and leaves /etc/nftables.conf alone.
+edge_own_address_tcp_ports: [80]
+# The box's own private address (ansible_host on divide's guests).
+edge_own_address_target: "{{ ansible_host }}"

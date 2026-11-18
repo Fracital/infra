@@ -1,0 +1,17 @@
+# Managed by Ansible (edge_network role, edge_own_address_*).
+[Unit]
+Description=Keep this box's own connections to its public address {{ public_ip }} on the box
+# nftables.service's start and reload flush the whole ruleset: load the table again after them.
+After=nftables.service
+PartOf=nftables.service
+ReloadPropagatedFrom=nftables.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/abulxt/edge-own-address.nft
+ExecReload=/usr/sbin/nft -f /etc/abulxt/edge-own-address.nft
+ExecStop=-/usr/sbin/nft delete table ip edge_own_address
+
+[Install]
+WantedBy=multi-user.target

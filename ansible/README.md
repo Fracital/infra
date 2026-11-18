@@ -921,8 +921,10 @@ Cloudflare WARP instead of from the box's own address. Nothing else does.
     (`edge_warp_own_address_*`), ahead of the marks. holyWisp marks literal-IP streams, so
     wisp.baby's speed test stream to `91.199.82.174:80` otherwise left through WARP and came
     back from a Cloudflare address, which `/speedtest/range/` refuses (403). On the main table
-    it goes out through divide's hairpin NAT and arrives from `172.16.5.1`
-    (`wispbaby_speedtest_allow_extra`).
+    it starts from the box's own `172.16.5.10`, and `roles/edge_network`'s
+    `edge-own-address.service` (an nft table `ip edge_own_address`, nat output, tcp
+    `edge_own_address_tcp_ports`) DNATs it back onto the box. divide's hairpin can't carry a
+    guest's stream to itself since pve-firewall (docs/divide-host.md "The hairpin is bridged").
 - **Identities.** wgcf (`edge_warp_wgcf_version`, pinned by SHA-256) registers one
   account per tunnel into `/etc/abulxt/warp/warp<i>/` (`wgcf-account.toml` +
   `wgcf-profile.conf`, root 0700/0600), retrying on Cloudflare's rate limit.

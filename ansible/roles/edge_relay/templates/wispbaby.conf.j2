@@ -75,7 +75,7 @@ server {
 
     # The self-hosted speed test (wispbaby/README.md "Two modes", G-Core). Reached only through
     # Wisp, from this box: the allow list is every address on it plus loopback (and
-    # wispbaby_speedtest_allow_extra: the NAT a box behind it sees its own streams come back from).
+    # wispbaby_speedtest_allow_extra, for any other source a box's own streams arrive from).
     location /speedtest/range/ {
 {% for ip in wispbaby_self | unique %}
         allow {{ ip }};

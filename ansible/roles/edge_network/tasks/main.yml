@@ -122,3 +122,79 @@
     sysctl_set: true
     state: present
   loop: "{{ edge_tcp_sysctl | dict2items }}"
+
+# ---- the box's own public address behind NAT (defaults/main.yml edge_own_address_*)
+
+- name: Keep the box's own connections to its public address on the box
+  when:
+    - not (edge_public_ip_on_box | default(true) | bool)
+    - public_ip | default('') | length > 0
+  block:
+    - name: The own-address DNAT has a public and a private IPv4 address
+      ansible.builtin.assert:
+        that:
+          - public_ip is match('^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
+          - edge_own_address_target is match('^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
+          - edge_own_address_tcp_ports | length > 0
+        fail_msg: public_ip and edge_own_address_target must be IPv4 literals, with at least one port.
+        quiet: true
+
+    - name: Directory for the own-address table
+      ansible.builtin.file:
+        path: /etc/abulxt
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Render the own-address table (/etc/abulxt/edge-own-address.nft)
+      ansible.builtin.template:
+        src: edge-own-address.nft.j2
+        dest: /etc/abulxt/edge-own-address.nft
+        owner: root
+        group: root
+        mode: "0644"
+        validate: nft -c -f %s
+      register: edge_own_address_nft
+
+    - name: Install edge-own-address.service
+      ansible.builtin.template:
+        src: edge-own-address.service.j2
+        dest: /etc/systemd/system/edge-own-address.service
+        owner: root
+        group: root
+        mode: "0644"
+      register: edge_own_address_unit
+
+    - name: Enable edge-own-address.service and load the table
+      ansible.builtin.systemd_service:
+        name: edge-own-address.service
+        enabled: true
+        state: >-
+          {{ 'restarted' if (edge_own_address_nft is changed or edge_own_address_unit is changed) else 'started' }}
+        daemon_reload: "{{ edge_own_address_unit is changed }}"
+      # In check mode a new unit isn't written yet, so systemd doesn't know it.
+      when: not (ansible_check_mode and edge_own_address_unit is changed)
+
+- name: No own-address table where the box holds its public address
+  when: edge_public_ip_on_box | default(true) | bool
+  block:
+    - name: Look for edge-own-address.service
+      ansible.builtin.stat:
+        path: /etc/systemd/system/edge-own-address.service
+      register: edge_own_address_present
+
+    - name: Stop and disable edge-own-address.service
+      ansible.builtin.systemd_service:
+        name: edge-own-address.service
+        state: stopped
+        enabled: false
+      when: edge_own_address_present.stat.exists
+
+    - name: Remove the own-address unit and table
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/systemd/system/edge-own-address.service
+        - /etc/abulxt/edge-own-address.nft

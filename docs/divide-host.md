@@ -193,9 +193,8 @@ NAT:
 - `oifname bond0 masquerade`: the guests' egress is 91.199.82.174 (what Cloudflare Gateway, terp's
   old rules and every third party see).
 - **Hairpin**: `oifname vmbr1 ip saddr 172.16.5.0/24 ct status dnat masquerade`. A guest that
-  dials 91.199.82.174 is DNATed back onto `vmbr1` and arrives from 172.16.5.1. This is why
-  wisp.baby's speed test admits 172.16.5.0/24 (`host_vars/edge.yml`
-  `wispbaby_speedtest_allow_extra`).
+  dials 91.199.82.174 is DNATed back onto `vmbr1` and arrives from 172.16.5.1. That works for any
+  guest except the edge itself (see "The hairpin is bridged" below).
 - Both NAT chains start with `iifname "fwbr*" return` (prerouting) and `oifname "fwbr*" return`
   (postrouting): the bridged pass inside a Proxmox firewall bridge is never NATed; the routed pass
   on `vmbr1` is.
@@ -263,6 +262,13 @@ The stateless equivalent of Proxmox's per-NIC `ipfilter`, on the `vmbr1` bridge:
   that, every guest's hairpin was dropped from 22:10 UTC (pve-firewall started) unless a pair rule
   allowed it, which is why amph, holy and kn (whose SYNs to the edge's 443 were
   dropped until 22:20) also have their own tcp 443 lines to the edge.
+
+  **A guest cannot hairpin to itself.** The edge's own stream to 91.199.82.174 is DNATed back to
+  172.16.5.10, and `br_netfilter` would have to bridge it out the port it came in on (`fwpr201p0`),
+  which a bridge port without hairpin mode never does. With hairpin mode on, the SYN arrives but the
+  rest of the flow is INVALID in `fwbr201i0` (`PVEFW-FORWARD`). So wisp.baby's speed test failed
+  from 22:10 UTC on 2026-11-17 to 2026-11-18 (Wisp reason 0x43, stream timed out). The edge now
+  keeps those streams on the box ("The edge's view" below); divide is unchanged.
 
 holy's pair is `veth205i0` (it was `tap127i1`, VM 127's second NIC, until 2026-11-17). fg's is
 `veth206i0` . 172.16.5.206 (CT 206, 2026-11-17). amph's is `veth213i0` . 172.16.5.3 (CT 213; it was
@@ -446,7 +452,10 @@ The kn game servers (CT 203) listen on 172.16.5.94 (`listen_host`) and advertise
 The edge (CT 201, 8 cores) does not have 91.199.82.174 on any interface (`edge_public_ip_on_box:
 false`). Its own streams to that address, such as wisp.baby's speed test through holyWisp, must
 not leave through WARP. `roles/edge_warp` adds `to 91.199.82.174 tcp dport 80 lookup main`
-(priority 30400) for that (ansible/README.md "Kernel mode").
+(priority 30400) for that (ansible/README.md "Kernel mode"). They must not leave the box either: a
+guest's hairpin to itself is dropped (above). `roles/edge_network` runs `edge-own-address.service`,
+which loads the nft table `ip edge_own_address` (nat output: `ip daddr 91.199.82.174 tcp dport 80
+dnat to 172.16.5.10`) from `/etc/abulxt/edge-own-address.nft`. It is NAT only, not a firewall.
 
 `conf.d/05-divide-acme.conf` on the edge answers ACME for divide itself:
 `divide.eli.gift` `/.well-known/acme-challenge/` goes to 172.16.5.1:80, and the rest of that name

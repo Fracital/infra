@@ -22,7 +22,8 @@ edge_subnet: "{{ public_ip }}/32"
 # 9080/8822/1082 takes host_vars/amph.yml abulxt_edge_subnets_override instead).
 edge_origin_source: "172.16.5.10/32"
 # public_ip is not configured on the box (divide DNATs it here): edge_warp keeps the box's own
-# streams to it off WARP (roles/edge_warp defaults edge_public_ip_on_box).
+# streams to it off WARP and edge_network keeps them on the box (edge-own-address.service; roles
+# edge_warp and edge_network defaults). wisp.baby's speed test then arrives from 172.16.5.10.
 edge_public_ip_on_box: false
 edge_primary_if: eth0
 
@@ -104,12 +105,6 @@ edge_acme_forwards:
   - host: "{{ public_ip }}"
     upstream: "172.16.5.48:80"
     comment: blockshooter's IP certificate
-
-# wisp.baby's /speedtest/range/ (edge_relay wispbaby.conf.j2) admits the box's own addresses; a
-# stream from holyWisp to public_ip comes back through divide's hairpin NAT from vmbr1
-# (172.16.5.1), so the whole subnet is admitted too.
-wispbaby_speedtest_allow_extra:
-  - "172.16.5.0/24"
 
 # Cloudflare WARP, kernel mode (README.md "Cloudflare WARP"): clean Wisp TCP streams leave
 # through 4 WireGuard tunnels (four free identities, registered by the role). On since

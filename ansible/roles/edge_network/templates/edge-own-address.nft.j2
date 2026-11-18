@@ -1,0 +1,14 @@
+#!/usr/sbin/nft -f
+# Managed by Ansible (edge_network role, edge_own_address_*). Loaded by edge-own-address.service.
+# {{ public_ip }} is this box's public address but not configured on it (NAT): this box's own
+# connections to it on tcp {{ edge_own_address_tcp_ports | join(', ') }} go to {{ edge_own_address_target }} instead, on the box.
+# Declaring and deleting the table first makes a reload replace it.
+table ip edge_own_address
+delete table ip edge_own_address
+
+table ip edge_own_address {
+	chain output {
+		type nat hook output priority dstnat; policy accept;
+		ip daddr {{ public_ip }} tcp dport { {{ edge_own_address_tcp_ports | join(', ') }} } dnat to {{ edge_own_address_target }}
+	}
+}
