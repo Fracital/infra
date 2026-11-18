@@ -203,11 +203,29 @@ server {
 {% endfor %}
     server_name {{ fracital_wisp_hosts | join(' ') }};
 
+{% if holywisp_webtransport_acme | default(false) | bool %}
+    # Two ACME clients answer here: certbot for holyWisp's WebTransport certificate (edge_wisp
+    # holywisp_webtransport_acme) writes its token as a file under the webroot, and
+    # lua-resty-auto-ssl keeps its tokens in the shared Redis. Tokens are random, so a token that is
+    # not a file is auto-ssl's, and its challenge server answers as before (404 for neither).
+    location /.well-known/acme-challenge/ {
+        root {{ holywisp_webtransport_acme_webroot | default('/var/lib/abulxt-wisp-acme') }};
+        default_type text/plain;
+        try_files $uri @auto_ssl_challenge;
+    }
+
+    location @auto_ssl_challenge {
+        content_by_lua_block {
+            auto_ssl_instance:challenge_server()
+        }
+    }
+{% else %}
     location /.well-known/acme-challenge/ {
         content_by_lua_block {
             auto_ssl_instance:challenge_server()
         }
     }
+{% endif %}
 
     location / {
         return 301 https://$host$request_uri;

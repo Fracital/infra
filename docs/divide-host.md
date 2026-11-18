@@ -546,6 +546,56 @@ Rollback: `holywisp_webtransport: false` in `group_vars/edge.yml` and the same a
 and the unit then render as they did before 2026-11-18, and the OpenResty files differ only by two
 header comments.
 
+### Let's Encrypt certificate (prepared 2026-11-18)
+
+With the self-signed certificate only a page that fetches `/webtransport.json` and pins its hashes
+can connect. `holywisp_webtransport_acme` (`group_vars/edge.yml`; `ansible/README.md` "WebTransport
+certificate") gives the listener a Let's Encrypt ECDSA P-256 certificate for holywisp.fracit.al,
+so `new WebTransport("https://holywisp.fracit.al/")` works as it is. It is issued over http-01:
+holywisp.fracit.al is a DNS-only CNAME to byod.fracit.al, A 91.199.82.174, and divide's tcp 80
+DNAT already reaches the edge's OpenResty, so nothing on divide changes and no DNS token is
+needed. The certificate's files never leave the edge.
+
+Rollout (a production change: the user's go-ahead first, AGENTS.md "Servers"):
+
+1. WebTransport is live (the rollout above). No new secret.
+2. The token location first, because `edge_wisp` runs before `edge_relay` in `edges.yml`:
+   `gh workflow run apply.yml -f playbook=edges -f tags=relay -f check=false`, or locally
+   `ansible-playbook playbooks/edges.yml --tags relay --vault-password-file ~/.abulxt-vault-pass`.
+   OpenResty reloads; only holywisp.fracit.al's `:80` server changes, and a token that is not a
+   file in `/var/lib/abulxt-wisp-acme` still goes to auto-ssl. `curl -si
+http://holywisp.fracit.al/.well-known/acme-challenge/x` is a 404, as before.
+3. The certificate: the same with `tags=wisp`. The play installs `certbot`, checks through
+   OpenResty that a file in the webroot is served, requests the certificate, copies it to
+   `/etc/abulxt/webtransport/`, renders `webtransport-cert`/`-key` into `holywisp.conf` and
+   restarts the relay once (every WebSocket and WebTransport session drops). It then checks that
+   `/webtransport.json` lists no hashes. A first run of `tags=wisp,relay` together only warns
+   ("OpenResty does not serve ... yet") and keeps the self-signed certificate; run `tags=wisp`
+   again. A certbot error fails the play before the config is touched.
+4. From a machine outside divide:
+   - `curl -sS https://holywisp.fracit.al/webtransport.json`: `"hashes":[]`.
+   - `curl --http3-only -sv https://holywisp.fracit.al/ -o /dev/null` without `-k`: the handshake
+     verifies (`subject: CN=holywisp.fracit.al`, issuer Let's Encrypt).
+   - Chrome, DevTools console on any https page:
+     `const wt = new WebTransport('https://holywisp.fracit.al/'); await wt.ready;` resolves. Also
+     run the pinning snippet above, which now passes an empty `serverCertificateHashes`: pages
+     written for the self-signed certificate must keep working.
+5. On the edge: `certbot certificates` (one ECDSA certificate, holywisp.fracit.al),
+   `systemctl list-timers certbot.timer`, and `certbot renew --dry-run --cert-name
+holywisp.fracit.al` against Let's Encrypt's staging (it runs no deploy hook, so nothing restarts).
+
+Renewal is certbot.timer's: 30 days before the end, at 00:00 or 12:00 plus up to 12 hours. The
+hook replaces the two files and, while the pinned holyWisp reads them only at start, restarts
+`abulxt-edge-wisp` (`holywisp_webtransport_acme_restart`; false once holyWisp watches the files).
+A failed renewal changes nothing on the box (the old files stay); a play run fails once fewer
+than 7 days are left.
+
+Rollback: `holywisp_webtransport_acme: false` in `group_vars/edge.yml`, then the same apply with
+`tags=wisp,relay`. `holywisp.conf` loses the two keys (one restart, back to the self-signed
+certificate and its hashes) and the `:80` server is as before. certbot, its account and the
+files stay; `certbot delete --cert-name holywisp.fracit.al` on the edge stops its renewals, which
+would otherwise fail without the token location.
+
 ## Cloudflare Tunnel: one daemon on the edge (2026-11-17)
 
 Every Cloudflare Tunnel hostname on divide comes in through one tunnel, **`divide-edge`**, run by

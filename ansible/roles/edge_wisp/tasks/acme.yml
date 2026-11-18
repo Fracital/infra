@@ -1,0 +1,220 @@
+---
+# holywisp_webtransport_acme (defaults): a Let's Encrypt ECDSA P-256 certificate for the
+# WebTransport listener, issued and renewed by Debian's certbot over HTTP-01 with a webroot, and
+# copied where holyWisp reads it by the deploy hook. Runs before holywisp.conf is rendered, so a
+# first issuance and the config that names the files land in the same run, and a box where the
+# certificate is not there yet renders no webtransport-cert/-key and keeps holyWisp's own
+# self-signed certificate.
+
+- name: The WebTransport certificate's name is a fracital_wisp_hosts name
+  ansible.builtin.assert:
+    that:
+      - holywisp_webtransport | bool
+      - holywisp_webtransport_acme_name | default('', true) | length > 0
+      - holywisp_webtransport_acme_name in (fracital_wisp_hosts | default([]))
+    fail_msg: >-
+      holywisp_webtransport_acme needs holywisp_webtransport on and holywisp_webtransport_acme_name
+      (default: the host of holywisp_webtransport_url) in fracital_wisp_hosts: edge_relay serves the
+      http-01 tokens only on those names' :80 server (fracital-routes.conf.j2).
+    quiet: true
+
+- name: Install certbot and openssl (the deploy hook checks the pair with it)
+  ansible.builtin.apt:
+    name: [certbot, openssl]
+    state: present
+    install_recommends: false
+    update_cache: true
+    cache_valid_time: 3600
+
+# Read by the OpenResty workers (another user): certbot makes the token files 0644 under it.
+- name: Create the http-01 webroot
+  ansible.builtin.file:
+    path: "{{ holywisp_webtransport_acme_webroot }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Create the directory holyWisp reads the pair from
+  ansible.builtin.file:
+    path: "{{ holywisp_webtransport_acme_dir }}"
+    state: directory
+    owner: root
+    group: "{{ edge_wisp_user }}"
+    mode: "0750"
+
+- name: Create certbot's deploy hook directory
+  ansible.builtin.file:
+    path: /etc/letsencrypt/renewal-hooks/deploy
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# certbot runs every executable here after each renewal (not after `certonly`: the play runs it
+# then). Templated: the restart at its end follows holywisp_webtransport_acme_restart.
+- name: Install the deploy hook
+  ansible.builtin.template:
+    src: webtransport-cert-deploy.sh.j2
+    dest: /etc/letsencrypt/renewal-hooks/deploy/abulxt-wisp-webtransport
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Enable certbot's renewal timer
+  ansible.builtin.systemd:
+    name: certbot.timer
+    enabled: true
+    state: started
+  when: not ansible_check_mode
+
+- name: Look for an issued certificate
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/renewal/{{ holywisp_webtransport_acme_name }}.conf"
+  register: edge_wisp_acme_lineage
+
+# Let's Encrypt fetches the token from public_ip :80, which divide DNATs to this box's OpenResty.
+# A file in the webroot proves that OpenResty serves it there: edge_relay runs after this role in
+# playbooks/edges.yml, so on the first run with the flag the location is not there yet.
+- name: OpenResty serves the webroot's tokens for {{ holywisp_webtransport_acme_name }}
+  when: not ansible_check_mode
+  block:
+    - name: Create the token directory
+      ansible.builtin.file:
+        path: "{{ holywisp_webtransport_acme_webroot }}/.well-known/acme-challenge"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Pick a probe token
+      ansible.builtin.set_fact:
+        edge_wisp_acme_probe: "{{ lookup('ansible.builtin.password', '/dev/null', length=24, chars=['ascii_letters', 'digits']) }}"
+
+    - name: Write the probe token
+      ansible.builtin.copy:
+        dest: "{{ holywisp_webtransport_acme_webroot }}/.well-known/acme-challenge/abulxt-probe"
+        content: "{{ edge_wisp_acme_probe }}\n"
+        owner: root
+        group: root
+        mode: "0644"
+      changed_when: false
+
+    - name: Fetch the probe token through OpenResty
+      ansible.builtin.command:
+        argv:
+          - curl
+          - -fsS
+          - --max-time
+          - "5"
+          - -H
+          - "Host: {{ holywisp_webtransport_acme_name }}"
+          - http://127.0.0.1/.well-known/acme-challenge/abulxt-probe
+      register: edge_wisp_acme_probe_get
+      changed_when: false
+      failed_when: false
+  always:
+    - name: Remove the probe token
+      ansible.builtin.file:
+        path: "{{ holywisp_webtransport_acme_webroot }}/.well-known/acme-challenge/abulxt-probe"
+        state: absent
+      changed_when: false
+
+- name: Note whether the webroot is served
+  ansible.builtin.set_fact:
+    edge_wisp_acme_served: >-
+      {{ edge_wisp_acme_probe_get.rc | default(1) == 0
+         and edge_wisp_acme_probe_get.stdout | default('') | trim == edge_wisp_acme_probe | default('-') }}
+
+- name: Say why there is no WebTransport certificate yet
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: OpenResty does not serve {{ holywisp_webtransport_acme_webroot }} on
+      http://{{ holywisp_webtransport_acme_name }}/.well-known/acme-challenge/ yet, so
+      {{ 'no certificate is requested and the listener keeps its self-signed one' if not edge_wisp_acme_lineage.stat.exists
+         else "certbot's renewals will fail" }}. Apply edge_relay (--tags relay), then this role (--tags wisp)
+      again.
+  when:
+    - not ansible_check_mode
+    - not edge_wisp_acme_served | bool
+
+# Once; renewals are certbot.timer's, with the options recorded in the renewal file. No account
+# e-mail: Let's Encrypt sends no expiry mail since 2025, and the play checks the dates below.
+- name: Request the certificate (ECDSA P-256, http-01 webroot)
+  ansible.builtin.command:
+    argv:
+      - certbot
+      - certonly
+      - --non-interactive
+      - --agree-tos
+      - --register-unsafely-without-email
+      - --cert-name
+      - "{{ holywisp_webtransport_acme_name }}"
+      - --domain
+      - "{{ holywisp_webtransport_acme_name }}"
+      - --webroot
+      - --webroot-path
+      - "{{ holywisp_webtransport_acme_webroot }}"
+      - --key-type
+      - ecdsa
+      - --elliptic-curve
+      - secp256r1
+    creates: "/etc/letsencrypt/renewal/{{ holywisp_webtransport_acme_name }}.conf"
+  when:
+    - not ansible_check_mode
+    - not edge_wisp_acme_lineage.stat.exists
+    - edge_wisp_acme_served | bool
+  register: edge_wisp_acme_issue
+
+# The copy is current after this whether certbot renewed it, the hook failed once, or it was just
+# issued. The restart is the handler's, with the config (ABULXT_NO_RESTART).
+- name: Copy the pair where holyWisp reads it
+  ansible.builtin.command:
+    argv: [/etc/letsencrypt/renewal-hooks/deploy/abulxt-wisp-webtransport]
+  environment:
+    ABULXT_NO_RESTART: "1"
+  register: edge_wisp_acme_deploy
+  changed_when: "'installed' in edge_wisp_acme_deploy.stdout"
+  when:
+    - not ansible_check_mode
+    - edge_wisp_acme_lineage.stat.exists or edge_wisp_acme_issue is changed
+  notify: restart edge wisp
+
+- name: Look for the installed pair
+  ansible.builtin.stat:
+    path: "{{ holywisp_webtransport_acme_dir }}/{{ item }}"
+  loop: [cert.pem, key.pem]
+  register: edge_wisp_acme_files
+
+# holywisp.conf.j2 names the files only with this: holyWisp does not start without them.
+- name: Note whether holyWisp can use the pair
+  ansible.builtin.set_fact:
+    edge_wisp_wt_acme_ready: "{{ edge_wisp_acme_files.results | selectattr('stat.exists') | list | length == 2 }}"
+
+- name: Read how long the WebTransport certificate has left
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - x509
+      - -checkend
+      - "{{ holywisp_webtransport_acme_min_days | int * 86400 }}"
+      - -noout
+      - -enddate
+      - -in
+      - "{{ holywisp_webtransport_acme_dir }}/cert.pem"
+  register: edge_wisp_acme_checkend
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: edge_wisp_wt_acme_ready | bool
+
+- name: The WebTransport certificate is not about to expire
+  ansible.builtin.assert:
+    that: edge_wisp_acme_checkend.rc == 0
+    fail_msg: >-
+      {{ holywisp_webtransport_acme_dir }}/cert.pem ({{ edge_wisp_acme_checkend.stdout_lines | first | default('') }})
+      has less than {{ holywisp_webtransport_acme_min_days }} days left: certbot.timer has not renewed
+      it. Look at `journalctl -u certbot` and `certbot renew --dry-run` on the box. Turning
+      holywisp_webtransport_acme off puts the listener back on its self-signed certificate.
+    quiet: true
+  when: edge_wisp_wt_acme_ready | bool

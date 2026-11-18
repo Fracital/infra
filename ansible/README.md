@@ -87,6 +87,40 @@ router and the firewall need no change (same port, same unit name). The next
 `edges.yml --tags wisp` / `origin.yml --tags wisp` run puts holyWisp back; to
 stay on wispurr for longer, check out the pre-holyWisp `edge_wisp` role from git.
 
+### WebTransport certificate
+
+holyWisp's WebTransport listener (udp 443 on the edge, `holywisp_webtransport`) terminates its own
+QUIC and TLS, and signs with ECDSA P-256 only. With `holywisp_webtransport_acme` (on for the edges
+since 2026-11-18, `group_vars/edge.yml`) it uses a Let's Encrypt certificate of its own for
+`holywisp.fracit.al`, so a page calls `new WebTransport("https://holywisp.fracit.al/")` without
+`serverCertificateHashes`. Without it, holyWisp makes a self-signed certificate every 6 days and
+`/webtransport.json` lists its hashes. The auto-ssl certificates cannot serve here: they are in the
+shared Redis, not in files, and the older ones are RSA.
+
+- **Issuance.** Debian's `certbot` (4.0 on trixie), `certonly --webroot` with `--key-type ecdsa
+--elliptic-curve secp256r1`, run once by `roles/edge_wisp/tasks/acme.yml`; renewals are
+  `certbot.timer` (twice a day) with the options in `/etc/letsencrypt/renewal/holywisp.fracit.al.conf`.
+  No account e-mail and no DNS token: holywisp.fracit.al is DNS-only to public_ip, and http-01
+  reaches the edge's OpenResty through divide's tcp 80 DNAT.
+- **Tokens.** The `:80` server for `fracital_wisp_hosts` (`fracital-routes.conf.j2`) serves
+  `/.well-known/acme-challenge/<token>` from `/var/lib/abulxt-wisp-acme` when that file exists and
+  hands every other token to auto-ssl's challenge server, which reads them from Redis as before.
+  Only that one server changes; auto-ssl's own issuance and renewals for every other name, and
+  for holywisp.fracit.al's TLS on tcp 443, are untouched.
+- **Files.** The deploy hook `/etc/letsencrypt/renewal-hooks/deploy/abulxt-wisp-webtransport`
+  checks that the key is P-256 and the leaf's (holyWisp does not start on anything else) and
+  renames the pair into `/etc/abulxt/webtransport/{cert,key}.pem` (`root:abulxt-wisp`, 0640;
+  readable under the unit's `ProtectSystem=strict`). `holywisp.conf` names them only once both
+  exist, so a box without the certificate yet keeps the self-signed one.
+- **Reload.** The pinned holyWisp reads the files at start only, so the hook restarts
+  `abulxt-edge-wisp` after a renewal (`holywisp_webtransport_acme_restart`), about every 60 days.
+  A holyWisp that re-reads them on change makes that `false`.
+- **Checks in the play.** `/webtransport.json` lists no hash with the certificate and at least
+  one without; the play fails when the installed certificate has under 7 days left
+  (`holywisp_webtransport_acme_min_days`).
+
+Rollout and rollback: [docs/divide-host.md](../docs/divide-host.md) "Let's Encrypt certificate".
+
 ## Hosts (all G-Core Labs AS202422)
 
 Everything is in Ashburn/Manassas, VA since 2026-11-16, when the overseas wisp cloud (iev, mia,
@@ -424,7 +458,10 @@ holywisp.fracit.al (fracital_wisp_hosts) -> edge :443
   /pipe/<WISP_GATE_KEY>/  -> this edge's holyWisp, as above
   GET /health             -> holyWisp's /health ({"status":"ok"}); monitoring target
   GET /webtransport.json  -> holyWisp's WebTransport URL and certificate hashes, no-store
-                             (holywisp_webtransport; the session is udp 443 straight to holyWisp)
+                             (holywisp_webtransport; the session is udp 443 straight to holyWisp;
+                             no hashes with holywisp_webtransport_acme)
+  :80 /.well-known/acme-challenge/ -> a certbot token file for the WebTransport certificate
+                             (holywisp_webtransport_acme), else auto-ssl's tokens from Redis
   everything else         -> 403 on the edge (no terp, no /stats)
 ```
 

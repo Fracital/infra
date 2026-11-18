@@ -107,7 +107,8 @@ holywisp_repo: https://github.com/Fracital/holyWisp.git
 # Deployed via build (npm has no version past 0.5.2 yet). Clear data/reputation.json
 # after, old scores persist.
 # 2026-11-18 bumped to a1d06e6: WebTransport (webtransport, webtransport-host/-port/-url,
-# webtransport-idle-timeout-s; holywisp_webtransport below, on for the edges in group_vars/edge.yml).
+# webtransport-idle-timeout-s; holywisp_webtransport below, on for the edges in group_vars/edge.yml)
+# and webtransport-cert/-key (holywisp_webtransport_acme), read at start only.
 # Also aa58935 (npm wrapper keeps its error listeners) and 5d814ec (bench only). The WebSocket path
 # is unchanged. Before that, a37af7d: the demo page's fields and row toggles.
 holywisp_ref: a1d06e6ddff027028d075cf1b201e74296266430
@@ -295,13 +296,44 @@ holywisp_webtransport_url: ""
 # entry alive: divide's lasts about 30 s, and a packet after that would leave the edge by divide's
 # second uplink, from an address the client never talked to (docs/divide-host.md).
 holywisp_webtransport_idle_timeout_s: 30
-# webtransport-cert / webtransport-key are never rendered: holyWisp then makes its own P-256
-# certificate, valid 13 days and replaced every 6, which is what Chrome's serverCertificateHashes
-# accepts (at most 14 days, ECDSA P-256), and publishes its hashes in /webtransport.json. The
-# edge's Let's Encrypt certificates are no use to it: lua-resty-auto-ssl keeps them in the shared
-# Redis, not in files; new ones are P-256 (edge_relay's dehydrated KEY_ALGO), but those issued
-# before that stay RSA until they renew, and the listener signs with P-256 only; and holyWisp has
-# no reload, so a renewed file would mean a restart that drops every session.
+# webtransport-cert / webtransport-key. Without holywisp_webtransport_acme they are not rendered:
+# holyWisp then makes its own P-256 certificate, valid 13 days and replaced every 6, which is what
+# Chrome's serverCertificateHashes accepts (at most 14 days, ECDSA P-256), and publishes its hashes
+# in /webtransport.json, so only a page that pins them can connect. The edge's other Let's Encrypt
+# certificates are no use to the listener: lua-resty-auto-ssl keeps them in the shared Redis, not
+# in files, and those issued before edge_relay's dehydrated KEY_ALGO stay RSA until they renew,
+# while the listener signs with P-256 only.
+#
+# holywisp_webtransport_acme: a Let's Encrypt certificate of its own for the listener (tasks/acme.yml),
+# so a page can call plain `new WebTransport("https://holywisp.fracit.al/")`. certbot (Debian's
+# package, its certbot.timer renews) gets an ECDSA P-256 certificate over HTTP-01 with a webroot:
+# OpenResty's :80 server for the name serves a token file from holywisp_webtransport_acme_webroot
+# when one exists and hands every other token to auto-ssl as before (edge_relay
+# fracital-routes.conf.j2). No DNS API token on the box. A deploy hook copies the pair to
+# holywisp_webtransport_acme_dir (root:<edge_wisp_user>, 0640) after checking that the key is
+# P-256 and the leaf's, since holyWisp does not start on a pair that is not. holywisp.conf names the
+# files only once they exist, so until the first issuance the listener keeps its self-signed
+# certificate. With the files, /webtransport.json lists no hashes (a Web PKI certificate is
+# verified, not pinned) and its url is the only name the certificate holds.
+# The name must be one of fracital_wisp_hosts (edge_relay serves the tokens there) and resolve
+# to the box's public_ip without a CDN in between. The edges turn it on (group_vars/edge.yml).
+holywisp_webtransport_acme: false
+holywisp_webtransport_acme_name: "{{ holywisp_webtransport_url | urlsplit('hostname') }}"
+# certbot's http-01 token files (<webroot>/.well-known/acme-challenge/<token>), read by the
+# OpenResty workers. Keep in step with the default in edge_relay's fracital-routes.conf.j2.
+holywisp_webtransport_acme_webroot: /var/lib/abulxt-wisp-acme
+# Where holyWisp reads the pair: cert.pem (the full chain) and key.pem. Under /etc/abulxt, which
+# the unit's ProtectSystem=strict leaves readable; certbot's own /etc/letsencrypt/archive is root's.
+holywisp_webtransport_acme_dir: /etc/abulxt/webtransport
+# Restart holyWisp when a renewal replaced the pair. holyWisp at holywisp_ref reads the files at
+# start only; a build that re-reads them when they change (in progress in holyWisp on 2026-11-18)
+# makes this false, and a renewal then drops no session. A restart drops every WebSocket and
+# WebTransport session once per renewal (about every 60 days, at a random hour: certbot.timer
+# runs at 00:00 and 12:00 plus up to 12 h).
+holywisp_webtransport_acme_restart: true
+# The play fails when the installed certificate has less than this left: renewal starts 30 days
+# before the end, so this means certbot.timer has been failing for weeks.
+holywisp_webtransport_acme_min_days: 7
 # holyWisp `flood-protection`. OFF for parity with what the fleet actually ran:
 # the wispurr config this role rendered had no `floodProtection` key and
 # wispurr only arms its flood limiter when that key exists. holyWisp's default

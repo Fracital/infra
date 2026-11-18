@@ -1,0 +1,64 @@
+#!/bin/sh
+# Managed by Ansible (roles/edge_wisp, holywisp_webtransport_acme; tasks/acme.yml).
+# certbot's deploy hook for {{ holywisp_webtransport_acme_name }}: copies the new pair to where holyWisp's
+# WebTransport listener reads it ({{ holywisp_webtransport_acme_dir }}). certbot runs it after each renewal;
+# the play runs it after the first issuance and on every run (it changes nothing when the copy is
+# current, and prints "installed" when it replaced it).
+#
+# holyWisp does not start on a pair whose key is not the leaf's or not P-256 (webtransport-cert,
+# webtransport-key), and a failed start takes the WebSocket relay down too, so a pair that is
+# not right is never installed. Each file is renamed into place from a temporary file in the same
+# directory: a reader sees the old file or the new one, never part of one.
+set -eu
+
+live=/etc/letsencrypt/live/{{ holywisp_webtransport_acme_name }}
+dest={{ holywisp_webtransport_acme_dir }}
+group={{ edge_wisp_user }}
+
+# certbot runs every deploy hook for every certificate it renews on this box.
+if [ "${RENEWED_LINEAGE:-$live}" != "$live" ]; then
+	exit 0
+fi
+
+fail() {
+	echo "abulxt-wisp-webtransport: $*" >&2
+	exit 1
+}
+
+chain=$live/fullchain.pem
+key=$live/privkey.pem
+if [ ! -s "$chain" ] || [ ! -s "$key" ]; then
+	fail "no certificate in $live"
+fi
+
+openssl x509 -in "$chain" -noout -text | grep -q 'ASN1 OID: prime256v1' ||
+	fail "$chain: the leaf's key is not ECDSA P-256"
+leaf_pub=$(openssl x509 -in "$chain" -noout -pubkey | openssl pkey -pubin -outform DER | sha256sum)
+key_pub=$(openssl pkey -in "$key" -pubout -outform DER | sha256sum)
+[ "$leaf_pub" = "$key_pub" ] || fail "$key is not the key of the leaf in $chain"
+
+if cmp -s "$chain" "$dest/cert.pem" && cmp -s "$key" "$dest/key.pem"; then
+	echo unchanged
+	exit 0
+fi
+
+umask 077
+tmp_key=$(mktemp "$dest/.key.pem.XXXXXX")
+tmp_chain=$(mktemp "$dest/.cert.pem.XXXXXX")
+trap 'rm -f "$tmp_key" "$tmp_chain"' EXIT
+cat "$key" >"$tmp_key"
+cat "$chain" >"$tmp_chain"
+chown "root:$group" "$tmp_key" "$tmp_chain"
+chmod 0640 "$tmp_key" "$tmp_chain"
+mv -f "$tmp_key" "$dest/key.pem"
+mv -f "$tmp_chain" "$dest/cert.pem"
+trap - EXIT
+echo installed
+{% if holywisp_webtransport_acme_restart | bool %}
+
+# holyWisp at the pinned holywisp_ref reads the pair at start only (holywisp_webtransport_acme_restart).
+# The play sets ABULXT_NO_RESTART: it restarts the relay itself, once, with the config.
+if [ -z "${ABULXT_NO_RESTART:-}" ]; then
+	systemctl try-restart abulxt-edge-wisp.service
+fi
+{% endif %}

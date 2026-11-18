@@ -165,8 +165,14 @@ webclient-wisp-url = {{ holywisp_webclient_wisp_url }}
 # ---------------------------------------------------------------- WebTransport
 # Wisp over WebTransport (HTTP/3 over QUIC) on UDP, beside the WebSocket listener above. QUIC and
 # TLS end here, not in OpenResty, so proxy headers are never read on it: the client is the UDP
+{%   if holywisp_webtransport_acme | bool and edge_wisp_wt_acme_ready | default(false) | bool %}
+# peer address. webtransport-cert/-key below: Let's Encrypt, ECDSA P-256, for
+# {{ holywisp_webtransport_acme_name }} (holywisp_webtransport_acme); certbot renews it and its deploy hook replaces the
+# two files. A Web PKI certificate is verified, not pinned, so GET /webtransport.json lists no hashes.
+{%   else %}
 # peer address. No webtransport-cert/-key: holyWisp's own P-256 certificate, replaced every 6
 # days, whose hashes GET /webtransport.json on the TCP port publishes for serverCertificateHashes.
+{%   endif %}
 webtransport = on
 {%   if holywisp_webtransport_host | length > 0 %}
 webtransport-host = {{ holywisp_webtransport_host }}
@@ -174,6 +180,10 @@ webtransport-host = {{ holywisp_webtransport_host }}
 webtransport-port = {{ holywisp_webtransport_port }}
 {%   if holywisp_webtransport_url | length > 0 %}
 webtransport-url = {{ holywisp_webtransport_url }}
+{%   endif %}
+{%   if holywisp_webtransport_acme | bool and edge_wisp_wt_acme_ready | default(false) | bool %}
+webtransport-cert = {{ holywisp_webtransport_acme_dir }}/cert.pem
+webtransport-key = {{ holywisp_webtransport_acme_dir }}/key.pem
 {%   endif %}
 # A keepalive PING goes out after 20 s idle, inside a NAT's UDP timeout (divide's: about 30 s).
 webtransport-idle-timeout-s = {{ holywisp_webtransport_idle_timeout_s }}

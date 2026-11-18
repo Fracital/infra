@@ -59,6 +59,10 @@
     src: holywisp.conf.j2
     dest: "{{ holywisp_build_dir }}/conf-check/{{ inventory_hostname }}.conf"
     mode: "0600"
+  # With holywisp_webtransport_acme, as the host renders it once its pair is installed: the parse
+  # checks the webtransport-cert/-key keys, not the files (holyWisp opens those at start).
+  vars:
+    edge_wisp_wt_acme_ready: "{{ holywisp_webtransport_acme | bool }}"
   changed_when: false
   diff: false
   check_mode: false

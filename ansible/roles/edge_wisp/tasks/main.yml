@@ -86,6 +86,12 @@
     quiet: true
   when: holywisp_proxy_client_key | bool
 
+# Before the config: a first issuance and the config that names its files land in one run
+# (holywisp_webtransport_acme; tasks/acme.yml).
+- name: Let's Encrypt certificate for the WebTransport listener
+  ansible.builtin.import_tasks: acme.yml
+  when: holywisp_webtransport_acme | bool
+
 - name: Render holyWisp config
   ansible.builtin.template:
     src: holywisp.conf.j2
@@ -211,8 +217,10 @@
 # WebTransport (holywisp_webtransport): a page pins the listener's self-signed certificate by the
 # hashes /webtransport.json lists, so a box that answers without them (a build without the
 # listener, a certificate that failed to generate) serves no WebTransport client at all, though
-# its WebSocket relay is fine. And the UDP socket must be bound where the DNAT delivers.
-- name: WebTransport publishes its certificate hashes
+# its WebSocket relay is fine. With the Let's Encrypt pair (edge_wisp_wt_acme_ready) the list is
+# empty instead: holyWisp lists no hash for a certificate of its operator's, and a hash there would
+# mean it is not using the pair. And the UDP socket must be bound where the DNAT delivers.
+- name: WebTransport publishes its certificate hashes, or none with the Let's Encrypt pair
   ansible.builtin.command:
     argv:
       [
@@ -226,7 +234,10 @@
   changed_when: false
   retries: 5
   delay: 2
-  until: edge_wisp_wt_json.rc == 0 and '"sha-256"' in edge_wisp_wt_json.stdout
+  until: >-
+    edge_wisp_wt_json.rc == 0
+    and ((edge_wisp_wt_json.stdout | from_json).hashes | length == 0)
+        == (holywisp_webtransport_acme | bool and edge_wisp_wt_acme_ready | default(false) | bool)
   when:
     - holywisp_webtransport | bool
     - not ansible_check_mode

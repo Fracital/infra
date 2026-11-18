@@ -36,6 +36,12 @@ holywisp_webtransport_port: 443
 # DNS-only name for public_ip, already the web client's default (above), and the certificate
 # hashes pin the listener whatever name the page dials, so wisp.baby's page can use it too.
 holywisp_webtransport_url: "https://{{ fracital_wisp_hosts[0] }}/"
+# A Let's Encrypt certificate for that name on the listener (roles/edge_wisp defaults
+# holywisp_webtransport_acme), so a page needs no hashes: `new WebTransport(url)` verifies it like
+# any https site. holywisp.fracit.al is DNS-only to public_ip, whose tcp 80 divide DNATs to this
+# box's OpenResty, so http-01 needs no DNS token. Until the first issuance (the run after edge_relay
+# has the webroot location, docs/divide-host.md) the listener stays on its self-signed certificate.
+holywisp_webtransport_acme: true
 # Literal-IP CONNECTs are allowed on the edges: the v86 emulator in vibeOS uses
 # wss://holywisp.fracit.al/ as its guest network and can only connect by address.
 # Those streams bypass edge-router.py's adult/shady classification (it has no
