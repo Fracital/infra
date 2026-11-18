@@ -1,4 +1,9 @@
 ---
+# First, so a play that also reloads restarts before it (tasks/restart_isolated.yml).
+- name: Restart openresty isolated
+  ansible.builtin.include_tasks: "{{ role_path }}/tasks/restart_isolated.yml"
+  listen: restart openresty isolated
+
 - name: Test openresty configuration
   ansible.builtin.command: "{{ openresty_prefix }}/nginx/sbin/nginx -t"
   register: openresty_test

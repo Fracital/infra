@@ -611,6 +611,30 @@ validator approving registered names. Rollback: the flag back to false and `--ta
 Ship (link routing and the Redis move): RUNBOOK.md "Shared Redis on terp.db" and "Link routing".
 Rollback: `link_routes_enabled: false` and `--tags relay`; every unknown Host goes to amph again.
 
+## OpenResty user and sandbox
+
+Every OpenResty this repo runs (the edge, amph, terp) starts its workers as `openresty:openresty`,
+a system user with no shell or home (`openresty_user`, `group_vars/all`), not Debian's shared
+`www-data`. The master stays root to bind :80/:443 and read the keys. `roles/openresty`
+`tasks/isolation.yml` owns it, included by `roles/openresty` (the edge), `fracital_origin` (terp)
+and `abulxt_origin` (amph, whose `nginx.conf` comes from abulxt's `deploy/openresty`):
+
+- the user and group;
+- `/etc/systemd/system/openresty.service.d/50-hardening.conf` (`openresty_hardening`): the whole
+  service, master included, in a systemd sandbox. `/usr` and `/etc` are read-only except
+  `openresty_rw_paths` (logs, temp dirs, `/etc/resty-auto-ssl`), `/home` and `/root` are hidden,
+  `/tmp` is its own (sockproc's socket included), no new privileges, and the capability bounding
+  set is what the master needs (bind, setuid/setgid, chown, read root's files, signal workers);
+- the handler `restart openresty isolated`, when the user or the sandbox changes: it gives the
+  trees the workers write (`openresty_worker_paths`: auto-ssl's certificates and ACME state, the
+  proxy caches, the temp dirs) to `openresty` with nothing for others, checks the config and
+  restarts once (the sandbox only applies to a new process). If openresty does not come back in
+  the sandbox, the drop-in goes and it starts without it, and the play fails.
+
+The static sites need nothing from it: their trees are world-readable (`edge_static`). Switched on
+2026-11-18 (all three restarted once). A path the workers must write somewhere else needs a line in
+`openresty_rw_paths` and, if they own it, `openresty_worker_paths`.
+
 ## Flood guard
 
 The edge, not the origin, sheds HTTP floods: it is where the clients connect, and a request it

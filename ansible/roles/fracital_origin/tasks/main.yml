@@ -114,6 +114,13 @@
   diff: false # holds the token
   notify: reload fracital openresty
 
+# The workers' own user and the service sandbox (roles/openresty tasks/isolation.yml), before
+# nginx.conf names the user.
+- name: OpenResty's user and sandbox
+  ansible.builtin.include_role:
+    name: openresty
+    tasks_from: isolation.yml
+
 - name: Render nginx.conf
   ansible.builtin.template:
     src: nginx.conf.j2

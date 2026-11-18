@@ -223,12 +223,12 @@
 # New and renewed certificates get a P-256 key: an RSA-4096 signature cost 1.03 ms of CPU per
 # full handshake (2026-11-16) and a 6.2 KB server flight. dehydrated sources conf.d/*.sh; the
 # certificates already issued stay RSA until they renew.
-- name: dehydrated config directory (auto-ssl's, so www-data's; it sets the modes itself)
+- name: dehydrated config directory (auto-ssl's, so the workers'; it sets the modes itself)
   ansible.builtin.file:
     path: "{{ item }}"
     state: directory
-    owner: www-data
-    group: www-data
+    owner: "{{ openresty_user }}"
+    group: "{{ openresty_group }}"
   loop:
     - "{{ openresty_auto_ssl_dir }}/letsencrypt"
     - "{{ openresty_auto_ssl_dir }}/letsencrypt/conf.d"
@@ -341,7 +341,7 @@
       ansible.builtin.file:
         path: "{{ krunkio_cache_dir }}"
         state: directory
-        owner: www-data
+        owner: "{{ openresty_user }}"
         group: root
         mode: "0700"
 
@@ -400,7 +400,7 @@
       ansible.builtin.file:
         path: "{{ fracital_cache_dir }}"
         state: directory
-        owner: www-data
+        owner: "{{ openresty_user }}"
         group: root
         mode: "0700"
 

@@ -1,0 +1,49 @@
+---
+# OpenResty's workers as a user of their own, and openresty.service in a systemd sandbox
+# (group_vars/all openresty_user; defaults/main.yml; README.md "OpenResty user and sandbox").
+# Included by this role's main.yml (the edge) and by fracital_origin (terp) and abulxt_origin
+# (amph), before their nginx.conf names the user. Switching a running box restarts openresty once
+# (handler "restart openresty isolated"): the sandbox only applies to a new process, and the
+# trees the workers write change owner in the same step, so no worker sees the other owner.
+
+- name: Workers' group
+  ansible.builtin.group:
+    name: "{{ openresty_group }}"
+    system: true
+
+- name: Workers' user (no shell, no home)
+  ansible.builtin.user:
+    name: "{{ openresty_user }}"
+    group: "{{ openresty_group }}"
+    groups: []
+    system: true
+    create_home: false
+    home: /nonexistent
+    shell: /usr/sbin/nologin
+    comment: OpenResty workers
+  notify: restart openresty isolated
+
+- name: Drop-in directory for openresty.service
+  ansible.builtin.file:
+    path: /etc/systemd/system/openresty.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: openresty.service sandbox (50-hardening.conf)
+  ansible.builtin.template:
+    src: hardening.conf.j2
+    dest: /etc/systemd/system/openresty.service.d/50-hardening.conf
+    owner: root
+    group: root
+    mode: "0644"
+  when: openresty_hardening | bool
+  notify: restart openresty isolated
+
+- name: No sandbox drop-in when openresty_hardening is off
+  ansible.builtin.file:
+    path: /etc/systemd/system/openresty.service.d/50-hardening.conf
+    state: absent
+  when: not (openresty_hardening | bool)
+  notify: restart openresty isolated

@@ -1,0 +1,25 @@
+---
+# The systemd sandbox for openresty.service (templates/hardening.conf.j2, tasks/isolation.yml).
+# The master runs as root but can only write what is listed here: /usr and /etc are read-only
+# (ProtectSystem=full), /home and /root are hidden, /tmp is the service's own. /var stays
+# writable (the proxy caches under /var/cache/openresty). A path that does not exist is skipped.
+openresty_hardening: true
+openresty_rw_paths:
+  - "{{ openresty_prefix }}/nginx/logs"
+  - "{{ openresty_prefix }}/nginx/client_body_temp"
+  - "{{ openresty_prefix }}/nginx/proxy_temp"
+  - "{{ openresty_prefix }}/nginx/fastcgi_temp"
+  - "{{ openresty_prefix }}/nginx/uwsgi_temp"
+  - "{{ openresty_prefix }}/nginx/scgi_temp"
+  - "{{ openresty_auto_ssl_dir }}"
+# Trees the workers write, given to openresty_user (recursively, without any access for others)
+# when the service is restarted into its user: certificates and ACME state, the proxy caches, the
+# temp and log directories. A path that does not exist is skipped.
+openresty_worker_paths:
+  - "{{ openresty_auto_ssl_dir }}"
+  - /var/cache/openresty
+  - "{{ openresty_prefix }}/nginx/client_body_temp"
+  - "{{ openresty_prefix }}/nginx/proxy_temp"
+  - "{{ openresty_prefix }}/nginx/fastcgi_temp"
+  - "{{ openresty_prefix }}/nginx/uwsgi_temp"
+  - "{{ openresty_prefix }}/nginx/scgi_temp"

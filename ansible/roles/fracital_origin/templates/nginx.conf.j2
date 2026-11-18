@@ -1,6 +1,6 @@
 # terp OpenResty. Managed by Ansible (abulxt fracital_origin role). Local edits are overwritten.
 
-user www-data;
+user {{ openresty_user }} {{ openresty_group }};
 worker_processes auto;
 worker_rlimit_nofile 16384;
 pid {{ fracital_openresty_prefix }}/nginx/logs/nginx.pid;

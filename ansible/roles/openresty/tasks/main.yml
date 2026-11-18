@@ -94,6 +94,9 @@
   failed_when: openresty_dpkg.rc != 0 and 'already installed' not in openresty_dpkg.stderr
   when: openresty_install_method | default('apt') == 'debs'
 
+- name: Workers' own user and the service sandbox
+  ansible.builtin.include_tasks: isolation.yml
+
 - name: Check if lua-resty-auto-ssl is installed
   ansible.builtin.stat:
     path: /usr/local/share/lua/5.1/resty/auto-ssl.lua
@@ -107,9 +110,9 @@
   ansible.builtin.file:
     path: "{{ openresty_auto_ssl_dir }}"
     state: directory
-    owner: root
-    group: root
-    mode: "0755"
+    owner: "{{ openresty_user }}"
+    group: "{{ openresty_group }}"
+    mode: "0750"
 
 - name: Generate fallback self-signed certificate (if absent)
   ansible.builtin.command: >
@@ -123,9 +126,9 @@
 - name: Set fallback cert permissions
   ansible.builtin.file:
     path: "{{ openresty_auto_ssl_dir }}/{{ item.name }}"
-    owner: www-data
-    group: www-data
+    owner: "{{ openresty_user }}"
+    group: "{{ openresty_group }}"
     mode: "{{ item.mode }}"
   loop:
     - { name: fallback.key, mode: "0600" }
-    - { name: fallback.crt, mode: "0644" }
+    - { name: fallback.crt, mode: "0640" }

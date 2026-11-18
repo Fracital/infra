@@ -32,6 +32,13 @@ openresty_auto_ssl_dir: /etc/resty-auto-ssl
 # HTTP/3 (quic) is not configured anywhere (CVE-2026-121810 needs it).
 openresty_http2: false
 
+# OpenResty's workers run as a user and group of their own, not Debian's shared www-data (or
+# nobody); the master stays root to bind :80/:443 and read the keys. The role owns the user, the
+# directories the workers write and a systemd sandbox for the whole service (roles/openresty
+# tasks/isolation.yml, README.md "OpenResty user and sandbox").
+openresty_user: openresty
+openresty_group: openresty
+
 # Domains. abstracteducation.loan delegates a dedicated subzone
 # `byod.abstracteducation.loan` to Gcore: the round-robin lives at that zone's
 # APEX (an A record whose name equals the zone itself).

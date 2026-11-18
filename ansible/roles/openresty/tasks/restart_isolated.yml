@@ -1,0 +1,55 @@
+---
+# Handler body (handlers/main.yml "restart openresty isolated"): give the workers' trees to
+# openresty_user, check the config, restart into the sandbox. If openresty does not come back, the
+# sandbox drop-in goes and it starts without it; the play then fails so someone looks.
+
+- name: Give the workers' trees to {{ openresty_user }} (nothing for others)
+  ansible.builtin.shell: |
+    set -eu
+    for p in {{ openresty_worker_paths | map('quote') | join(' ') }}; do
+      [ -e "$p" ] || continue
+      chown -R {{ openresty_user | quote }}:{{ openresty_group | quote }} "$p"
+      chmod -R o-rwx "$p"
+    done
+  changed_when: true
+
+- name: Check the config before the restart
+  ansible.builtin.command: "{{ openresty_prefix }}/nginx/sbin/nginx -t"
+  changed_when: false
+
+- name: Restart openresty into its user and sandbox
+  block:
+    - name: Restart openresty
+      ansible.builtin.systemd_service:
+        name: openresty
+        state: restarted
+        enabled: true
+        daemon_reload: true
+
+    - name: Workers run as {{ openresty_user }}
+      ansible.builtin.shell: |
+        set -o pipefail
+        ps -o user= --ppid "$(cat {{ openresty_prefix }}/nginx/logs/nginx.pid)" | sort -u
+      args:
+        executable: /bin/bash
+      register: openresty_worker_users
+      changed_when: false
+      failed_when: openresty_worker_users.stdout_lines != [openresty_user]
+      retries: 5
+      delay: 2
+      until: openresty_worker_users.stdout_lines == [openresty_user]
+  rescue:
+    - name: Remove the sandbox drop-in
+      ansible.builtin.file:
+        path: /etc/systemd/system/openresty.service.d/50-hardening.conf
+        state: absent
+
+    - name: Start openresty without it
+      ansible.builtin.systemd_service:
+        name: openresty
+        state: restarted
+        daemon_reload: true
+
+    - name: Stop here
+      ansible.builtin.fail:
+        msg: openresty did not come back in its sandbox; it runs without 50-hardening.conf now.

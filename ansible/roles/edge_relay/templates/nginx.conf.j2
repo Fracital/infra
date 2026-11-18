@@ -1,7 +1,7 @@
 # OpenResty edge configuration. Managed by Ansible (abulxt edge_relay role).
 # Any manual changes will be overwritten.
 
-user www-data;
+user {{ openresty_user }} {{ openresty_group }};
 worker_processes {{ edge_openresty_workers }};
 worker_rlimit_nofile {{ edge_worker_rlimit_nofile }};
 pid {{ openresty_prefix }}/nginx/logs/nginx.pid;
