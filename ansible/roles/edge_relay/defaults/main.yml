@@ -108,7 +108,12 @@ edge_worker_rlimit_nofile: 65535
 # Blocked and rate-limited (429) requests are kept out of access.log (the flood wrote 3 MB/s).
 edge_flood_guard_hosts:
   - abstracteducation.loan
+  - beta.abstracteducation.loan
 edge_flood_guard_block_bare_post: true
+# POSTs to these paths on a guarded host get 403: the sites only GET them (abstracteducation.loan's
+# bundle fetches /api/updates once per page load; the 2026-11-18 flood POSTed it with an Origin).
+edge_flood_guard_block_post_paths:
+  - /api/updates
 edge_flood_guard_rate: 30r/s
 edge_flood_guard_burst: 300
 edge_flood_guard_post_rate: 5r/s

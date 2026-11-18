@@ -616,7 +616,8 @@ refuses never costs amph a connection. `roles/edge_relay` renders `conf.d/01-flo
 (maps and `limit_req` zones) and applies it at the top of the :443 default server, before link
 routing. Only the names in `edge_flood_guard_hosts` (and their `www.`) are guarded:
 
-- a POST with neither Referer nor Origin gets 403 (`edge_flood_guard_block_bare_post`);
+- a POST with neither Referer nor Origin gets 403 (`edge_flood_guard_block_bare_post`), and so
+  does a POST to a path the sites only GET (`edge_flood_guard_block_post_paths`: `/api/updates`);
 - each client address gets `edge_flood_guard_rate` (burst `edge_flood_guard_burst`) for every
   request and `edge_flood_guard_post_rate` (burst `edge_flood_guard_post_burst`) for POSTs, 429
   beyond. One address is often a whole school NAT, so the rates stay generous;
@@ -627,7 +628,9 @@ about 13k POSTs a second to abstracteducation.loan, never with a Referer, switch
 minute (`/`, `/api/chat/me`, `/api/updates`). The single node process behind it on amph saturated
 and the site answered 502; the edge ran out of worker connections (now `edge_worker_connections` 16384) and its access.log grew 3 MB/s toward a full disk (OpenResty's logs now rotate daily or past
 `edge_log_maxsize`). Add a name to the list to guard it; an attacker who starts sending a Referer
-still meets the per-address limits. Rollback: an empty `edge_flood_guard_hosts` and `--tags relay`.
+still meets the per-address limits. When it did (from about 20:00 UTC, with an Origin and about
+5 POSTs a second per address to `/api/updates`), the path rule took over; a hand-made limit on amph
+for the same path was removed in favour of it. Rollback: an empty `edge_flood_guard_hosts` and `--tags relay`.
 
 ## Two byod names
 

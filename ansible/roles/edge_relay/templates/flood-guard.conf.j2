@@ -4,11 +4,25 @@
 {% set guard_re = '(www\\.)?(' ~ (edge_flood_guard_hosts | map('regex_escape') | join('|')) ~ ')' %}
 
 # POST with neither Referer nor Origin, on a guarded host.
-map "$host|$request_method|$http_referer$http_origin" $edge_guard_block {
+map "$host|$request_method|$http_referer$http_origin" $edge_guard_bare_post {
     default 0;
 {% if edge_flood_guard_hosts | length > 0 and edge_flood_guard_block_bare_post | bool %}
     "~^{{ guard_re }}\|POST\|$" 1;
 {% endif %}
+}
+
+# POST to a path the guarded sites only ever GET (edge_flood_guard_block_post_paths).
+map "$host|$request_method|$uri" $edge_guard_post_path {
+    default 0;
+{% if edge_flood_guard_hosts | length > 0 and edge_flood_guard_block_post_paths | length > 0 %}
+    "~^{{ guard_re }}\|POST\|({{ edge_flood_guard_block_post_paths | map('regex_escape') | join('|') }})$" 1;
+{% endif %}
+}
+
+# 403 at the top of the :443 default server (00-edge-relay.conf).
+map "$edge_guard_bare_post$edge_guard_post_path" $edge_guard_block {
+    default 0;
+    "~1" 1;
 }
 
 # Per client address on a guarded host; an empty key is never limited.
