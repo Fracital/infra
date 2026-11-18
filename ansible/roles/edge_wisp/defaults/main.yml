@@ -106,7 +106,11 @@ holywisp_repo: https://github.com/Fracital/holyWisp.git
 # so a page asking the browser for a private address still does not score the client.
 # Deployed via build (npm has no version past 0.5.2 yet). Clear data/reputation.json
 # after, old scores persist.
-holywisp_ref: a37af7d5fa811e9beef1811fb9fb695da7077679
+# 2026-11-18 bumped to a1d06e6: WebTransport (webtransport, webtransport-host/-port/-url,
+# webtransport-idle-timeout-s; holywisp_webtransport below, on for the edges in group_vars/edge.yml).
+# Also aa58935 (npm wrapper keeps its error listeners) and 5d814ec (bench only). The WebSocket path
+# is unchanged. Before that, a37af7d: the demo page's fields and row toggles.
+holywisp_ref: a1d06e6ddff027028d075cf1b201e74296266430
 # Controller cache for both sources: built binaries, npm downloads, and the
 # per-host configs tasks/verify.yml checks.
 holywisp_build_dir: "{{ lookup('env', 'HOME') }}/.cache/abulxt/holywisp"
@@ -263,6 +267,41 @@ holywisp_serve_webclient: true
 # (group_vars/edge.yml) because the page is served from https://holywisp.fracit.al/
 # and that root is the relay too. amph keeps "" (its page is not public).
 holywisp_webclient_wisp_url: ""
+# holyWisp `webtransport`: a second listener, WebTransport (HTTP/3 over QUIC, UDP), beside the
+# WebSocket one (holyWisp docs/webtransport.md). A browser runs the same Wisp over a WebTransport
+# session, with the same egress policy, limits and reputation, and a Wisp UDP stream (QUIC,
+# WebRTC) rides QUIC datagrams instead of the one TCP stream. QUIC and TLS are holyWisp's own:
+# nginx is not in this path, so neither its keyed paths nor its flood guard apply here, only
+# holyWisp's own limits (the relay is keyless on holywisp.fracit.al and wisp.baby already). Off by
+# default; the edges turn it on (group_vars/edge.yml). Rollout check: GET /webtransport.json on
+# the relay port lists hashes.
+# Needs holywisp_ref at or after a1d06e6: an older build doesn't know the webtransport-* keys,
+# and the config check (tasks/verify.yml) stops the play on the controller.
+holywisp_webtransport: false
+# `webtransport-host`: the UDP address it binds. "" = not rendered, holyWisp then binds `host`
+# (holywisp_bind_host). Never 127.0.0.1: no proxy carries this UDP, clients reach the socket
+# directly, so a box behind NAT names the address the DNAT delivers to (the edge on divide: its
+# 172.16.5.10, host_vars/edge.yml).
+holywisp_webtransport_host: ""
+# `webtransport-port`: the UDP port. holyWisp's own default is `port`, the TCP number. Below 1024
+# the unit gets CAP_NET_BIND_SERVICE and nothing else for it (templates/abulxt-edge-wisp.service.j2):
+# the edges bind 443 itself (group_vars/edge.yml says why not a redirect).
+holywisp_webtransport_port: "{{ edge_wisp_port }}"
+# `webtransport-url`: the URL GET /webtransport.json names beside the certificate hashes, for a
+# page that should not derive it from its own origin. "" = not rendered (holyWisp answers "").
+holywisp_webtransport_url: ""
+# `webtransport-idle-timeout-s`: the QUIC idle timeout (holyWisp's default 30, mandatory there).
+# holyWisp sends a keepalive PING after 20 s without sending anything, which keeps a NAT's UDP
+# entry alive: divide's lasts about 30 s, and a packet after that would leave the edge by divide's
+# second uplink, from an address the client never talked to (docs/divide-host.md).
+holywisp_webtransport_idle_timeout_s: 30
+# webtransport-cert / webtransport-key are never rendered: holyWisp then makes its own P-256
+# certificate, valid 13 days and replaced every 6, which is what Chrome's serverCertificateHashes
+# accepts (at most 14 days, ECDSA P-256), and publishes its hashes in /webtransport.json. The
+# edge's Let's Encrypt certificates are no use to it: lua-resty-auto-ssl keeps them in the shared
+# Redis, not in files; new ones are P-256 (edge_relay's dehydrated KEY_ALGO), but those issued
+# before that stay RSA until they renew, and the listener signs with P-256 only; and holyWisp has
+# no reload, so a renewed file would mean a restart that drops every session.
 # holyWisp `flood-protection`. OFF for parity with what the fleet actually ran:
 # the wispurr config this role rendered had no `floodProtection` key and
 # wispurr only arms its flood limiter when that key exists. holyWisp's default

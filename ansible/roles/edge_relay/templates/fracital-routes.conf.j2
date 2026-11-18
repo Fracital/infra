@@ -8,8 +8,9 @@
 #        pinned cert, X-FRX-Edge-Token; terp's firewall only admits the edges)
 #
 #   fracital_wisp_hosts ({{ fracital_wisp_hosts | default([]) | join(', ') }}): holyWisp's built-in web
-#     client on GET / and the keyless relay on a WebSocket upgrade there, the keyed relay path and GET /health
-#     (holyWisp's own) only; everything else is 403 here. No terp relay, and /stats is never exposed.
+#     client on GET / and the keyless relay on a WebSocket upgrade there, the keyed relay path, GET /health
+#     and, with holywisp_webtransport, GET /webtransport.json (holyWisp's own) only; everything else is
+#     403 here. No terp relay, and /stats is never exposed.
 #
 #   With link_routes_replace_static the app server keeps only {{ fracital_byod_fqdn }} (and
 #   fracital_extra_hosts unless link routing can serve them): fracital_hosts and their www. reach
@@ -327,6 +328,29 @@ server {
         proxy_read_timeout 5s;
         add_header Cache-Control "no-store" always;
     }
+{% if holywisp_webtransport | default(false) | bool %}
+
+    # WebTransport (edge_wisp holywisp_webtransport): the listener's URL and certificate hashes,
+    # which a page passes as serverCertificateHashes. holyWisp answers it on its TCP port, so it
+    # comes through here like /health; the session itself is udp 443 straight to holyWisp, never
+    # through nginx. The hashes change with the certificate every 6 days: nothing may store it.
+    # Access-Control-Allow-Origin * is holyWisp's, passed through (pages on other names fetch it).
+    location = /webtransport.json {
+        limit_except GET {
+            deny all;
+        }
+        proxy_pass http://127.0.0.1:{{ edge_wisp_port }}/webtransport.json;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 5s;
+        proxy_cache off;
+        proxy_hide_header Cache-Control;
+        add_header Cache-Control "no-store" always;
+    }
+{% endif %}
 
     # Anything else on these names (wrong key, /stats, /): refused, never relayed to terp.
     location / {

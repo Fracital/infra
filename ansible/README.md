@@ -423,6 +423,8 @@ holywisp.fracit.al (fracital_wisp_hosts) -> edge :443
                              the relay itself (wss://holywisp.fracit.al/, the public endpoint, no key)
   /pipe/<WISP_GATE_KEY>/  -> this edge's holyWisp, as above
   GET /health             -> holyWisp's /health ({"status":"ok"}); monitoring target
+  GET /webtransport.json  -> holyWisp's WebTransport URL and certificate hashes, no-store
+                             (holywisp_webtransport; the session is udp 443 straight to holyWisp)
   everything else         -> 403 on the edge (no terp, no /stats)
 ```
 

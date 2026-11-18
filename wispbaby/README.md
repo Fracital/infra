@@ -53,6 +53,7 @@ HTTPS (443):
   `{"site":"chi","host":"chi.wisp.baby","city":"Chicago","country":"US","addr":"<$server_addr, the address the browser reached>","speedPort":80}`
   (`speedPort` is 80 on the boxes; the dev harness uses another port.)
 - `GET /health`: holyWisp's health.
+- `GET /webtransport.json` (with `holywisp_webtransport`): holyWisp's WebTransport URL and certificate hashes, `Cache-Control: no-store`, from holyWisp's TCP port. The session itself is udp 443 straight to holyWisp (docs/divide-host.md "WebTransport on udp 443"), not through OpenResty.
 - `GET /live`, `GET /live/history`, `GET /you`: live usage stats, see "Live stats" below.
 
 HTTP (80), from the box's own addresses only (anything else: 403):

@@ -19,6 +19,23 @@ edge_advertise_ips_v6_fracital: []
 # The holyWisp web client served on https://holywisp.fracit.al/ defaults to that
 # same public root, which the edge routes to holyWisp as the relay (no key).
 holywisp_webclient_wisp_url: "wss://{{ fracital_wisp_hosts[0] }}/"
+# holyWisp's WebTransport listener (roles/edge_wisp defaults holywisp_webtransport) on udp 443,
+# the public port divide already DNATs here and the drop-in below already opens; nothing else on
+# the edge uses udp 443 (OpenResty has no QUIC listener).
+# Needs holywisp_ref at or after a1d06e6 (roles/edge_wisp defaults).
+# holyWisp binds 443 itself (CAP_NET_BIND_SERVICE in its unit) instead of an nft redirect to an
+# unprivileged port: the vendored edge_firewall only adds ports to its accept sets, so a redirect
+# would need a NAT table of its own reloaded beside it (like edge_network's own-address table),
+# the redirected port open in the input chain (it sees the port after the redirect), and the
+# edge's conntrack to hold every QUIC flow on top of divide's. The unit carries CAP_NET_ADMIN
+# already for the WARP marks.
+holywisp_webtransport: true
+holywisp_webtransport_port: 443
+# One URL for every page: the public relay root. Pages on the Cloudflare-proxied names (stomp.,
+# fracit.al) cannot use their own origin, whose udp 443 is Cloudflare's; holywisp.fracit.al is a
+# DNS-only name for public_ip, already the web client's default (above), and the certificate
+# hashes pin the listener whatever name the page dials, so wisp.baby's page can use it too.
+holywisp_webtransport_url: "https://{{ fracital_wisp_hosts[0] }}/"
 # Literal-IP CONNECTs are allowed on the edges: the v86 emulator in vibeOS uses
 # wss://holywisp.fracit.al/ as its guest network and can only connect by address.
 # Those streams bypass edge-router.py's adult/shady classification (it has no
@@ -43,8 +60,9 @@ edge_firewall_dropins:
     priority: 50
     source: ansible inventory/group_vars/edge.yml
     comment:
-      - "abulxt public ports: nginx http/https (tcp 80/443, udp 443), tcp 8080 (SNI split:"
-      - "mcnode Wings via amph, everything else to blockshooter). divide DNATs these to the edge."
+      - "abulxt public ports: nginx http/https (tcp 80/443), holyWisp WebTransport (udp 443),"
+      - "tcp 8080 (SNI split: mcnode Wings via amph, everything else to blockshooter)."
+      - "divide DNATs these to the edge."
       - "No 53: PowerDNS (roles/edge_dns) is retired, the byod names are Cloudflare records."
     tcp: [80, 443, 8080]
     udp: [443]

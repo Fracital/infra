@@ -197,7 +197,9 @@ DNAT of the public address:
 | udp       | 25565, 25566                                                      | eagler 172.16.5.76 (game UDP; Simple Voice Chat shares 25565)      |
 
 tcp 22 is not forwarded: it is divide's own sshd. The edge's firewall (`edge_firewall_dropins`)
-does not open 53, so the tcp/udp 53 forward reaches a closed port. PowerDNS is retired.
+does not open 53, so the tcp/udp 53 forward reaches a closed port. PowerDNS is retired. udp 443
+is for holyWisp's WebTransport listener on the edge (prepared 2026-11-18, not live yet: "WebTransport
+on udp 443" below).
 
 NAT:
 
@@ -473,6 +475,71 @@ dnat to 172.16.5.10`) from `/etc/edge-own-address.nft`. It is NAT only, not a fi
 `conf.d/05-divide-acme.conf` on the edge answers ACME for divide itself:
 `divide.eli.gift` `/.well-known/acme-challenge/` goes to 172.16.5.1:80, and the rest of that name
 is a 301 to `:8006`.
+
+## WebTransport on udp 443 (prepared 2026-11-18)
+
+Until 2026-11-18 the udp 443 forward reached a port the edge's firewall admits and nothing binds.
+holyWisp's WebTransport listener (holyWisp `docs/webtransport.md`: Wisp over HTTP/3, QUIC and TLS
+in holyWisp itself) is prepared to bind it: `holywisp_webtransport` in
+`ansible/inventory/group_vars/edge.yml`, live once `holywisp_ref` reaches the holyWisp commit that
+adds the listener. Until that pin lands with it, a run of the `wisp` tag stops on the controller
+(the pinned build does not know the `webtransport-*` keys) before it touches the edge. Nothing on
+divide changes:
+
+- **The listener.** holyWisp binds **172.16.5.10:443/udp** (`webtransport-host`, from
+  `host_vars/edge.yml`), one `SO_REUSEPORT` socket per worker, with `CAP_NET_BIND_SERVICE` in
+  `abulxt-edge-wisp.service`. No nft redirect on the edge: `group_vars/edge.yml` says why.
+  OpenResty has no QUIC listener, so nothing else wants the port. The edge's firewall already
+  admits udp 443 (`edge_firewall_dropins`), and so does `201.fw` (above).
+- **Client addresses.** The DNAT keeps the client's source address, and holyWisp keys its per-IP
+  limits and reputation on it. No proxy is in front of this UDP, so holyWisp reads no proxy
+  headers on it.
+- **Replies and the second uplink.** A reply leaves from 91.199.82.174 only while the DNAT's
+  conntrack entry lives. A packet the edge sends after the entry is gone is a new flow from the
+  edge, which `edge_out` sends out of VLAN 2832 from 37.9.34.169, an address the client never
+  talked to, and the client drops it. divide keeps a UDP entry for about 30 s, so holyWisp sends a
+  keepalive PING after 20 s without sending (its idle timeout, `webtransport-idle-timeout-s`, is
+  30 s). A client whose own NAT changes its port mid-session keeps the session (QUIC path
+  validation); divide just sees a new flow through the DNAT.
+- **The page side** is TCP as before: `GET /webtransport.json` on holywisp.fracit.al and wisp.baby
+  (and on every keyed relay path) goes through OpenResty to holyWisp's :6001 and names
+  `https://holywisp.fracit.al/` and the current and previous certificate hashes (holyWisp makes
+  its own P-256 certificate every 6 days; the page pins it with `serverCertificateHashes`). That
+  one URL is right for every page: the Cloudflare-proxied names (fracit.al, stomp.fracit.al)
+  resolve to Cloudflare, whose udp 443 does not reach divide.
+- **Hairpin.** Other guests reach it on 91.199.82.174:443 through `hairpin_mark`, like tcp 443.
+  The edge itself cannot (a guest cannot hairpin to itself): from the edge, test 172.16.5.10:443.
+
+Rollout (a production change: the user's go-ahead first, AGENTS.md "Servers"):
+
+1. `holywisp_ref` in `ansible/roles/edge_wisp/defaults/main.yml` is at or after holyWisp a1d06e6,
+   the commit that adds WebTransport (pinned there on 2026-11-18).
+2. Apply the relay and the page routes: `gh workflow run apply.yml -f playbook=edges -f
+tags=wisp,relay -f check=false` (approved on `production`), or locally
+   `ansible-playbook playbooks/edges.yml --tags wisp,relay --vault-password-file ~/.abulxt-vault-pass`.
+   The play builds holyWisp, checks on the controller that it accepts the new config, restarts the
+   relay (the config and the unit change, so every WebSocket session drops once), checks
+   `/health`, `/webtransport.json` and the udp socket, and reloads OpenResty with the two
+   `/webtransport.json` locations. `playbooks/firewall.yml` brings the drop-in's comment up to date
+   (udp 443 is open already), whenever convenient.
+3. From a machine outside divide:
+   - `curl -sSi https://holywisp.fracit.al/webtransport.json` and the same on `https://wisp.baby/`:
+     200, `cache-control: no-store`, `access-control-allow-origin: *`, a body with
+     `"url":"https://holywisp.fracit.al/"` and at least one `sha-256` hash.
+   - `curl --http3-only -kv https://holywisp.fracit.al/` (a curl with HTTP3 in `curl -V`): the QUIC
+     and TLS 1.3 handshake completes with ALPN h3 and TLS_CHACHA20_POLY1305_SHA256. `-k` because
+     the certificate is self-signed; the HTTP answer to a plain GET does not matter.
+   - Chrome, DevTools console on `https://holywisp.fracit.al/`:
+     `const j = await (await fetch('/webtransport.json')).json(); const wt = new WebTransport(j.url, { serverCertificateHashes: j.hashes.map((h) => ({ algorithm: h.algorithm, value: Uint8Array.from(atob(h.value), (c) => c.charCodeAt(0)) })) }); await wt.ready;`
+     resolves. Leave it idle for a minute and check `wt.closed` has not settled: that is the
+     keepalive holding divide's conntrack entry.
+4. On the edge: `ss -Hlun 'sport = :443'` lists 172.16.5.10:443 once per worker, and
+   `journalctl -u abulxt-edge-wisp` has no WebTransport errors. On divide (read only):
+   `conntrack -L -p udp --orig-port-dst 443` shows the session's flow.
+
+Rollback: `holywisp_webtransport: false` in `group_vars/edge.yml` and the same apply. The config
+and the unit then render as they did before 2026-11-18, and the OpenResty files differ only by two
+header comments.
 
 ## Cloudflare Tunnel: one daemon on the edge (2026-11-17)
 

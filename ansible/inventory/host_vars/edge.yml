@@ -120,6 +120,11 @@ edge_warp_accept_tos: true
 holywisp_udp_warp: true
 # Per-client WARP exits: holyWisp proxy-client-key (README "Cloudflare WARP").
 holywisp_proxy_client_key: true
+# WebTransport (group_vars/edge.yml): divide DNATs public udp 443 to this address, keeping the
+# client's source, so the listener binds it rather than every interface (holyWisp's `host` here
+# is "", which would include the WARP tunnels). Replies leave from 91.199.82.174 while divide's
+# conntrack entry lives (about 30 s, kept up by holyWisp's 20 s keepalive); docs/divide-host.md.
+holywisp_webtransport_host: "{{ ansible_host }}"
 
 # Static sites (roles/edge_static, docs/divide-host.md "Static sites on the edge"): content on CT
 # 201's mount point /srv/static, delivered with rsync as `static` through divide. pages.eli.gift

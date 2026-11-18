@@ -31,12 +31,22 @@ TasksMax=512
 
 # ---- Sandbox (holyWisp upstream unit). Each line is load-bearing; review before relaxing. ----
 NoNewPrivileges=yes
-{% if holywisp_udp_warp | bool and edge_wisp_manage_router and edge_warp_enabled | default(false) | bool and edge_warp_mode | default('kernel') == 'kernel' %}
+{% set edge_wisp_cap_mark = holywisp_udp_warp | bool and edge_wisp_manage_router and edge_warp_enabled | default(false) | bool and edge_warp_mode | default('kernel') == 'kernel' %}
+{% set edge_wisp_cap_bind = holywisp_webtransport | bool and holywisp_webtransport_port | int < 1024 %}
+{% set edge_wisp_caps = (['CAP_NET_ADMIN'] if edge_wisp_cap_mark else []) + (['CAP_NET_BIND_SERVICE'] if edge_wisp_cap_bind else []) %}
+{% if edge_wisp_cap_mark %}
 # UDP on WARP (holywisp_udp_warp), and with holywisp_tcp_direct the TCP dialled here (tcp-warp):
 # SO_MARK on each stream's socket picks a WARP tunnel. Nothing else; without it holyWisp logs an
 # ERROR, sends UDP unmarked and follows tcp-warp-fallback for TCP.
-CapabilityBoundingSet=CAP_NET_ADMIN
-AmbientCapabilities=CAP_NET_ADMIN
+{% endif %}
+{% if edge_wisp_cap_bind %}
+# WebTransport on udp {{ holywisp_webtransport_port }} (holywisp_webtransport): binding a port below 1024, nothing
+# else. A redirect from 443 to an unprivileged port would need a NAT table beside the vendored
+# firewall and that port open in it (group_vars/edge.yml).
+{% endif %}
+{% if edge_wisp_caps | length > 0 %}
+CapabilityBoundingSet={{ edge_wisp_caps | join(' ') }}
+AmbientCapabilities={{ edge_wisp_caps | join(' ') }}
 {% else %}
 # The port is >= 1024, so the server needs no capability at all.
 CapabilityBoundingSet=

@@ -160,3 +160,21 @@ serve-webclient = {{ 'on' if holywisp_serve_webclient | bool else 'off' }}
 # name, but spelled out so the field is right wherever the page is opened from).
 webclient-wisp-url = {{ holywisp_webclient_wisp_url }}
 {% endif %}
+{% if holywisp_webtransport | bool %}
+
+# ---------------------------------------------------------------- WebTransport
+# Wisp over WebTransport (HTTP/3 over QUIC) on UDP, beside the WebSocket listener above. QUIC and
+# TLS end here, not in OpenResty, so proxy headers are never read on it: the client is the UDP
+# peer address. No webtransport-cert/-key: holyWisp's own P-256 certificate, replaced every 6
+# days, whose hashes GET /webtransport.json on the TCP port publishes for serverCertificateHashes.
+webtransport = on
+{%   if holywisp_webtransport_host | length > 0 %}
+webtransport-host = {{ holywisp_webtransport_host }}
+{%   endif %}
+webtransport-port = {{ holywisp_webtransport_port }}
+{%   if holywisp_webtransport_url | length > 0 %}
+webtransport-url = {{ holywisp_webtransport_url }}
+{%   endif %}
+# A keepalive PING goes out after 20 s idle, inside a NAT's UDP timeout (divide's: about 30 s).
+webtransport-idle-timeout-s = {{ holywisp_webtransport_idle_timeout_s }}
+{% endif %}

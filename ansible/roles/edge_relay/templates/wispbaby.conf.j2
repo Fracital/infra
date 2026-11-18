@@ -13,6 +13,8 @@
 #     GET /live/history the graph's longer series, max-age=30
 #     GET /you          this visitor on this box: address, GeoIP, TCP RTT, last 24 h; no-store
 #     GET /health       holyWisp's /health
+#     GET /webtransport.json  holyWisp's WebTransport URL and certificate hashes (holywisp_webtransport),
+#                       no-store; the WebTransport session itself is udp 443 to holyWisp, not nginx
 #     /<file>           the page's other static files; anything else 404
 #
 #   http://{{ wisp_zone }}/ (:80)
@@ -360,6 +362,30 @@ server {
 {{ wispbaby_headers() }}
         add_header Content-Security-Policy $wispbaby_csp always;
     }
+{% if holywisp_webtransport | default(false) | bool %}
+
+    # WebTransport (edge_wisp holywisp_webtransport): the listener's URL and certificate hashes,
+    # from holyWisp's TCP port like /health. An exact match, so the static-file rule below (which
+    # takes .json, from /var/www/wispbaby, cached 300 s) never answers it: the hashes change with
+    # the certificate every 6 days. Access-Control-Allow-Origin * is holyWisp's, passed through.
+    location = /webtransport.json {
+        limit_except GET {
+            deny all;
+        }
+        proxy_pass http://127.0.0.1:{{ edge_wisp_port }}/webtransport.json;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 5s;
+        proxy_cache off;
+        proxy_hide_header Cache-Control;
+        add_header Cache-Control "no-store" always;
+{{ wispbaby_headers() }}
+        add_header Content-Security-Policy $wispbaby_csp always;
+    }
+{% endif %}
 
     # The page's other files (wispbaby/site/): plain names, optionally in subdirectories, never
     # dotfiles. Not content-hashed, so a short max-age (revalidated with ETag after).

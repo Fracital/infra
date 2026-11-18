@@ -208,6 +208,43 @@
   until: edge_wisp_health.rc == 0 and '"ok"' in edge_wisp_health.stdout
   when: not ansible_check_mode
 
+# WebTransport (holywisp_webtransport): a page pins the listener's self-signed certificate by the
+# hashes /webtransport.json lists, so a box that answers without them (a build without the
+# listener, a certificate that failed to generate) serves no WebTransport client at all, though
+# its WebSocket relay is fine. And the UDP socket must be bound where the DNAT delivers.
+- name: WebTransport publishes its certificate hashes
+  ansible.builtin.command:
+    argv:
+      [
+        curl,
+        -fsS,
+        --max-time,
+        "5",
+        "http://127.0.0.1:{{ edge_wisp_port }}/webtransport.json",
+      ]
+  register: edge_wisp_wt_json
+  changed_when: false
+  retries: 5
+  delay: 2
+  until: edge_wisp_wt_json.rc == 0 and '"sha-256"' in edge_wisp_wt_json.stdout
+  when:
+    - holywisp_webtransport | bool
+    - not ansible_check_mode
+
+- name: WebTransport listens on udp {{ holywisp_webtransport_port }}
+  ansible.builtin.command:
+    argv: [ss, -Hlun, "sport = :{{ holywisp_webtransport_port }}"]
+  register: edge_wisp_wt_udp
+  changed_when: false
+  failed_when: >-
+    edge_wisp_wt_udp.rc != 0
+    or (holywisp_webtransport_host | length > 0
+        and (holywisp_webtransport_host ~ ':' ~ holywisp_webtransport_port) not in edge_wisp_wt_udp.stdout)
+    or edge_wisp_wt_udp.stdout | length == 0
+  when:
+    - holywisp_webtransport | bool
+    - not ansible_check_mode
+
 # The router's classifier fails open: a box Cloudflare Gateway refuses (its egress address not
 # on the DoH allowlist, as wisp-mnz's SLAAC IPv6 was until 2026-11-16) calls every name clean,
 # and shady and adult names leave it unfiltered with nothing but a warning in the log. So the
