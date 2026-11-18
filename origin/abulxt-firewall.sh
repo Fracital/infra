@@ -5,12 +5,14 @@
 #   - 22          SSH management
 #   - 80/443      public HTTP/HTTPS (OpenResty, on-demand TLS)
 #   - udp/443     HTTP/3 (QUIC)
-#   - 9080, 8822, 6379, 1082  reachable ONLY from the BYOD edge subnets (EDGE_SUBNETS;
+#   - 9080, 8822, 1082 (and 6379 when set)  reachable ONLY from the BYOD edge subnets (EDGE_SUBNETS;
 #       since the move to divide: divide's vmbr1 172.16.5.0/24, where divide's bridge
 #       firewall lets only the edge CT 172.16.5.10 reach these ports)
 #       9080  origin-internal reverse-proxy target (BYOD edge → amph traffic)
 #       8822  abulxt-domains /ask (edges call before issuing BYOD certs)
-#       6379  shared lua-resty-auto-ssl Redis store (certs + ACME tokens)
+#       6379  shared lua-resty-auto-ssl Redis store (certs + ACME tokens), only while it is on
+#             amph: AUTO_SSL_REDIS_PORT empty (firewall.env, since 2026-11-17 when the store
+#             moved to terp.db) opens no Redis port; unset still means 6379
 #       1082  shady-relay: authenticated SOCKS5 hop for edge Wisp → Mullvad egress
 # Everything else inbound is dropped.
 set -euo pipefail
@@ -23,7 +25,7 @@ set -euo pipefail
 # was ashburn's 45.82.161.0/24, cancelled 2026-11-13: those addresses go back to G-Core.
 EDGE_SUBNETS=${EDGE_SUBNETS:-}
 [ -n "$EDGE_SUBNETS" ] || echo "abulxt-firewall: EDGE_SUBNETS is empty, the edge ports stay closed" >&2
-AUTO_SSL_REDIS_PORT=${AUTO_SSL_REDIS_PORT:-6379}
+AUTO_SSL_REDIS_PORT=${AUTO_SSL_REDIS_PORT-6379}
 SHADY_RELAY_PORT=${SHADY_RELAY_PORT:-1082}
 
 iptables -N ABULXT_INPUT 2>/dev/null || true
@@ -34,9 +36,10 @@ iptables -A ABULXT_INPUT -p icmp -j ACCEPT
 iptables -A ABULXT_INPUT -p tcp --dport 22 -j ACCEPT
 iptables -A ABULXT_INPUT -p tcp -m multiport --dports 80,443 -j ACCEPT
 iptables -A ABULXT_INPUT -p udp --dport 443 -j ACCEPT
-# BYOD edges → origin: proxy target + domain validator + shared auto-ssl Redis.
+# BYOD edges → origin: proxy target + domain validator + shady relay (+ auto-ssl Redis when set).
+EDGE_PORTS="9080,8822${AUTO_SSL_REDIS_PORT:+,$AUTO_SSL_REDIS_PORT},$SHADY_RELAY_PORT"
 for subnet in $EDGE_SUBNETS; do
-  iptables -A ABULXT_INPUT -p tcp -s "$subnet" -m multiport --dports 9080,8822,"$AUTO_SSL_REDIS_PORT","$SHADY_RELAY_PORT" -j ACCEPT
+  iptables -A ABULXT_INPUT -p tcp -s "$subnet" -m multiport --dports "$EDGE_PORTS" -j ACCEPT
 done
 iptables -A ABULXT_INPUT -j DROP
 iptables -C INPUT -j ABULXT_INPUT 2>/dev/null || iptables -I INPUT 1 -j ABULXT_INPUT

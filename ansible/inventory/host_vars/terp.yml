@@ -1,5 +1,5 @@
 ---
-# terp: Fracital's origin, VM 116 on divide (172.16.5.62, private only, reached through divide).
+# terp: Fracital's origin, CT 216 on divide (172.16.5.62, private only, reached through divide).
 
 # --- Deploy user (role deploy_user via playbooks/fracital-origin.yml) -------
 # Fracital's and cloaks-fracital's CI log in as `deploy`, forced through

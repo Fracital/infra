@@ -141,8 +141,8 @@ root@91.199.82.174`:
   meal). It serves `byod.abstracteducation.loan`, Fracital's `byod.fracit.al` (both
   names share the one address; `host_vars/edge.yml` says what that costs Fracital),
   wisp.baby, holyunb.locker, blockshooter.io and the krunk.io routes.
-- `amph` (172.16.5.3): abulxt's origin, private only.
-- `terp` (VM 116, 172.16.5.62): Fracital's origin, private only.
+- `amph` (CT 213, 172.16.5.3; VM 113 until 2026-11-17): abulxt's origin, private only.
+- `terp` (CT 216, 172.16.5.62; VM 116 until 2026-11-17): Fracital's origin, private only.
 
 The overseas wisp cloud (`wisp-iev`, `wisp-mia`, `wisp-jnb`, `wisp-ams` and their
 Proxmox hosts) was dismantled on 2026-11-16, and the VPSs santaclara, losangeles,
@@ -162,7 +162,8 @@ Architecture facts (`ansible/RUNBOOK.md` has the detail):
   `playbooks/dns-edge.yml`) are retired; the Gcore zones are an older static rollback
   copy (`playbooks/dns.yml`, `ansible/README.md` "Edge DNS").
 - **Origin relay.** Edges proxy to amph's origin-internal listener (:9080) with a shared
-  `X-BYOD-Token`. amph's firewall opens 9080/8822/6379 to the edge only.
+  `X-BYOD-Token`. amph's firewall opens 9080/8822/1082 to the edge only (6379 closed
+  since 2026-11-18: amph runs no Redis).
 
 ### Edge health (read before touching health logic)
 

@@ -9,7 +9,7 @@ public 91.199.82.174), with its guests behind NAT on 172.16.5.0/24:
 | Host                         | What                                                                                                     | Managed by                                                        |
 | ---------------------------- | -------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
 | `edge` (CT 201, 172.16.5.10) | OpenResty edge and holyWisp: abulxt byod, Fracital, wisp.baby, holyunb.locker, blockshooter.io, krunk.io | `playbooks/edges.yml`, `wisp.yml`, `firewall.yml`, `fail2ban.yml` |
-| `amph` (VM, 172.16.5.3)      | abulxt's origin: shared auto-ssl Redis, firewall, origin holyWisp, shady-relay                           | `playbooks/origin.yml`                                            |
+| `amph` (CT 213, 172.16.5.3)  | abulxt's origin: firewall, origin holyWisp, shady-relay (no Redis since 2026-11-18)                      | `playbooks/origin.yml`                                            |
 | `terp` (VM, 172.16.5.62)     | Fracital's origin OpenResty                                                                              | `playbooks/fracital-origin.yml`                                   |
 | divide                       | NAT, guest firewall, ACME                                                                                | by hand, `docs/divide-host.md`                                    |
 

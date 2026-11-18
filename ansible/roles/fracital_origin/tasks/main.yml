@@ -51,15 +51,14 @@
             path: /usr/sbin/policy-rc.d
             state: absent
 
-- name: Load tcp_bbr at boot
-  ansible.builtin.copy:
-    dest: /etc/modules-load.d/tcp_bbr.conf
-    content: "tcp_bbr\n"
-    owner: root
-    group: root
-    mode: "0644"
+# terp is an unprivileged container (CT 216 on divide, 2026-11-17) and cannot load modules:
+# divide loads tcp_bbr (/etc/modules-load.d/bbr.conf, docs/divide-host.md "TCP tuning and modules").
+- name: No modules-load file in the container
+  ansible.builtin.file:
+    path: /etc/modules-load.d/tcp_bbr.conf
+    state: absent
 
-# Setting the sysctl loads tcp_bbr on demand. Only new connections pick it up: the edges'
+# tcp_bbr is loaded on divide (a container cannot load it). Only new connections pick it up: the edges'
 # keepalive connections keep cubic until they close (or until an OpenResty reload on terp).
 - name: TCP tuning for the edge relay legs
   ansible.posix.sysctl:

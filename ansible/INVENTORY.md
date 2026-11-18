@@ -17,6 +17,6 @@ repo) is archived, not running, on amph: `/root/archive/linkgen-ashburn-20261113
 
 ## Origin
 
-| Alias                    | Name                | Public IP                                                   | City     | Region   | Country | Role                                                                |
-| ------------------------ | ------------------- | ----------------------------------------------------------- | -------- | -------- | ------- | ------------------------------------------------------------------- |
-| `amph` (`abulxt-origin`) | amph (VM on divide) | none (172.16.5.3 private, via ProxyJump root@91.199.82.174) | Manassas | Virginia | US      | OpenResty + app + Postgres + abulxt-domains + shared auto-ssl Redis |
+| Alias                    | Name                    | Public IP                                                   | City     | Region   | Country | Role                                                             |
+| ------------------------ | ----------------------- | ----------------------------------------------------------- | -------- | -------- | ------- | ---------------------------------------------------------------- |
+| `amph` (`abulxt-origin`) | amph (CT 213 on divide) | none (172.16.5.3 private, via ProxyJump root@91.199.82.174) | Manassas | Virginia | US      | OpenResty + app + abulxt-domains (Redis and Postgres on terp.db) |

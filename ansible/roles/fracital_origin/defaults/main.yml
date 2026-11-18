@@ -22,7 +22,8 @@ fracital_health_host: fracital.xyz
 # the first loss burst collapses the window to 6-12 segments, about 150 KB/s per pull (2026-11-10).
 # BBR paces to the measured bottleneck rate and does not treat isolated loss as congestion; no
 # slow-start restart on the edges' idle keepalive connections. Written to
-# /etc/sysctl.d/90-fracital-tcp.conf; tcp_bbr is loaded at boot (modules-load.d).
+# /etc/sysctl.d/90-fracital-tcp.conf (both keys are per network namespace, so they work in terp's
+# container); divide loads tcp_bbr.
 fracital_origin_sysctl:
   net.ipv4.tcp_congestion_control: bbr
   net.ipv4.tcp_slow_start_after_idle: 0

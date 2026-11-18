@@ -2,12 +2,16 @@
 
 terp.db is a G-Core VPS at **80.93.219.21** (Debian 13), on the same provider network as divide
 (about 0.3 ms away). Since 2026-11-17 it holds the Postgres databases of abulxt, holt, Fracital,
-holy and estro, and the edge's shared Redis. It also runs mailcow in Docker (its own Redis and
+holy and estro, the edge's shared Redis, one Redis each for fg, kru and eagler, and a MariaDB for
+eagler's Pterodactyl panel (below). It
+also runs mailcow in Docker (its own Redis and
 MariaDB); nothing on this page touches mailcow. No role in this repo configures terp.db: it was
 set up by hand, and this page is the record. The copy on the host is authoritative.
 
 Clients reach it by name: `terp.db` resolves to 80.93.219.21 through `/etc/hosts` on each client
-(amph, holy, chat, terp), because the pinned certificate is issued to that name.
+(amph, holy, chat, terp, fg, guca, kru), because the pinned certificate is issued to that name.
+eagler has the line too, for its Redis and MariaDB (its `/etc/cloud/templates/hosts.debian.tmpl`
+as well).
 
 ## Postgres 18
 
@@ -34,14 +38,17 @@ everything written since, including the migrated databases. Prefer restoring a d
 
 ### Databases and roles
 
-| Database      | Owner role      | Client                                                   | Locale                                 |
-| ------------- | --------------- | -------------------------------------------------------- | -------------------------------------- |
-| `fracital`    | Fracital's role | terp, `/opt/fracital/repo/.env`                          | `en_US.UTF-8` (libc)                   |
-| `abulxt`      | `abulxt`        | amph, abulxt `config.js` `db.url`                        | builtin `C.UTF-8`                      |
-| `holt`        | `holt`          | amph, `/opt/holt/config.js` `db.url`                     | builtin `C.UTF-8`                      |
-| `holy`        | `holy`          | holy, website2 `config/config.js` `db`                   | `C.UTF-8` (libc), `pg_trgm`            |
-| `elichat`     | `elichat`       | chat, `/opt/elichat/.env` `DATABASE_URL`                 | `C`, `SQL_ASCII`                       |
-| `fg_api_beta` | `fg_api`        | fg (CT 206), `/etc/fg-api/environment` `FG_POSTGRES_DSN` | `C.UTF-8` (libc), `citext`, `pgcrypto` |
+| Database        | Owner role       | Client                                                        | Locale                                 |
+| --------------- | ---------------- | ------------------------------------------------------------- | -------------------------------------- |
+| `fracital`      | Fracital's role  | terp, `/opt/fracital/repo/.env`                               | `en_US.UTF-8` (libc)                   |
+| `abulxt`        | `abulxt`         | amph, abulxt `config.js` `db.url`                             | builtin `C.UTF-8`                      |
+| `holt`          | `holt`           | amph, `/opt/holt/config.js` `db.url`                          | builtin `C.UTF-8`                      |
+| `holy`          | `holy`           | holy, website2 `config/config.js` `db`                        | `C.UTF-8` (libc), `pg_trgm`            |
+| `elichat`       | `elichat`        | chat, `/opt/elichat/.env` `DATABASE_URL`                      | `C`, `SQL_ASCII`                       |
+| `fg_api_beta`   | `fg_api`         | fg (CT 206), `/etc/fg-api/environment` `FG_POSTGRES_DSN`      | `C.UTF-8` (libc), `citext`, `pgcrypto` |
+| `labelsupplier` | `lsupplier`      | chat, `/opt/labelsupplier/.env` `DATABASE_URL`                | `C`, `SQL_ASCII`                       |
+| `guacamole_db`  | `guacamole_user` | guca (CT 117), `/etc/guacamole/guacamole.properties`          | `C`, `SQL_ASCII`                       |
+| `krunknative`   | `krunknative`    | kru (CT 120), `/etc/krunknative/coord-db.env` + `secrets.env` | `C.UTF-8` (libc)                       |
 
 Every app role is a plain login role (no superuser, createdb, createrole or replication) that
 owns its own database and everything in it. `CONNECT` and `TEMPORARY` are revoked from `PUBLIC`
@@ -67,6 +74,9 @@ hostssl holt     holt          91.199.82.174/32 scram-sha-256
 hostssl holy     holy          91.199.82.174/32 scram-sha-256
 hostssl elichat  elichat       91.199.82.174/32 scram-sha-256
 hostssl fg_api_beta fg_api 91.199.82.174/32 scram-sha-256
+hostssl labelsupplier lsupplier 91.199.82.174/32 scram-sha-256
+hostssl guacamole_db guacamole_user 91.199.82.174/32 scram-sha-256
+hostssl krunknative krunknative 91.199.82.174/32 scram-sha-256
 hostssl all all      0.0.0.0/0 reject
 hostssl all all      ::/0      reject
 ```
@@ -83,7 +93,8 @@ The server certificate is self-signed, `CN=terp.db`, `subjectAltName DNS:terp.db
 to `/etc/postgresql/ssl/terp-db.{crt,key}` so a reinstall of the `ssl-cert` package cannot swap it
 under the clients.
 
-Each client (amph, holy, chat, terp) keeps a copy at `/etc/ssl/terp-db/ca.crt` and connects with
+Each client (amph, holy, chat, terp, fg, guca, kru) keeps a copy at `/etc/ssl/terp-db/ca.crt` and
+connects with
 
 ```
 postgres://<role>:<password>@terp.db:5432/<db>?sslmode=verify-full&sslrootcert=/etc/ssl/terp-db/ca.crt
@@ -93,17 +104,24 @@ node-postgres (abulxt, holt, holy) and Go's pgx (elichat) read both parameters f
 host must be the name `terp.db`: with the address, verification fails by design. Fracital (terp,
 both `/opt/fracital/repo/.env` and `/opt/fracital/dev/.env`) uses host `terp.db` in `DATABASE_URL`
 plus `DATABASE_CA=/etc/ssl/terp-db/ca.crt`, and always verifies (since 2026-11-17, commit d164559).
+labelsupplier (Go, lib/pq) reads both from the URL too. Guacamole sets them in
+`guacamole.properties` (`postgresql-hostname: terp.db`, `postgresql-ssl-mode: verify-full`,
+`postgresql-ssl-root-cert-file: /etc/ssl/terp-db/ca.crt`). kn_brain (KrunkNative, libpq) builds its
+connection from `KN_DATABASE_*` and passes no TLS keyword, so `coord-db.env` also sets libpq's
+`PGSSLMODE=verify-full` and `PGSSLROOTCERT=/etc/ssl/terp-db/ca.crt`.
 
-Name resolution, on each client: `80.93.219.21 terp.db` in `/etc/hosts`. amph also has it in
-`/etc/cloud/templates/hosts.debian.tmpl` (cloud-init rewrites `/etc/hosts` from it); on the
-containers the line sits outside Proxmox's `# --- BEGIN PVE ---` block, which Proxmox leaves alone.
+Name resolution, on each client: `80.93.219.21 terp.db` in `/etc/hosts`. amph had it in
+`/etc/cloud/templates/hosts.debian.tmpl` too while it was a VM (cloud-init is purged since it became
+CT 213 on 2026-11-17); on the containers the line sits outside Proxmox's `# --- BEGIN PVE ---` block, which Proxmox leaves alone.
 
 chat's default route goes out through mull (Mullvad), so chat has a host route
 `80.93.219.21/32 via 172.16.5.1` (in `/etc/network/interfaces`, next to the Cloudflare routes)
 to leave from divide's NAT address like the others.
 
 Rotating the certificate: make a new pair for `terp.db`, install it on terp.db, copy the `.crt` to
-every client's `/etc/ssl/terp-db/ca.crt` at the same time, then reload Postgres.
+every client's `/etc/ssl/terp-db/ca.crt` at the same time, then reload Postgres. The MariaDB
+(below) serves a copy of the same pair from `/etc/mysql/ssl/`: replace that copy too and restart
+`mariadb`.
 
 ## Shared Redis (6380)
 
@@ -121,10 +139,119 @@ every client's `/etc/ssl/terp-db/ca.crt` at the same time, then reload Postgres.
   are in `/root/terpdb-redis.secret`; the config holds only their SHA-256 hashes.
 - Plain TCP, no TLS: the password crosses the provider network in the clear.
 
-Data: the edge's certificates, `auto-ssl:*` (121 certificates on 2026-11-17), copied from amph.
-amph's Redis is still the live copy until the edge's apply (`ansible/RUNBOOK.md` "Shared Redis on
-terp.db"). amph has `/root/redis-copy-to-terp-db.sh` for steps 4 and 6 of that procedure (no
-argument: copy with replace; `--add`: copy only missing keys; `--check`: compare).
+Data, by key prefix (nothing on this instance flushes or uses `CONFIG`):
+
+| Prefix             | Writer                                          | Readers                                     | Expiry                                                |
+| ------------------ | ----------------------------------------------- | ------------------------------------------- | ----------------------------------------------------- |
+| `auto-ssl:*`       | the edge's lua-resty-auto-ssl                   | the edge; abulxt-wispstats (a `SCAN` count) | none (certificates); challenge tokens are short-lived |
+| `linkroute:v1`     | abulxt-community (`abulxt-community-linkroute`) | the edge (`lua/link_routes.lua`)            | none                                                  |
+| `wispbaby:box:`    | the edge (`lua/wispstats.lua`, every 2 s)       | abulxt-wispstats                            | 30 s                                                  |
+| `wispbaby:hll:`    | the edge (`PFADD`, one HyperLogLog per UTC day) | abulxt-wispstats (`PFCOUNT`)                | about 35 days                                         |
+| `wispbaby:live`    | abulxt-wispstats                                | the edge (wisp.baby `/live`)                | 60 s                                                  |
+| `wispbaby:history` | abulxt-wispstats                                | the edge (wisp.baby `/live/history`)        | about 15 min                                          |
+
+The certificates (121 on 2026-11-17) were copied from amph before the edge's switch
+(`ansible/RUNBOOK.md` "Shared Redis on terp.db"). wisp.baby's stats followed at 00:43 UTC on
+2026-11-18: the `wispbaby:hll:*` and `wispbaby:history` keys were copied with `MIGRATE ... COPY`, the
+edge (`--tags relay`) and abulxt's `wispStats.redis` were switched within a second of each other, and
+the HyperLogLogs written to amph in that second were merged in with `PFMERGE`. Every key here carries
+a TTL except the certificates and `linkroute:v1`, so `noeviction` never fills up with stats. The stats
+write about one pipeline a second in total and use well under 1 MB, too little to crowd the
+certificates, so they did not get an instance of their own.
+
+amph runs no Redis since then: `redis-server` is stopped and disabled there, port 6379 is closed in
+amph's firewall, CT 213's guest firewall and divide's `from_edge` chain. Its last dump is the rollback
+(`amph:/root/redis-amph-retired-20261118004759.rdb`, also `/var/lib/redis/dump.rdb`; RUNBOOK.md has
+the steps).
+
+## App Redis instances (6381 to 6383)
+
+Since 2026-11-17 every app that had a Redis of its own on a divide guest has its own instance here
+instead of a user on the shared one: the shared `default` user can read the certificate store, the
+panel needs `FLUSHDB`, and fg-api's client cannot send a username. Each is `redis-server@<app>` (the
+same template unit, enabled), config `/etc/redis/redis-<app>.conf` (root:redis 0640), data in
+`/var/lib/redis/<app>`, log `/var/log/redis/redis-<app>.log`, bound to `127.0.0.1` and
+`80.93.219.21`. Persistence and eviction copy the source's. Passwords (generated with `openssl rand
+-hex 32`) are in `/root/terpdb-redis-<app>.secret` (`REDIS_APP_PASSWORD` for the app's user,
+`REDIS_ADMIN_PASSWORD` for `admin`, which has everything); the configs hold only SHA-256 hashes.
+
+| Port | Instance | App (client, config)                                                                                         | Policy                                        | App user's ACL                                                                                   |
+| ---- | -------- | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| 6381 | `fg`     | fg-api on fg (CT 206), go-redis; `/etc/fg-api/environment` `FG_REDIS_ADDR=terp.db:6381`, `FG_REDIS_PASSWORD` | RDB snapshots, no AOF, 256 MB, `noeviction`   | `default`: all but flush, `CONFIG`, `DEBUG`, `SHUTDOWN`, `MODULE`, `MONITOR`, replication, `ACL` |
+| 6382 | `kru`    | kn_brain on kru (CT 120), hiredis; `/etc/krunknative/redis.env`, `KN_REDIS_PASSWORD` in `secrets.env`        | no persistence, 128 MB, `volatile-lru`, 4 DBs | `kn_brain`: `~kn:* &kn:* +@all -@dangerous`; `default` is off                                    |
+| 6383 | `eagler` | Pterodactyl panel on eagler (VM 104), predis; `/var/www/pterodactyl/.env` `REDIS_HOST/PORT/PASSWORD`         | RDB snapshots, no AOF, 256 MB, `noeviction`   | `default`: as fg's, but `FLUSHDB` allowed (Laravel's `cache:clear`)                              |
+
+- fg: in-flight state only (revoked sessions, live runs), database 1 (`FG_REDIS_DB=1`), every key
+  has a TTL. `noeviction` so a revocation is never evicted.
+- kru: kn_brain's hot tier (caches, presence, rate limits, pub/sub), nothing authoritative. As in
+  KrunkNative's `kn_redis` role it has no persistence on purpose (a restored snapshot could bring
+  back sessions revoked meanwhile), so it is not in the nightly backup either. KrunkNative's
+  `group_vars/central/main.yml` sets `kn_redis_remote_url: redis://terp.db:6382`, so its deploys
+  keep kn-redis off on kru and write `redis.env` for terp.db.
+- eagler: Laravel cache, sessions and queue (databases 0 and 1, prefix `pterodactyl_database_`).
+  Config is not cached (`bootstrap/cache/config.php` absent), so a `.env` change applies on the next
+  request; `pteroq` needs a restart.
+- Not moved: chat's (CT 106) local Redis, the cache of `labelsupplier-gateway` (`REDIS_ADDR`,
+  empty). Its client (`labelsupplier/db/redis.go`) speaks only GET and SET, with no `AUTH`, so it
+  cannot use a password until the gateway is rebuilt with one.
+
+The data was copied key by key with its TTL (`SCAN`, `DUMP`, `PTTL`, `RESTORE` as `admin`; the
+script is `/root/rcopy.py` on fg, kru and eagler), with the app stopped (fg) or as a first pass, the
+switch and a second pass that adds only missing keys (kru, eagler).
+
+| Instance | From                                 | Keys | Downtime                                     |
+| -------- | ------------------------------------ | ---- | -------------------------------------------- |
+| `fg`     | fg `redis-server` 127.0.0.1:6379     | 16   | 0.1 s, 22:57:36 UTC (fg-api stop and start)  |
+| `kru`    | kru `kn-redis` 127.0.0.1:6380        | 1    | 0.4 s, 22:58:28 UTC (both kn_brain restarts) |
+| `eagler` | eagler `redis-server` 127.0.0.1:6379 | 16   | none, 23:00:56 UTC (`pteroq` restart)        |
+
+The old Redis on each guest is stopped and disabled, its data kept (`/var/lib/redis/dump.rdb` on fg
+and eagler; kru's had none). Config backups: fg `/etc/fg-api/environment.bak-terpdb-redis-*`, kru
+`/etc/krunknative/{redis,secrets}.env.bak-terpdb-redis-*`, eagler
+`/root/pterodactyl.env.bak-terpdb-redis-*` and `/etc/hosts.bak-terpdb-redis-*`, plus each guest's
+old `redis.conf.bak-terpdb-redis-*`. Rollback: copy the config backup back, `systemctl enable --now
+redis-server` (fg, eagler) or `kn-redis` (kru), restart the app (`fg-api`; `kn-brain-coord` and
+`kn-brain-finder`; `pteroq` and a `php8.3-fpm` reload). On kru also set `kn_redis_remote_url: ""`
+in KrunkNative first, or its next deploy switches back to terp.db. Keys written on terp.db since
+are lost unless copied back with the same script.
+
+## MariaDB (3307)
+
+Since 2026-11-18 a host MariaDB holds eagler's Pterodactyl panel database. It is Debian's
+`mariadb-server` 11.8.6 as `mariadb.service` (enabled), datadir `/var/lib/mysql`, and has nothing
+to do with mailcow's MariaDB, which runs in Docker and publishes only `127.0.0.1:13306`. Port
+**3307**, so nothing here can be taken for mailcow's 3306.
+
+Settings in `/etc/mysql/mariadb.conf.d/60-terpdb.cnf`:
+
+- `port = 3307`, `bind-address = 127.0.0.1,80.93.219.21`, `skip-name-resolve`, `local-infile = OFF`.
+- TLS: `ssl_cert`/`ssl_key` are a copy of the Postgres pair (`CN=terp.db`, fingerprint
+  `8A:35:C7:D0`) in `/etc/mysql/ssl/terp-db.{crt,key}` (root:mysql, key 0640), so clients pin the
+  same `/etc/ssl/terp-db/ca.crt`. `tls_version = TLSv1.2,TLSv1.3`, `require_secure_transport = ON`:
+  every TCP connection must use TLS (a plain one gets error 3159); the unix socket is exempt.
+- `innodb_buffer_pool_size = 256M`, `max_connections = 100`. `performance_schema` is off
+  (Debian's default), so check sessions with `SHOW PROCESSLIST` and the `Ssl_accepts` counters.
+
+Accounts:
+
+- `root@localhost` and `mysql@localhost`: `unix_socket` only (`sudo mariadb` as root).
+- `panel@91.199.82.174`: `REQUIRE SSL`, `ALL` on `panel` only. Password from `openssl rand -hex 24`
+  in `/root/terpdb-mariadb.secret` (root 0600, `panel=`), and in the panel's `.env`.
+- No anonymous users and no `test` database (removed after the install).
+
+| Database | Charset, collation                                                | Client                                                                                                                                                                              |
+| -------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `panel`  | `utf8mb4`, `utf8mb4_uca1400_ai_ci` (tables: `utf8mb4_unicode_ci`) | Pterodactyl 1.15.2 on eagler (VM 104), PDO mysqlnd; `/var/www/pterodactyl/.env` `DB_HOST=terp.db`, `DB_PORT=3307`, `DB_USERNAME=panel`, `MYSQL_ATTR_SSL_CA=/etc/ssl/terp-db/ca.crt` |
+
+The panel's `config/database.php` reads `MYSQL_ATTR_SSL_CA` and
+`MYSQL_ATTR_SSL_VERIFY_SERVER_CERT` (default true, also set in `.env`), so the connection verifies
+the certificate and the name `terp.db`.
+
+The panel has no Pterodactyl database hosts (`database_hosts` and `databases` are empty), so there
+are no game-server databases. Create one here only with its own user and a decision on scope:
+Pterodactyl's database host user needs `ALL ... WITH GRANT OPTION`.
+
+No fail2ban jail watches MariaDB; only 91.199.82.174 can reach the port.
 
 ## Firewall
 
@@ -137,12 +264,16 @@ to it.
 - tcp 6380 also from **37.9.34.169**: divide sends the edge's own connections out the second
   uplink (`inet divide edge_out`, `docs/divide-host.md`), so the edge reaches the Redis from that
   address. It is not allowed on 5432.
+- tcp 6381, 6382 and 6383 (the app Redis instances) only from 91.199.82.174.
+- tcp 3307 (the host MariaDB) only from 91.199.82.174. 3306 is not open.
 - mailcow's published ports are DNAT and pass the forward chain, not input.
 
 fail2ban jails `sshd` and `postgresql` ban into `inet f2b-table`.
 
 Rollback copies: `/root/nftables.conf.bak-terpdb-harden-20261117212641` (before the address
-limits; `nft -f` it) and `/root/nftables.conf.bak-terpdb-edge6380-*`.
+limits; `nft -f` it), `/root/nftables.conf.bak-terpdb-edge6380-*` and
+`/root/nftables.conf.bak-terpdb-redis-apps-*` (before 6381 to 6383) and
+`/root/nftables.conf.bak-terpdb-mariadb-*` (before 3307).
 
 ## Backups
 
@@ -151,10 +282,19 @@ On terp.db, `terpdb-backup.timer` (03:15 UTC) runs `/usr/local/sbin/terpdb-backu
 - `/var/backups/postgres/<UTC stamp>/`: `pg_dump -Fc` of every database that allows connections,
   `globals.sql` (`pg_dumpall --globals-only`: roles and their password hashes), `VERSION`.
 - `/var/backups/redis/<UTC stamp>.rdb`: `redis-cli --rdb` of the shared Redis.
+- `/var/backups/redis/<UTC stamp>-fg.rdb` and `<UTC stamp>-eagler.rdb`: the same for those
+  instances, read as their `admin` user. kru's instance is left out on purpose (no persistence by
+  design). Script backup from before this: `/root/terpdb-backup.sh.bak-redis-apps-*`.
+- `/var/backups/mariadb/<UTC stamp>/`: `<db>.sql.gz` per database of the host MariaDB
+  (`mariadb-dump --single-transaction --routines --triggers --events --hex-blob --databases`, as
+  root over the socket), `users.sql` (`mariadb-dump --system=users`: accounts, grants, password
+  hashes), `VERSION`. Never mailcow's. Script and unit backups from before this:
+  `/root/terpdb-backup.{sh,service}.bak-mariadb-*`.
 - 14 days kept. Everything is root or postgres only, mode 0700/0600.
 
 Off the box, divide's `terpdb-pull.timer` (04:30 UTC) runs `/usr/local/sbin/terpdb-pull.sh`, which
-pulls `postgres/` and `redis/` into `divide:/var/backups/terp-db/` with rsync and keeps 21 days.
+pulls `postgres/`, `redis/` and `mariadb/` into `divide:/var/backups/terp-db/` with rsync and keeps
+21 days (`mariadb/` added 2026-11-18, backup `divide:/root/terpdb-pull.sh.bak-mariadb-*`).
 It never deletes to match terp.db, so a wiped terp.db cannot empty divide's copy. The key
 (`divide:/root/.ssh/terpdb-pull_ed25519`, host key pinned in `/root/.ssh/terpdb_known_hosts`) is
 limited on terp.db to `restrict,from="91.199.82.174",command="/usr/bin/rrsync -ro /var/backups"`:
@@ -182,16 +322,27 @@ Redis: with AOF on, Redis loads the AOF and ignores the RDB, so: stop `redis-ser
 `CONFIG SET appendonly yes` as `admin` (it writes a new AOF from memory) and put `appendonly yes`
 back in the config.
 
+The fg and eagler instances have no AOF: stop `redis-server@<app>`, copy `<stamp>-<app>.rdb` to
+`/var/lib/redis/<app>/dump.rdb` (owner `redis`), start it and check `DBSIZE`.
+
+MariaDB: the dump recreates the database (`--databases`), so restore it under another name with the
+panel stopped (`php artisan down`, `systemctl stop pteroq`), or into the same one:
+`zcat /var/backups/mariadb/<stamp>/panel.sql.gz | mariadb`. On a rebuilt server load `users.sql`
+first.
+
 ## The 2026-11-17 move
 
-| Database      | From                              | Downtime           | Dump kept on terp.db                              |
-| ------------- | --------------------------------- | ------------------ | ------------------------------------------------- |
-| `fracital`    | (already here) PG 17 to 18        | 35 s, 21:33:42 UTC | `/var/backups/postgres/20261117T213319Z/`         |
-| `holt`        | amph Docker `abulxt-db` (PG 18.6) | 15 s, 21:49:48 UTC | `/var/backups/migrate/holt-cutover-*.dump`        |
-| `abulxt`      | amph Docker `abulxt-db` (PG 18.6) | 3.5 min, 21:50:21  | `/var/backups/migrate/abulxt-cutover-*.dump`      |
-| `holy`        | holy's local PG 17 (CT 205)       | 10 s, 21:59:01 UTC | `/var/backups/migrate/holy-cutover-*.dump`        |
-| `elichat`     | chat's local PG 17 (CT 106)       | 3 s, 22:02:01 UTC  | `/var/backups/migrate/elichat-cutover-*.dump`     |
-| `fg_api_beta` | giftshop's local PG 17 (VM 111)   | 75 s, 22:21:10 UTC | `/var/backups/migrate/fg_api_beta-cutover-*.dump` |
+| Database        | From                                                   | Downtime           | Dump kept on terp.db                                |
+| --------------- | ------------------------------------------------------ | ------------------ | --------------------------------------------------- |
+| `fracital`      | (already here) PG 17 to 18                             | 35 s, 21:33:42 UTC | `/var/backups/postgres/20261117T213319Z/`           |
+| `holt`          | amph Docker `abulxt-db` (PG 18.6)                      | 15 s, 21:49:48 UTC | `/var/backups/migrate/holt-cutover-*.dump`          |
+| `abulxt`        | amph Docker `abulxt-db` (PG 18.6)                      | 3.5 min, 21:50:21  | `/var/backups/migrate/abulxt-cutover-*.dump`        |
+| `holy`          | holy's local PG 17 (CT 205)                            | 10 s, 21:59:01 UTC | `/var/backups/migrate/holy-cutover-*.dump`          |
+| `elichat`       | chat's local PG 17 (CT 106)                            | 3 s, 22:02:01 UTC  | `/var/backups/migrate/elichat-cutover-*.dump`       |
+| `fg_api_beta`   | giftshop's local PG 17 (VM 111)                        | 75 s, 22:21:10 UTC | `/var/backups/migrate/fg_api_beta-cutover-*.dump`   |
+| `guacamole_db`  | guca's local PG 15 (CT 117)                            | 9 s, 22:55:27 UTC  | `/var/backups/migrate/guacamole_db-cutover-*.dump`  |
+| `krunknative`   | kru's local PG 18 `18/krunknative` (CT 120, port 5434) | 4 s, 22:56:48 UTC  | `/var/backups/migrate/krunknative-cutover-*.dump`   |
+| `labelsupplier` | chat's local PG 17 (CT 106)                            | 2 s, 22:59:26 UTC  | `/var/backups/migrate/labelsupplier-cutover-*.dump` |
 
 Row counts matched for every table after each restore. The old copies are kept, not deleted:
 
@@ -202,15 +353,55 @@ Row counts matched for every table after each restore. The old copies are kept, 
   `manual`, data in `/var/lib/postgresql/17/main`. Config backup:
   `/home/holy/website2/config/config.js.bak-terpdb-*`.
 - giftshop (VM 111, powered off 2026-11-17): `postgresql@17-main` stopped and disabled, `start.conf`
-  `manual`, data in `/var/lib/postgresql/17/main`. The Flying Gorilla game keeps its Redis on fg
-  (`docs/divide-host.md` "fg"), not on the shared Redis here.
-- chat: local Postgres still runs (for `labelsupplier`); its `elichat` database has
-  `ALLOW_CONNECTIONS false`. Config backup: `/opt/elichat/.env.bak-terpdb-*`.
+  `manual`, data in `/var/lib/postgresql/17/main`. The Flying Gorilla game's Redis went to fg and
+  then to its own instance here ("App Redis instances"), not to the shared Redis.
+- chat: `postgresql@17-main` stopped and disabled (22:59 UTC), `start.conf` `manual`, data in
+  `/var/lib/postgresql/17/main`. Its `elichat` database has `ALLOW_CONNECTIONS false` (stale since
+  22:02). Config backups: `/opt/elichat/.env.bak-terpdb-*`, `/opt/labelsupplier/.env.bak-terpdb-*`.
+- guca: `postgresql@15-main` stopped and disabled, `start.conf` `manual`, data in
+  `/var/lib/postgresql/15/main`. Config backup: `/etc/guacamole/guacamole.properties.bak-terpdb-*`;
+  the cutover dump is also on guca in `/var/backups/terpdb-move/`.
+- kru: `postgresql@18-krunknative` stopped and disabled, `start.conf` `manual`, data in
+  `/var/lib/postgresql/18/krunknative`. Config backups: `/etc/krunknative/coord-db.env.bak-terpdb-*`
+  and `/etc/krunknative/secrets.env.bak-terpdb-*` (the old `KN_DATABASE_PASSWORD`); the cutover dump
+  is also on kru in `/var/backups/terpdb-move/`. KrunkNative's own Ansible (`kn_postgres`,
+  `kn_db_cutover`) still describes the local cluster: a run of those roles starts it again (the app
+  stays on terp.db) until KrunkNative's inventory is changed.
 
 Rolling one back: stop the app, bring the old database back (start the container, `systemctl
 start postgresql@17-main`, or `ALTER DATABASE elichat ALLOW_CONNECTIONS true`), copy the config
-backup over the config, start the app. Anything written on terp.db since the move is lost unless
+backup over the config, start the app. For a guest cluster stopped on 2026-11-17: set its
+`start.conf` back to `auto`, `systemctl enable --now postgresql@<ver>-<cluster>`, then the config
+backup (`systemctl restart tomcat9` on guca, `kn-brain-coord` on kru, `labelsupplier-gateway` on
+chat). Anything written on terp.db since the move is lost unless
 you first dump it from terp.db and restore it into the old database.
 
-Not moved: chat's `labelsupplier` (21 GB). Nothing routes to its gateway (port 8088) and nothing
-in a repo deploys it, so who uses it is unclear.
+`labelsupplier` was 21 GB on chat but about 550 MB of live data (the rest was bloat), so it was
+copied online first (one `pg_dump | psql -1` snapshot, 48 s, with the gateway running), checked by
+row counts and sequences, and switched with a 2 s restart once `pg_stat_user_tables` showed no
+writes since the snapshot. Its app is `labelsupplier-gateway.service` (`/opt/labelsupplier`, port
+8088); no repo deploys it.
+
+### eagler's `panel` (2026-11-18)
+
+eagler's (VM 104) local MariaDB 11.8, database `panel` (2 MB, 35 tables, 790 rows, the Pterodactyl
+panel), moved to the host MariaDB here ("MariaDB (3307)") at 00:43:16 UTC on 2026-11-18. Downtime
+3.5 s: `php artisan down`, `pteroq` stopped, `mysqldump --single-transaction --routines --triggers
+--events --hex-blob panel`, import, `.env` repointed, `config:clear` (config is not cached here),
+`php artisan up`, `php8.3-fpm` restart, `pteroq` start. Row counts matched for all 35 tables. The
+panel's TLS session reported `Ssl_cipher` `TLS_AES_256_GCM_SHA384` as `panel@91.199.82.174`;
+the panel reached Wings (system info, both servers `running`) and Wings' token read
+`/api/remote/servers` (200, 2 servers).
+
+- Dump: `/var/backups/migrate/panel-cutover-20261118004316.sql` here, and on eagler in
+  `/var/backups/terpdb-move/`.
+- Config backup: `eagler:/var/www/pterodactyl/.env.bak-terpdb-20261118004316` (0600; the old
+  `DB_*` lines, the Redis keys as they were after the Redis move).
+- eagler's `mariadb.service` stopped and disabled, datadir `/var/lib/mysql` kept. It also had an
+  unused `pterodactyluser@%` (all privileges, grant option, bound to 0.0.0.0), which was not
+  carried over.
+
+Rollback: on eagler `php artisan down`, `systemctl enable --now mariadb`, copy the `DB_*` lines
+from the `.env` backup over the current ones (leave the `REDIS_*` keys) and drop the two
+`MYSQL_ATTR_SSL_*` lines, `php artisan config:clear`, `php artisan up`, restart `php8.3-fpm` and
+`pteroq`. Writes made on terp.db since are lost unless dumped from here and imported there first.

@@ -1,6 +1,6 @@
 ---
 # wisp.baby live stats (wispbaby/README.md "Live stats"): each box pushes its counters to
-# amph's Redis and serves /live, /live/history and /you. On since 2026-11-13 (the user approved
+# the edges' shared Redis (edge_redis_host: terp.db since 2026-11-18) and serves /live, /live/history and /you. On since 2026-11-13 (the user approved
 # the rollout). roles/edge_relay/defaults has it off for every other host.
 wispstats_enabled: true
 # Kept off WARP (roles/edge_wisp/defaults edge_warp_bypass_hosts): these sites' TCP and UDP leave
@@ -36,6 +36,10 @@ edge_warp_bypass_hosts:
   - "*.brave.com"
   - brave.app
   - "*.brave.app"
+  # Internet Archive: the site, the Wayback Machine (web., web-static.) and the download servers
+  # (*.us.archive.org), 2026-11-17, the user's request.
+  - archive.org
+  - "*.archive.org"
 # Clean TCP dialled by holyWisp itself, marked for the router's WARP tunnel; only names the
 # gate sends to the relay (shady, adult) go through edge-router.py (roles/edge_wisp/defaults
 # holywisp_tcp_direct). On since 2026-11-16, at the user's request.

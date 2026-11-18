@@ -21,10 +21,10 @@ cutting `byod.abstracteducation.loan` over to the round-robin.
   token); README "Two byod names". The edge nameservers serve and health-check both apexes (README "Edge DNS"); Gcore holds a static rollback copy.
 - Every edge runs OpenResty 1.31.1.1 + lua-resty-auto-ssl, terminates TLS, and
   relays to amph `:9080` with the shared `X-BYOD-Token`.
-- All edges share **one** Let's Encrypt cert via the central Redis on amph
-  (`auto-ssl:*`). Any edge can answer the ACME http-01 challenge; a cert issued
+- All edges share **one** Let's Encrypt cert via the central Redis (`auto-ssl:*`),
+  on terp.db since 2026-11-17 ("Shared Redis on terp.db"). Any edge can answer the ACME http-01 challenge; a cert issued
   on one is served by all.
-- amph firewall opens 9080/8822/6379 to all four edge subnets.
+- amph firewall opens 9080/8822/1082 to the edge (6379 only with `shared_redis_on_terp_db: false`).
 - Edge ingress: 80 and 443 on all four edges, udp 443 (HTTP/3), and tcp 8080 for
   `mcnode.abstracteducation.loan` (Pterodactyl Wings). Every edge runs the
   host nftables of the `edge_firewall` role (tag `firewall`,
@@ -48,8 +48,9 @@ cutting `byod.abstracteducation.loan` over to the round-robin.
 
 ## Phase 1: Origin (amph)
 
-Brings up the shared auto-ssl Redis store and opens the firewall to all four
-edge subnets (9080 origin-internal, 8822 validator, 6379 Redis).
+Opens the firewall to the edge (9080 origin-internal, 8822 validator, 1082 shady-relay). With
+`shared_redis_on_terp_db: false` it also brings up the auto-ssl Redis store (6379); otherwise it
+keeps amph's Redis stopped.
 
 ```bash
 ansible-playbook playbooks/origin.yml --vault-password-file ~/.abulxt-vault-pass
@@ -58,8 +59,8 @@ ansible-playbook playbooks/origin.yml --vault-password-file ~/.abulxt-vault-pass
 Verify:
 
 ```bash
-ssh amph 'systemctl is-active redis-server && ss -tlnp | grep 6379'
-ssh amph 'iptables -L ABULXT_INPUT -n | grep -E "9080|8822|6379"'
+ssh amph 'systemctl is-active redis-server'   # inactive while the Redis is on terp.db
+ssh amph 'iptables -L ABULXT_INPUT -n | grep -E "9080|8822|1082"'
 ```
 
 > Note: the validator code change (`target=edge` + all edge IPs in
@@ -648,7 +649,9 @@ The edges keep their certificates (`auto-ssl:*`) and link routing's `linkroute:v
 It was amph's auto-ssl Redis (`allkeys-lru`, which could evict either); with this change it is
 a dedicated Redis on terp.db (`shared_redis_*` in `group_vars/all/main.yml`: `noeviction`, AOF,
 `requirepass` = `shared_redis_password`, firewalled to divide's `91.199.82.174`). wisp.baby's live
-stats stay on amph's Redis. One switch, `shared_redis_on_terp_db`, picks the side.
+stats (`wispbaby:*`) followed on 2026-11-18 (`docs/terp-db.md` "Shared Redis (6380)"). One switch,
+`shared_redis_on_terp_db`, picks the side for all three, and `roles/abulxt_origin` stops amph's Redis
+and closes 6379 while it is true.
 
 Order (each step needs the go-ahead for that host):
 
@@ -684,6 +687,14 @@ grow.
 Rollback: `shared_redis_on_terp_db: false`, `--tags relay` and `--tags wisp`. Copy back first the
 certificates terp.db issued (the same loop on amph with source and destination swapped, without
 `REPLACE`). abulxt's writer goes back to amph too, or link routing answers from its stale cache.
+
+The amph side of the rollback (amph's Redis has been stopped since 2026-11-18 00:47 UTC; its last
+dump is `amph:/root/redis-amph-retired-20261118004759.rdb`, also still `/var/lib/redis/dump.rdb`):
+`playbooks/origin.yml -l amph --tags origin` with the switch false starts it again and reopens 6379
+in amph's firewall. Put 6379 back by hand in divide's `from_edge` chain and in `213.fw`
+(`docs/divide-host.md`). Set abulxt's `wispStats.redis` back to `127.0.0.1:6379` (backup
+`/opt/abulxt-main-site/config.js.bak-wispredis-20261118004313`), restart `abulxt-wispstats`, and copy
+the `wispbaby:hll:*` keys back if the visitor counts should carry over.
 
 ## Rollback
 

@@ -30,8 +30,10 @@ the live Mullvad relay directory (`api.mullvad.net/www/relays/wireguard/`,
 filtered to the cities in `/etc/abulxt/mullvad-pool.json`, default
 was/qas/nyc). Relay names are resolved via Mullvad DNS `100.64.0.3` to their
 in-tunnel `10.124.x.x` addresses; amph's static routes carry `10.124.0.0/16`
-and `100.64.0.0/16` over `ens20`. Upstreams are probed every 30s and failed
-ones sit out for 45s; the relay list re-syncs hourly.
+and `100.64.0.0/16` over `eth0` (`post-up` lines in `/etc/network/interfaces`
+since amph became CT 213 on 2026-11-17; `ens20` on the VM). Upstreams are
+probed every 30s and failed ones sit out for 45s; the relay list re-syncs
+hourly.
 
 `abulxt-wisp` points at `socks5://127.0.0.1:1080`, so every site the Wisp
 server fetches on abulxt's behalf exits through a rotating Mullvad relay

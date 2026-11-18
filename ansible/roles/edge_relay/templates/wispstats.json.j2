@@ -9,5 +9,5 @@
   "mmdb": wispstats_mmdb,
   "tags": wispstats_tags,
   "host_tags": wispstats_host_tags,
-  "redis": { "host": abulxt_origin_ip, "port": auto_ssl_redis_port | int, "password": auto_ssl_redis_password, "db": 0 }
+  "redis": { "host": edge_redis_host, "port": edge_redis_port | int, "password": edge_redis_password, "db": 0 }
 } | to_nice_json }}

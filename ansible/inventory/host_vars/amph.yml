@@ -1,11 +1,12 @@
 ---
-# amph: origin VM, Manassas, Virginia, US. On divide since 2026-11-16 (from meal): private
+# amph: origin, Manassas, Virginia, US. On divide since 2026-11-16 (from meal), LXC CT 213 since
+# 2026-11-17 (was VM 113, docs/divide-host.md "amph: VM 113 to CT 213"): private
 # only, 172.16.5.3/24 on vmbr1, gateway 172.16.5.1; reached by ProxyJump through divide
 # (group_vars/divide_guests.yml). Its old public addresses on meal are gone.
 # Debian 13 (trixie). OpenResty front; app, Postgres, mullvad-pool, shady-relay.
 
 # --- Firewall (abulxt_origin: /etc/abulxt/firewall.env EDGE_SUBNETS) ---
-# 9080/8822/6379/1082 are open to divide's whole vmbr1, as live: the edge (172.16.5.10) is the
+# 9080/8822/1082 are open to divide's whole vmbr1 (6379 too with shared_redis_on_terp_db false), as live: the edge (172.16.5.10) is the
 # only guest divide's bridge firewall lets reach those ports (docs/divide-host.md), so the /24
 # adds nothing beyond the edge. Without this the role computes the edge's edge_origin_source.
 abulxt_edge_subnets_override:

@@ -7,8 +7,8 @@
 #     -> everything else: https://{{ fracital_origin_ip }}:{{ fracital_origin_port }} (terp OpenResty,
 #        pinned cert, X-FRX-Edge-Token; terp's firewall only admits the edges)
 #
-#   fracital_wisp_hosts ({{ fracital_wisp_hosts | default([]) | join(', ') }}): the placeholder page on
-#     GET / and the keyless relay on a WebSocket upgrade there, the keyed relay path and GET /health
+#   fracital_wisp_hosts ({{ fracital_wisp_hosts | default([]) | join(', ') }}): holyWisp's built-in web
+#     client on GET / and the keyless relay on a WebSocket upgrade there, the keyed relay path and GET /health
 #     (holyWisp's own) only; everything else is 403 here. No terp relay, and /stats is never exposed.
 #
 #   With link_routes_replace_static the app server keeps only {{ fracital_byod_fqdn }} (and
@@ -275,17 +275,15 @@ server {
 {% endif %}
     }
 
-    # A plain GET is the placeholder page (files/placeholder.html, the page link routing shows for a
-    # name nobody registered; it replaced holyWisp's web client there). A WebSocket
-    # upgrade is the relay itself: wss://holywisp.fracit.al/ is the public endpoint, no key, which
-    # vibeOS's v86 uses as its guest network. holyWisp's own egress policy, rate limits and
-    # reputation are the abuse control, the same as on the keyed path.
+    # holyWisp's built-in browser client on a plain GET (one self-contained HTML page; its
+    # stylesheets come from jsDelivr), and the relay itself on a WebSocket upgrade:
+    # wss://holywisp.fracit.al/ is the public endpoint, no key, which vibeOS's v86 uses as its guest
+    # network. holyWisp's own egress policy, rate limits and reputation are the abuse control, the
+    # same as on the keyed path. (Names nobody registered get the placeholder page instead, from
+    # link routing in 00-edge-relay.conf, not this server.)
     location = / {
         limit_except GET {
             deny all;
-        }
-        if ($http_upgrade !~* ^websocket$) {
-            rewrite ^ /.placeholder last;
         }
         proxy_pass http://127.0.0.1:{{ edge_wisp_port }}/;
         proxy_http_version 1.1;
@@ -313,13 +311,6 @@ server {
             require("wispstats").relay_close()
         }
 {% endif %}
-    }
-
-    location = /.placeholder {
-        internal;
-        add_header Cache-Control "no-store" always;
-        root {{ edge_placeholder_dir }};
-        try_files /index.html =404;
     }
 
     # Monitoring: holyWisp's own /health ({"status":"ok"}), GET only. /stats stays loopback-only.

@@ -179,7 +179,7 @@
   when: not (wispstats_on | bool)
   notify: reload openresty
 
-# holywisp.fracit.al's / (30-fracital.conf) and, with link routing, any name nobody registered.
+# With link routing, the page any name nobody registered gets (link_routes_default_site holywisp).
 # Served from disk: a change needs no reload.
 - name: Placeholder page
   ansible.builtin.copy:

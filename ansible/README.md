@@ -8,7 +8,7 @@ nothing here deploys the app itself (that stays in CI/CD per repo policy).
 
 | Layer           | Role                                                                 | Hosts                                   | What it does                                                                                                                                                                                                                                                                          |
 | --------------- | -------------------------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Origin          | `abulxt_origin`                                                      | `amph`                                  | Shared auto-ssl Redis store + firewall open to all edge subnets (9080/8822/6379)                                                                                                                                                                                                      |
+| Origin          | `abulxt_origin`                                                      | `amph`                                  | Firewall open to the edge (9080/8822/1082); amph's Redis only with `shared_redis_on_terp_db: false`                                                                                                                                                                                   |
 | Edge install    | `openresty`                                                          | all `edge`                              | OpenResty from openresty.org apt repo + lua-resty-auto-ssl via luarocks + fallback cert                                                                                                                                                                                               |
 | Edge relay      | `edge_relay`                                                         | all `edge`                              | On-demand TLS (shared Redis) + reverse-proxy to amph `:9080` with `X-BYOD-Token`                                                                                                                                                                                                      |
 | krunk.io routes | `edge_relay` (`krunkio_enabled`)                                     | all `edge`                              | `assets.`/`coordinator.`/`matchmaker.`/`play.krunk.io` relayed straight to KrunkNative's kru over pinned TLS, assets cached on the edge. See [krunk.io routes](#krunkio-routes)                                                                                                       |
@@ -102,9 +102,9 @@ nftables, the guest bridge firewall, fail2ban, TCP tuning) is not managed by thi
 
 | Alias                | What                   | IP                                              | Notes                                                                          |
 | -------------------- | ---------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------ |
-| `amph` (origin)      | VM on divide           | 172.16.5.3 (private only)                       | OpenResty + app + Postgres + auto-ssl Redis                                    |
+| `amph` (origin)      | CT 213 on divide       | 172.16.5.3 (private only)                       | OpenResty + app (Postgres and Redis on terp.db)                                |
 | `edge`               | CT 201 on divide       | 172.16.5.10, public 91.199.82.174 (`public_ip`) | the only edge: abulxt byod, Fracital, wisp.baby (replaced wisp-mnz on meal)    |
-| `terp`               | VM 116 on divide       | 172.16.5.62 (private only)                      | Fracital's origin (`[fracital_origin]`), moved from meal                       |
+| `terp`               | CT 216 on divide       | 172.16.5.62 (private only)                      | Fracital's origin (`[fracital_origin]`), moved from meal                       |
 | `kn`, `blockshooter` | CTs 203, 202 on divide | 172.16.5.94, 172.16.5.48                        | KrunkNative and blockshooter game servers, not edges (replaced kn-mnz, bs-mnz) |
 
 See [INVENTORY.md](INVENTORY.md) for the full catalog with geolocations.
@@ -119,7 +119,7 @@ the same files in plain text, in the runner only, from GitHub Actions secrets
 | File (gitignored)                               | Variable                           | GitHub secret                   | What it is                                                                                                                                                           |
 | ----------------------------------------------- | ---------------------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `inventory/group_vars/all/secrets.yml`          | `byod_token`                       | `BYOD_TOKEN`                    | Shared `X-BYOD-Token` the edges send to amph's origin-internal listener.                                                                                             |
-|                                                 | `auto_ssl_redis_password`          | `AUTO_SSL_REDIS_PASSWORD`       | `requirepass` for amph's auto-ssl Redis (wisp.baby live stats; the edges' certificates with `shared_redis_on_terp_db: false`).                                       |
+|                                                 | `auto_ssl_redis_password`          | `AUTO_SSL_REDIS_PASSWORD`       | `requirepass` for amph's auto-ssl Redis (only with `shared_redis_on_terp_db: false`), and the seed of `wispstats_client_salt`.                                       |
 |                                                 | `shared_redis_password`            | `SHARED_REDIS_PASSWORD`         | `requirepass` for the edges' shared Redis on terp.db (certificates, link routing's `linkroute:v1`); the same value in abulxt's writer config.                        |
 |                                                 | `gcore_api_token`                  | `GCORE_API_TOKEN`               | Gcore API token for `dns.yml` (the Gcore rollback zones).                                                                                                            |
 |                                                 | `cloudflare_zt_api_token`          | `CLOUDFLARE_ZT_API_TOKEN`       | Cloudflare Account API token `abulxt-gateway-ansible` (Account, Zero Trust, Edit, one account). `gateway_dns` PUTs the DoH source-IP allowlist with it.              |
@@ -400,7 +400,7 @@ drop-in) and the front end `krunk.io`/`www.` (GitHub Pages).
   check would lag by the resolver TTL). Never send one of these SNIs to an edge before the name
   points at the fleet (test with `-H Host:` over the byod SNI instead): the http-01 check would
   fail, and five failures an hour block the name at Let's Encrypt.
-- **Availability.** These names now depend on the edge fleet, amph's Redis (certificates) and
+- **Availability.** These names now depend on the edge fleet, terp.db's shared Redis (certificates) and
   kru. The edge nameservers' health checks only cover the byod names, not the edges' reach to kru.
 
 Rollback: `krunkio_enabled: false` and `playbooks/edges.yml --tags relay`; the DNS records go

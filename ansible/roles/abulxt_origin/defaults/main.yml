@@ -1,0 +1,8 @@
+---
+# amph's own Redis (127.0.0.1 and the edge, port auto_ssl_redis_port) is only needed while the edges
+# keep their certificates and wisp.baby's stats there (shared_redis_on_terp_db false, the rollback).
+# Since 2026-11-17 they are on terp.db, so the role stops amph's Redis (its package and dump stay for
+# that rollback) and the firewall no longer opens the port.
+abulxt_origin_redis_on: "{{ not (shared_redis_on_terp_db | default(false) | bool) }}"
+# Empty: abulxt-firewall.sh opens no Redis port to the edge.
+abulxt_origin_redis_port: "{{ auto_ssl_redis_port if abulxt_origin_redis_on | bool else '' }}"

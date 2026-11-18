@@ -19,7 +19,7 @@ public_ip: "{{ divide_public_ip }}"
 edge_subnet: "{{ public_ip }}/32"
 # What the private origins see: the edge reaches amph, kru, terp and holy straight over the
 # 172.16.5.0/24 network (terp's ufw via fracital_edge_subnets; amph's firewall for
-# 9080/8822/6379/1082 takes host_vars/amph.yml abulxt_edge_subnets_override instead).
+# 9080/8822/1082 takes host_vars/amph.yml abulxt_edge_subnets_override instead).
 edge_origin_source: "172.16.5.10/32"
 # public_ip is not configured on the box (divide DNATs it here): edge_warp keeps the box's own
 # streams to it off WARP (roles/edge_warp defaults edge_public_ip_on_box).

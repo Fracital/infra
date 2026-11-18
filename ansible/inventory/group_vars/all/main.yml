@@ -12,8 +12,8 @@ wisp_path: stream
 # guests' NAT egress and the ProxyJump for reaching them (group_vars/divide_guests.yml).
 divide_public_ip: "91.199.82.174"
 
-# Origin (amph VM on divide): where all edges relay traffic. Private only: the edge
-# reaches its 9080/8822/6379/1082/443 over vmbr1.
+# Origin (amph, CT 213 on divide): where all edges relay traffic. Private only: the edge
+# reaches its 9080/8822/1082/443 over vmbr1.
 abulxt_origin_ip: "172.16.5.3"
 abulxt_origin_internal_port: 9080 # origin-internal listener on amph
 abulxt_domains_validator_port: 8822 # abulxt-domains on-demand TLS validator
@@ -107,7 +107,8 @@ wisp_sites:
   mnz: Manassas
 
 # Shared lua-resty-auto-ssl Redis store on amph (decision 1: per-edge HTTP-01
-# issuance made multi-edge-safe via one central store).
+# issuance made multi-edge-safe via one central store). Only the rollback since 2026-11-18
+# (shared_redis_on_terp_db below).
 auto_ssl_redis_port: 6379
 
 # The edges' shared Redis: lua-resty-auto-ssl's certificates and challenge tokens, and link
@@ -115,7 +116,9 @@ auto_ssl_redis_port: 6379
 # port 6380, requirepass, noeviction, AOF, firewalled to divide_public_ip, which every divide guest
 # leaves from). false rolls the edges back to amph's auto-ssl Redis above (abulxt_origin_ip,
 # auto_ssl_redis_port, auto_ssl_redis_password); RUNBOOK.md "Shared Redis on terp.db" has the order,
-# keys copied first. wisp.baby's live stats stay on amph's Redis either way (its collector is there).
+# keys copied first. wisp.baby's live stats (wispbaby:*, lua/wispstats.lua and abulxt's collector) follow
+# the same switch since 2026-11-17, and with it true amph runs no Redis (roles/abulxt_origin stops it and
+# closes its port). auto_ssl_redis_password stays in the vault: wispstats_client_salt is derived from it.
 shared_redis_on_terp_db: true
 shared_redis_host: "80.93.219.21"
 shared_redis_port: 6380

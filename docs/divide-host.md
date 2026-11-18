@@ -23,13 +23,13 @@ authorization, like any other live host (AGENTS.md "Servers").
 | Address      | Guest                 | What                                                             |
 | ------------ | --------------------- | ---------------------------------------------------------------- |
 | 172.16.5.1   | divide                | gateway, NAT, its own ACME client (`divide.eli.gift`)            |
-| 172.16.5.3   | amph                  | abulxt origin (`[origin]`)                                       |
+| 172.16.5.3   | amph (CT 213)         | abulxt origin (`[origin]`), was VM 113                           |
 | 172.16.5.10  | edge (CT 201)         | the only abulxt edge (`[wisp_edge]`, `host_vars/edge.yml`)       |
 | 172.16.5.11  | wg                    | WireGuard, udp 51820                                             |
 | 172.16.5.37  | sm                    |                                                                  |
 | 172.16.5.47  | kru                   | KrunkNative central node (krunk.io origin)                       |
 | 172.16.5.48  | blockshooter (CT 202) | blockshooter relay (`[bs_ct_divide]`)                            |
-| 172.16.5.62  | terp                  | Fracital origin, VM 116 (moved from meal 2026-11-16)             |
+| 172.16.5.62  | terp (CT 216)         | Fracital origin, was VM 116 (moved from meal 2026-11-16)         |
 | 172.16.5.64  | chat                  | estro.help backend (`host_vars/amph.yml` `estro_upstream`)       |
 | 172.16.5.78  | giftshop (VM 111)     | powered off 2026-11-17 (see "giftshop: retired" below)           |
 | 172.16.5.79  | holy (CT 205)         | holyunb.locker site (website2 :8080), was VM 127                 |
@@ -66,8 +66,8 @@ The software a guest runs is its name and the table above, not a tag.
 | chat (106)             | `app` `estro` `in-edge` `out-mullvad`     |
 | fum (110)              | `desktop` `legacy` `out-mullvad`          |
 | giftshop (111)         | `app` `eli-gift` (powered off 2026-11-17) |
-| amph (113)             | `origin` `abulxt` `in-edge` `out-mullvad` |
-| terp (116)             | `origin` `fracital` `in-edge` `in-dnat`   |
+| amph (213)             | `origin` `abulxt` `in-edge` `out-mullvad` |
+| terp (216)             | `origin` `fracital` `in-edge` `in-dnat`   |
 | guca (117)             | `app` `eli-gift` `in-edge`                |
 | kru (120)              | `origin` `krunk` `in-edge` `in-dnat`      |
 | wispdev (122)          | `dev` `wisp-baby`                         |
@@ -94,17 +94,17 @@ divide is a Ryzen 9 7950X: CCD0 is threads 0-7 and 16-23, CCD1 is 8-15 and 24-31
 are pinned with `lxc.cgroup2.cpuset.cpus` in `/etc/pve/lxc/<id>.conf` (which stops pvestatd
 rebalancing them), VMs with `qm set --affinity`.
 
-| Threads      | Guests                           |
-| ------------ | -------------------------------- |
-| 0-3, 16-19   | edge (CT 201), exclusive         |
-| 4-5, 20-21   | kn (CT 203)                      |
-| 6, 22        | kru (120), blockshooter (CT 202) |
-| 7, 23        | guca (117), fg (CT 206)          |
-| 7            | vault (100), wg (CT 200)         |
-| 23           | chat (106)                       |
-| 0-7, 16-23   | every VM except mac, holy (205)  |
-| 8-11, 24-27  | mac (126), runner (204)          |
-| 12-15, 28-31 | wispdev (122), exclusive         |
+| Threads      | Guests                                                        |
+| ------------ | ------------------------------------------------------------- |
+| 0-3, 16-19   | edge (CT 201), exclusive                                      |
+| 4-5, 20-21   | kn (CT 203)                                                   |
+| 6, 22        | kru (120), blockshooter (CT 202)                              |
+| 7, 23        | guca (117), fg (CT 206)                                       |
+| 7            | vault (100), wg (CT 200)                                      |
+| 23           | chat (106)                                                    |
+| 0-7, 16-23   | every VM except mac, holy (205), terp (CT 216), amph (CT 213) |
+| 8-11, 24-27  | mac (126), runner (204)                                       |
+| 12-15, 28-31 | wispdev (122), exclusive                                      |
 
 Allocation changes (total allocated memory 104.5 of 125 GiB, was 122.5; every other guest
 unchanged):
@@ -223,17 +223,17 @@ The stateless equivalent of Proxmox's per-NIC `ipfilter`, on the `vmbr1` bridge:
     below)
   - new tcp from the edge 172.16.5.10 to the origins:
 
-    | To                       | tcp ports                       |
-    | ------------------------ | ------------------------------- |
-    | amph 172.16.5.3          | 80, 443, 1082, 6379, 8822, 9080 |
-    | kru 172.16.5.47          | 80, 443                         |
-    | blockshooter 172.16.5.48 | 80, 8080                        |
-    | terp 172.16.5.62         | 443, 8443                       |
-    | holy 172.16.5.79         | 8080                            |
-    | fg 172.16.5.206          | 8787                            |
-    | guca 172.16.5.38         | 80 (the edge's cloudflared)     |
-    | vault 172.16.5.63        | 80 (the edge's cloudflared)     |
-    | chat 172.16.5.64         | 80 (the edge's cloudflared)     |
+    | To                       | tcp ports                   |
+    | ------------------------ | --------------------------- |
+    | amph 172.16.5.3          | 80, 443, 1082, 8822, 9080   |
+    | kru 172.16.5.47          | 80, 443                     |
+    | blockshooter 172.16.5.48 | 80, 8080                    |
+    | terp 172.16.5.62         | 443, 8443                   |
+    | holy 172.16.5.79         | 8080                        |
+    | fg 172.16.5.206          | 8787                        |
+    | guca 172.16.5.38         | 80 (the edge's cloudflared) |
+    | vault 172.16.5.63        | 80 (the edge's cloudflared) |
+    | chat 172.16.5.64         | 80 (the edge's cloudflared) |
 
   - other guest-to-guest paths:
 
@@ -265,7 +265,9 @@ The stateless equivalent of Proxmox's per-NIC `ipfilter`, on the `vmbr1` bridge:
   dropped until 22:20) also have their own tcp 443 lines to the edge.
 
 holy's pair is `veth205i0` (it was `tap127i1`, VM 127's second NIC, until 2026-11-17). fg's is
-`veth206i0` . 172.16.5.206 (CT 206, 2026-11-17).
+`veth206i0` . 172.16.5.206 (CT 206, 2026-11-17). amph's is `veth213i0` . 172.16.5.3 (CT 213; it was
+`tap113i2`, VM 113's net2, until 2026-11-17). terp's is `veth216i0` . 172.16.5.62 (CT 216; it
+was `tap116i0` until 2026-11-17).
 
 A new edge-to-origin path needs a line here, a rule in the guest's `/etc/pve/firewall/<id>.fw`
 (below), and the origin's own firewall where it has one (amph: `abulxt-firewall.sh`,
@@ -349,8 +351,8 @@ from Cloudflare), blockshooter's `inet bsfilter`, eagler's original ufw.
 | mull (101)    | anything from 172.16.5.0/24 (the gateway: guest rules also see what it forwards); udp 51820              |
 | eagler (104)  | tcp 443, 8080, 25565 from amph; tcp 2022, 25565, 25566 and udp 25565, 25566                              |
 | chat (106)    | tcp 80 from amph and the edge; 8317, 8318 from wg; 5900, 8088 from `mgmt`; 22 from the runner; udp 33190 |
-| amph (113)    | tcp 80, 443, 1082, 6379, 8822, 9080 from the edge                                                        |
-| terp (116)    | tcp 443, 8443 from the edge; tcp 8443 (the DNAT); tcp 22 from the runner                                 |
+| amph (213)    | tcp 80, 443, 1082, 8822, 9080 from the edge                                                              |
+| terp (216)    | tcp 443, 8443 from the edge; tcp 8443 (the DNAT); tcp 22 from the runner                                 |
 | guca (117)    | tcp 80 from the edge (cloudflared)                                                                       |
 | kru (120)     | tcp 80, 443 from the edge; udp 21100                                                                     |
 | wispdev (122) | nothing                                                                                                  |
@@ -531,6 +533,118 @@ Rollback: `pct stop 205; pct set 205 --onboot 0`, put `tap127i1` back in place o
 both `divide_guests` sets in `/etc/nftables.conf` (`nft -c -f`, then `nft -f`), then
 `qm set 127 --onboot 1; qm start 127`.
 
+## terp: VM 116 to CT 216 (2026-11-17)
+
+terp (Fracital's origin) was converted from VM 116 (Debian 13 cloud image) to the unprivileged
+container CT 216 on 2026-11-17, with the owner's approval. It keeps its address (172.16.5.62), its
+MAC (`BC:24:11:94:13:6A`), its SSH host keys and its machine-id, and everything on the root
+filesystem: `/root`, `/opt` (Fracital's `repo` and `dev` checkouts, stomp, cloaks-fracital, with
+their `.env` files), `/etc` (OpenResty, ufw, fail2ban, `/etc/fracital-edge`, `/etc/ssl/terp-db`,
+the `terp.db` line in `/etc/hosts`), the `deploy` user with its gates, `/etc/sudoers.d/deploy`,
+`/var/lib/fracital-deploy` and `/var/lib/stomp-deploy`, and the pm2 dump.
+
+- **Downtime**: about 1 minute 50 seconds. The VM was shut down at 22:44:04 UTC and its disk
+  mapped read-only on divide (`losetup -r`, `mount -o ro,noload`), tarred (25 s, with
+  `--numeric-owner --xattrs --acls`) and created with `pct create --unprivileged 1` (25 s). The CT
+  started at 22:45:02 and served again at 22:45:51. A rehearsal from a live tar into a CT without a
+  NIC ran first.
+- **Config**: 2 cores, 4096 MB, no swap, rootfs `local:216` 32 GB (the VM's size), `nesting=1`,
+  nameservers 1.1.1.1 and 1.0.0.1, `lxc.cgroup2.cpuset.cpus: 0-7,16-23` (the VM's affinity),
+  `onboot: 1`, the VM's tags. `net0` has `firewall=1`; `/etc/pve/firewall/216.fw` is 116.fw without
+  the `ipfilter-net0` ipset (a container's address is filtered from its config).
+- **Inside**: as on holy. cloud-init, the kernels, grub, shim and netplan are purged (the
+  `apt-get purge` needs `--allow-remove-essential`, grub-efi-amd64-signed is protected),
+  `/etc/fstab` is empty (the VM's is `/etc/fstab.vm-20261117`), networking is ifupdown2 with
+  Proxmox's `/etc/network/interfaces` and systemd-networkd is disabled, and
+  `10-keep-foreign-routes.conf` is in place. `pm2-root.service.d/lxc-limits.conf` sets
+  `LimitNOFILE=524288` and `LimitNPROC=131072`. The `sys-kernel-*` and `sys-fs-fuse-connections`
+  mounts are masked. `/etc/modules-load.d/tcp_bbr.conf` is gone (divide loads `tcp_bbr`;
+  `roles/fracital_origin` now removes the file). The role's two sysctls are per network namespace
+  and still apply.
+- **First boot without network**: netplan's generated `.network` matches
+  `PermanentMACAddress`, which a veth does not have, so eth0 stayed unmanaged and OpenResty's
+  start hung on DNS until eth0 was set up by hand (22:45:48). The rehearsal had no NIC and did
+  not show it. A later VM-to-CT move should switch to ifupdown2 before the first boot, or expect
+  this.
+- **Firewall**: ufw is kept and loads the VM's exact iptables rules (same `iptables -S`); the
+  `xt_hl` and `ip6t_rt` matches its IPv6 rules need are autoloaded on divide's kernel. It is
+  behind `216.fw` as well. Checked after the move: the edge reaches 443 and 8443, the runner
+  reaches 22, and 8080, 8081 and 443 from other guests are dropped.
+- **Unchanged**: `pm2-root` runs `fracital`, `fracital-dev` (stopped, as before) and `stomp`
+  (:8081, under the same root pm2, not its own user). Fracital logs "Accounts ready (TLSv1.3,
+  certificate verified against DATABASE_CA)". `fracital-deploy-gate` refused a test
+  command with its usual message, and the runner reaches sshd as `deploy` and sees the same host
+  key. `fstrim.timer` skips itself in a container.
+- **Backups** (on divide): `/var/lib/vz/dump/vzdump-qemu-116-2026_11_17-22_46_38.vma.zst` (the
+  stopped VM, 9 GB), and `/root/terp-ct-20261117T223829/` (the rootfs tarball, the VM and CT
+  configs, `216.fw`, the cutover scripts and logs, the old fstab, and terp's SSH host keys). The
+  `nftables.conf` from before is `/root/nftables.conf.bak-terp-ct-20261117T224333`.
+- **VM 116** is kept stopped with `onboot: 0`, disk intact, until it is deleted.
+
+Rollback: `pct stop 216; pct set 216 --onboot 0`, put `tap116i0` back in place of `veth216i0` in
+both `divide_guests` sets in `/etc/nftables.conf` (under `flock /root/.nftables-edit.lock`,
+`nft -c -f`, then `nft -f`), then `qm set 116 --onboot 1; qm start 116`. Deploys since the
+cutover exist only in the CT.
+
+## amph: VM 113 to CT 213 (2026-11-17)
+
+amph (abulxt's origin) was converted from VM 113 (Debian 13 cloud image) to the unprivileged
+container CT 213 on 2026-11-17, with the owner's approval. It keeps its address (172.16.5.3), its
+MAC (`BC:24:11:4C:1A:93`), its SSH host keys and its machine id. Downtime: services stopped on
+the VM at 22:42:46 UTC and were up in the CT at 22:43:24, except OpenResty, which failed at boot
+(below) and was started by hand at 22:43:35. A reboot test at 22:46:44 took 9 s.
+
+Unprivileged is enough because nothing on amph needs a kernel feature a container lacks:
+
+- **mullvad-pool** (`/opt/mullvad-pool`, 127.0.0.1:1080) is a userspace SOCKS5 balancer over
+  Mullvad's in-tunnel SOCKS relays. It has no WireGuard, network namespace or policy routing of
+  its own: the tunnel is mull's (VM 101), reached by four static routes via 172.16.5.6.
+- **abulxt-firewall.sh** uses iptables-nft in the CT's own network namespace; the `xt_*`
+  modules it needs are already loaded on divide. fail2ban's `inet f2b-table` works the same way.
+- **Docker** only ran the retired `abulxt-db` container (stopped by hand at 21:56 that day; the
+  app uses terp.db). `docker.service`, `docker.socket` and `containerd.service` are masked. The
+  volumes (`/var/lib/docker/volumes`, the database rollback) came along; the images and layers
+  did not (overlay whiteouts cannot be created in an unprivileged CT), they are in the VM's
+  vzdump.
+- No sysctl.d or modules-load.d files; `abulxt-edge-wisp`'s systemd sandbox works with
+  `nesting=1` (tested in a scratch CT first).
+
+- **Config**: 2 cores, 6144 MB, no swap, rootfs `local:213` 48 GB (25 GB used, 12 GB of it
+  OpenResty's `access.log`), `nesting=1`, nameservers 1.1.1.1 and 1.0.0.1,
+  `lxc.cgroup2.cpuset.cpus: 0-7,16-23` (the VM's affinity), `onboot: 1`, tags as before. net0 is
+  `eth0` on `vmbr1` with `firewall=1`; `/etc/pve/firewall/213.fw` is 113.fw without the
+  `ipfilter-net2` ipset. The CT sees 16 CPUs (the VM had 2), so holyWisp now opens 16 listeners
+  on 127.0.0.1:6001; `cpulimit: 2` would cap it at the VM's budget.
+- **Inside**: cloud-init, the kernels, grub, shim, initramfs-tools and netplan are purged,
+  `/etc/fstab` is empty. ifupdown2 with the file Proxmox writes; the four mull routes
+  (10.64.0.0/16, 10.124.0.0/16, 100.64.0.0/16, 100.124.0.0/16) are `post-up` lines in it, and
+  systemd-networkd is masked. DNS stays systemd-resolved (`resolved.conf.d/10-divide-dns.conf`,
+  the 1.1.1.1 and 1.0.0.1 netplan gave), with `/etc/.pve-ignore.resolv.conf` so Proxmox leaves
+  the stub symlink alone. `networking.service.d/10-before-network-online.conf` orders ifupdown2
+  before `network-online.target`: without it OpenResty starts before 172.16.5.3 exists and fails
+  on `listen 172.16.5.3:8822` (EADDRNOTAVAIL), as on the first boot. The VM-only files (fstab,
+  netplan, cloud config) are in `/root/vm113-config-20261117/`.
+- **Unchanged**: every unit and its autostart (OpenResty, the abulxt, holt and Abstract units,
+  holyWisp, mullvad-pool, shady-relay, Redis, fail2ban, the firewall), `/etc/openresty`, the
+  `deploy` user with its gates and sudo rule, `/etc/hosts` (terp.db), `/etc/ssl/terp-db`, all of
+  `/opt`, `/root`, `/home` and `/var`. `deploy/amph-drift.sh` in abulxt reported in sync before
+  and after.
+- **Method**: a live `rsync -aHAXSx --numeric-ids --delete` of the VM's `/` into the CT's mounted
+  rootfs, run inside the CT's uid map (`lxc-usernsexec -m b:0:100000:65536`) so ownership, ACLs
+  and file capabilities land shifted by 100000. The final pass, with the services stopped, took
+  18 s; then the VM was shut down and a fixup script made the copy a container root.
+- **divide**: `veth213i0` . 172.16.5.3 replaced `tap113i2` in both `divide_guests` sets.
+- **Backups** (on divide): `/var/lib/vz/dump/vzdump-qemu-113-2026_11_17-22_38_13.vma.zst` (live,
+  before) and `vzdump-qemu-113-2026_11_17-22_47_44.vma.zst` (the stopped VM), plus
+  `/root/amph-ct-20261117T223813/` (VM and CT configs, both `.fw` files, `nftables.conf` before
+  each edit, the cutover script and logs).
+- **VM 113** is kept stopped with `onboot: 0`, disk intact, until it is deleted.
+
+Rollback: `pct stop 213; pct set 213 --onboot 0`, put `tap113i2` back in place of `veth213i0` in
+both `divide_guests` sets (under `flock /root/.nftables-edit.lock`, `nft -c -f`, then `nft -f`),
+then `qm set 113 --onboot 1; qm start 113`. Redis, holt-lab's and the music data written in the
+CT since the cutover stay in the CT unless copied back.
+
 ## fg: Flying Gorilla, from giftshop (2026-11-17)
 
 The Flying Gorilla game API (`fg-api`, the owner's game, repository `Flying-Gorilla`, branch
@@ -551,11 +665,11 @@ edge (below).
   `FG_TRUSTED_PROXY=172.16.5.10/32` (the edge sets `X-Real-IP`) and `FG_POSTGRES_DSN` for
   `fg_api_beta` on terp.db (verify-full, `/etc/ssl/terp-db/ca.crt`, `80.93.219.21 terp.db` in
   `/etc/hosts`). The bbolt file `/var/lib/fg-api/state.db` came along.
-- **Redis stays local** (`redis-server`, 127.0.0.1:6379, database 1, as on giftshop): sessions
-  revoked and live runs, a few keys with TTLs. fg-api's Redis client has no username setting, so
-  on terp.db's shared Redis it could only log in as `default`, which can read the edge's
-  certificate keys. Moving it needs `FG_REDIS_USERNAME` in fg-api and an ACL user limited to
-  `~fg:*`.
+- **Redis on terp.db** since 22:57 UTC (database 1, as on giftshop: sessions revoked and live runs,
+  a few keys with TTLs): its own instance `redis-server@fg`, `FG_REDIS_ADDR=terp.db:6381` and
+  `FG_REDIS_PASSWORD` (fg-api's client has no username setting, so it is not a user on the shared
+  Redis). fg's local `redis-server` is stopped and disabled with its data; see "Guest Redis on
+  terp.db" below.
 - **Guest firewall**: `inet guestfw` (see "Guest firewalls"), tcp 8787 from the edge only.
 - **Deploys**: `server/deploy/deploy.sh` in the repository, run by hand (no CI), now defaults to
   `TARGET_HOST=fg` (root over SSH through divide). The client build goes to the edge (below).
@@ -623,3 +737,56 @@ Redis. Everything moved as above; it was shut down cleanly at 22:27:30 UTC on 20
 Rollback: `qm start 111` (and "Rollback" under fg above for the game). pages.eli.gift's old
 tunnel is gone, so serving it from giftshop again needs a new one (or an edge route to
 172.16.5.78:80).
+
+## Guest databases on terp.db (2026-11-17)
+
+Every Postgres database on divide's guests now lives on terp.db (`docs/terp-db.md`, "The
+2026-11-17 move"). The guests keep their old clusters stopped, disabled and `start.conf` `manual`,
+with the data in place as the rollback:
+
+| Guest      | Stopped cluster                                   | Its app, now on terp.db                                |
+| ---------- | ------------------------------------------------- | ------------------------------------------------------ |
+| chat (106) | `postgresql@17-main` (`labelsupplier`, `elichat`) | `labelsupplier-gateway.service`, `elichat.service`     |
+| guca (117) | `postgresql@15-main` (`guacamole_db`)             | `tomcat9` (Guacamole 1.6.0, JDBC PostgreSQL extension) |
+| kru (120)  | `postgresql@18-krunknative` (port 5434)           | `kn-brain-coord.service` (kn-brain-finder has no DB)   |
+| holy (205) | `postgresql@17-main` (`holy`)                     | website2 (`pm2-holy`)                                  |
+
+guca and kru got `/etc/ssl/terp-db/ca.crt` and `80.93.219.21 terp.db` in `/etc/hosts` (outside the
+PVE block). Both leave through divide's NAT without a host route. The other guests (vault, wispdev,
+wg, edge, bs, kn, runner, fg, mull, mac) run no database server.
+
+eagler (VM 104): the Pterodactyl panel's MariaDB database `panel` moved on 2026-11-18 (00:43 UTC,
+3.5 s down) to terp.db's host MariaDB on port 3307 (`docs/terp-db.md`, "MariaDB (3307)"), over TLS
+verified against `/etc/ssl/terp-db/ca.crt` (copied to eagler then). eagler's `mariadb.service`
+(MariaDB 11.8) is stopped and disabled, datadir `/var/lib/mysql` kept as the rollback. eagler's
+services now: `nginx` and `php8.3-fpm` (the panel, `/var/www/pterodactyl`, database on
+`terp.db:3307`, Redis on `terp.db:6383`), `pteroq` (queue worker), the `artisan schedule:run` cron,
+`wings` (Docker, the two game servers), `pm2-root` (its `eagler` app is stopped), `exim4`. Wings
+does not use MariaDB, and no game-server plugin uses MySQL (AuthMe SQLite, LuckPerms H2,
+LoginSecurity and DiscordSRV with MySQL off).
+
+## Guest Redis on terp.db (2026-11-17)
+
+Each guest Redis moved to its own instance on terp.db (`docs/terp-db.md`, "App Redis instances"),
+not to the shared one. The local servers are stopped and disabled, their data kept:
+
+| Guest        | Stopped server                              | Its app, now on terp.db                                     |
+| ------------ | ------------------------------------------- | ----------------------------------------------------------- |
+| fg (206)     | `redis-server` (127.0.0.1:6379)             | `fg-api`, `terp.db:6381`                                    |
+| kru (120)    | `kn-redis` (127.0.0.1:6380, no persistence) | `kn-brain-coord`, `kn-brain-finder`, `redis://terp.db:6382` |
+| eagler (104) | `redis-server` (127.0.0.1:6379)             | Pterodactyl panel (`php8.3-fpm`, `pteroq`), `terp.db:6383`  |
+
+- eagler got `80.93.219.21 terp.db` in `/etc/hosts` and in `/etc/cloud/templates/hosts.debian.tmpl`
+  (cloud-init is disabled there, `/etc/cloud/cloud-init.disabled`, so only the first matters now).
+- kru: KrunkNative's `kn_redis` role has a `kn_redis_remote_url` mode for this (set for kru in
+  `group_vars/central/main.yml`): it keeps `kn-redis` off and writes `redis.env` for terp.db, and
+  never touches `KN_REDIS_PASSWORD`, which is terp.db's now.
+- amph (213): its `redis-server` (6379, the edge's certificates until 2026-11-17, then only
+  wisp.baby's stats) is stopped and disabled since 2026-11-18 00:47 UTC; the stats moved to the
+  shared instance (`docs/terp-db.md` "Shared Redis (6380)"), and 6379 left `from_edge` above and
+  `213.fw` (backups `/root/nftables.conf.bak-wispredis-20261118004827`,
+  `/root/213.fw.bak-wispredis-20261118004827`).
+- Still local: chat's (106) `redis-server` on 127.0.0.1:6379, the cache of
+  `labelsupplier-gateway` (empty). Its client cannot send `AUTH`, so it stays until the gateway is
+  rebuilt with a password setting. No other guest or VM (mull, mac and every CT checked) runs
+  Redis, KeyDB or Valkey.

@@ -1,9 +1,11 @@
 ---
 # Configure amph (origin dedi) to support the multi-edge fleet:
-#   1. Redis bound to the public interface, password-protected: the shared
-#      lua-resty-auto-ssl store (certs + ACME http-01 tokens) for all edges.
+#   1. Only with abulxt_origin_redis_on (shared_redis_on_terp_db false, the rollback): Redis bound
+#      to the public interface, password-protected, the shared lua-resty-auto-ssl store (certs +
+#      ACME http-01 tokens) and wisp.baby's stats for all edges. Otherwise it is stopped: since
+#      2026-11-17 that Redis is on terp.db (docs/terp-db.md).
 #   2. Open amph's firewall so every edge subnet can reach:
-#        6379  shared auto-ssl Redis
+#        6379  shared auto-ssl Redis (only with abulxt_origin_redis_on)
 #        8822  abulxt-domains validator (/ask?target=edge)
 #        9080  origin-internal reverse-proxy target (edge → amph traffic)
 #      Previously only the 45.82.161.0/24 (ashburn) subnet was allowed.
@@ -21,26 +23,39 @@
     amph_pubkey: "{{ amph_pubkey_b64.content | b64decode | trim }}"
   when: amph_pubkey_b64.content is defined
 
-- name: Install redis-server
-  ansible.builtin.apt:
-    name: redis-server
-    state: present
-    update_cache: true
+- name: Redis for the edges on amph (rollback only)
+  when: abulxt_origin_redis_on | bool
+  block:
+    - name: Install redis-server
+      ansible.builtin.apt:
+        name: redis-server
+        state: present
+        update_cache: true
 
-- name: Render redis config for shared auto-ssl storage
-  ansible.builtin.template:
-    src: redis-autossl.conf.j2
-    dest: /etc/redis/redis.conf
-    owner: redis
-    group: redis
-    mode: "0640"
-  notify: restart redis
+    - name: Render redis config for shared auto-ssl storage
+      ansible.builtin.template:
+        src: redis-autossl.conf.j2
+        dest: /etc/redis/redis.conf
+        owner: redis
+        group: redis
+        mode: "0640"
+      notify: restart redis
 
-- name: Ensure redis is enabled and started
+    - name: Ensure redis is enabled and started
+      ansible.builtin.systemd:
+        name: redis-server
+        state: started
+        enabled: true
+
+# Left running, a stale amph Redis keeps answering anything still pointed at it, so a missed client
+# would read old certificates instead of failing loudly. /var/lib/redis/dump.rdb stays as the rollback.
+- name: Stop amph's Redis while the edges use terp.db
   ansible.builtin.systemd:
     name: redis-server
-    state: started
-    enabled: true
+    state: stopped
+    enabled: false
+  when: not (abulxt_origin_redis_on | bool)
+  failed_when: false
 
 # The address amph sees an edge's traffic from: edge_origin_source when the edge reaches amph
 # over a private network (the edge on divide's vmbr1, 172.16.5.10/32), else its edge_subnet.
@@ -78,7 +93,7 @@
     content: |
       # Managed by Ansible (abulxt_origin). Read by abulxt-firewall.service.
       EDGE_SUBNETS="{{ abulxt_edge_subnets | join(' ') }}"
-      AUTO_SSL_REDIS_PORT={{ auto_ssl_redis_port }}
+      AUTO_SSL_REDIS_PORT={{ abulxt_origin_redis_port }}
       SHADY_RELAY_PORT={{ shady_relay_port }}
 
 - name: Create the abulxt-firewall drop-in directory
@@ -105,11 +120,11 @@
     daemon_reload: true
   when: abulxt_firewall_dropin.changed
 
-- name: Open firewall for edge subnets (9080, 8822, 6379, 1082)
+- name: Open firewall for edge subnets (9080, 8822, 1082, and 6379 with abulxt_origin_redis_on)
   ansible.builtin.command: /usr/local/sbin/abulxt-firewall.sh
   environment:
     EDGE_SUBNETS: "{{ abulxt_edge_subnets | join(' ') }}"
-    AUTO_SSL_REDIS_PORT: "{{ auto_ssl_redis_port }}"
+    AUTO_SSL_REDIS_PORT: "{{ abulxt_origin_redis_port }}"
     SHADY_RELAY_PORT: "{{ shady_relay_port }}"
   # The script is installed to /usr/local/sbin (where amph's abulxt-firewall
   # systemd unit runs it from); we re-run it with the widened edge subnets.
