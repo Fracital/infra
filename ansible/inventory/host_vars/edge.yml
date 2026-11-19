@@ -214,16 +214,15 @@ edge_static_sites:
         host: holyunb.locker
         timeout: 15s
         body_max: 16k
+      # Flying Gorilla's game socket, under holy's /cdn/html5/fg (website2 runtime.js relays it to
+      # the game's server). The /cdn/ block below is plain HTTP, so the upgrade needs its own.
+      - at: "= /cdn/html5/fg/socket"
+        pass: "{{ systemya_holy_pass }}"
+        host: holyunb.locker
+        websocket: true
+        timeout: 3600s
       - at: "^~ /cdn/"
         pass: "{{ systemya_holy_pass }}"
         host: holyunb.locker
         passthrough: true
         timeout: 3600s
-        # holy's theatre file server (website2 runtime.js serveFile) only takes send's 200 and 206:
-        # a revalidation that matches (send's 304) falls through to its HTML 404 page, so every
-        # cached thumbnail broke on reload (2026-11-18). holy says max-age=0, so browsers revalidate
-        # every load; holyunb.locker hides it behind Cloudflare's 4 h max-age. Without the
-        # validators holy answers 200 with the file.
-        headers:
-          - { name: If-None-Match, value: "" }
-          - { name: If-Modified-Since, value: "" }
