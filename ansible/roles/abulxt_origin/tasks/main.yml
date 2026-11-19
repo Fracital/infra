@@ -7,6 +7,19 @@
 #   2. Remove amph's retired in-guest firewall (abulxt-firewall.sh): divide's pve-firewall
 #      (213.fw) decides who reaches 8822 (abulxt-domains), 9080 (origin-internal) and 1082.
 
+# The OpenResty package on Debian 13 (roles/openresty tasks/debs.yml, host_vars openresty_*): kept at
+# openresty.org's newest and at openresty_min_version or newer, and it refuses openresty_http2 on an
+# older package. The flush swaps a new binary in (SIGUSR2, handler "upgrade openresty binary") here,
+# so the reloads below already reach the new master and never turn HTTP/2 on in the old one.
+- name: OpenResty package
+  ansible.builtin.include_role:
+    name: openresty
+    tasks_from: debs.yml
+  when: openresty_install_method | default('apt') == 'debs'
+
+- name: A new OpenResty binary is in before anything is rendered
+  ansible.builtin.meta: flush_handlers
+
 # OpenResty's workers as their own user, and the service sandbox (roles/openresty
 # tasks/isolation.yml). amph's nginx.conf (abulxt deploy/openresty, user openresty) names it.
 - name: OpenResty's user and sandbox
@@ -123,6 +136,7 @@
     owner: root
     group: root
     mode: "0644"
+  notify: reload openresty on amph
 
 # estro.help: edges relay it here like any byod name; amph forwards over the VLAN.
 # `--tags estro` renders only this file (skips the firewall rebuild).

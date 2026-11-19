@@ -24,3 +24,15 @@ deploy_user_git_safe_dirs:
   - /opt/fracital/repo
   - /opt/fracital/dev
   - /opt/stomp/repo
+
+# --- OpenResty package (roles/openresty tasks/debs.yml, included by fracital_origin) ---
+# Debian 13: openresty.org's bookworm .debs, checked and installed by the role (README.md "OpenResty
+# packages on Debian 13"); a new binary is swapped in with SIGUSR2, without a restart.
+openresty_apt_suite: bookworm
+openresty_install_method: debs
+# nginx2root (group_vars/all openresty_http2): at least OpenResty 1.31.8.1 rebuilt with nginx
+# 1.31.9's fixes (openresty-build/), installed 2026-11-19, until openresty.org ships 1.31.9.1.
+openresty_min_version: "{{ openresty_http2_fixed_version }}"
+# HTTP/2 back on (off 2026-11-18 to 2026-11-19 for nginx2root) in 10-fracital.conf; the openresty
+# role refuses it on an older package. The hand-managed 20-fracital-dev.conf has http2 on too. WebSockets still upgrade over HTTP/1.1 (no RFC 8441 Extended CONNECT).
+openresty_http2: true

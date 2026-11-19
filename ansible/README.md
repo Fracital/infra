@@ -695,8 +695,9 @@ The static sites need nothing from it: their trees are world-readable (`edge_sta
 ## OpenResty packages on Debian 13
 
 Debian 13's apt refuses openresty.org's repository (its `sqv` rejects the SHA1 key binding), so a
-host with `openresty_install_method: debs` (the edge) gets the bookworm `.debs` from
-`roles/openresty` `tasks/debs.yml` instead, checked the way apt would: `files/openresty-debs`
+host with `openresty_install_method: debs` (the edge, amph and terp) gets the bookworm `.debs` from
+`roles/openresty` `tasks/debs.yml` instead (amph and terp through `abulxt_origin` and
+`fracital_origin`, which include it first and flush the binary swap before they render anything), checked the way apt would: `files/openresty-debs`
 verifies `InRelease` with `gpgv` against the pinned key (`openresty_signing_key_fpr`), `Packages`
 against `InRelease`'s SHA256 and each `.deb` against `Packages`. Every run installs whatever the
 repository has newer than the host (`openresty_debs`: openresty and its openssl3, pcre2 and zlib),
@@ -713,7 +714,7 @@ up, the old one keeps serving and the play fails.
 `openresty_min_version` (dpkg order) is the oldest `openresty` a host may keep. When neither the
 host nor the repository has it, the role installs `openresty_local_debs`, paths on the controller
 to a build from `openresty-build/` (`-e '{"openresty_local_debs": ["/path/openresty_...deb"]}'`),
-and fails without them. The edge holds `openresty_http2_fixed_version`, so a CI apply leaves its
+and fails without them. The edge, amph and terp hold `openresty_http2_fixed_version`, so a CI apply leaves their
 build alone and moves to openresty.org's own fixed release when that appears.
 
 ### nginx2root and HTTP/2
@@ -724,9 +725,12 @@ an HTTP/2 use-after-free when proxying) is in nginx 1.9.5 to 1.31.8. nginx fixed
 off everywhere (`openresty_http2: false`, group_vars/all). On 2026-11-19 the edge moved to
 OpenResty 1.31.8.1 rebuilt with nginx 1.31.9's changes (`openresty-build/`, package version
 `1.31.8.1-1~bookworm1+nginx2root1`) and turned HTTP/2 back on in `host_vars/edge.yml`. The role
-refuses to run with `openresty_http2` on and an older package. amph and terp still run 1.31.1.1
-with HTTP/2 off; they are private (the edge reaches them over HTTP/1.1), and move once
-openresty.org ships 1.31.9.1. HTTP/3 stays out of OpenResty (CVE-2026-121810 needs `quic`):
+refuses to run with `openresty_http2` on and an older package. amph and terp followed the same day
+(04:47 and 04:51 UTC, `playbooks/origin.yml --tags origin` and `playbooks/fracital-origin.yml
+--tags origin` with the build as `openresty_local_debs`), HTTP/2 on in their host_vars, in abulxt's
+`deploy/openresty` and in terp's hand-managed `20-fracital-dev.conf`. Each host keeps the old
+packages and a tarball of `/usr/local/openresty` in `/root/openresty-rollback/` (`ROLLBACK.txt`
+there, RUNBOOK.md "Rollback"). HTTP/3 stays out of OpenResty (CVE-2026-121810 needs `quic`):
 holyWisp answers udp 443, and no server block sends `Alt-Svc`.
 
 ## Internal HTTP front

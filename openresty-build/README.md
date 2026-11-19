@@ -6,8 +6,8 @@ directory rebuilds openresty.org's own `openresty 1.31.8.1-1~bookworm1` Debian p
 nginx's 1.31.8 to 1.31.9 source changes applied to the bundled nginx-1.31.8 core, as
 `1.31.8.1-1~bookworm1+nginx2root1`. That version sorts above 1.31.8.1-1~bookworm1 and below any
 1.31.9.1 openresty.org ships, so `roles/openresty` (`openresty_min_version`, README.md
-"OpenResty packages on Debian 13") moves to the official package when it appears. The edge runs it
-since 2026-11-19.
+"OpenResty packages on Debian 13") moves to the official package when it appears. The edge, amph
+and terp run it since 2026-11-19.
 
 ```sh
 openresty-build/build.sh /some/dir     # needs docker; the .debs land in /some/dir

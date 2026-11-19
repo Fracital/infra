@@ -19,7 +19,8 @@ cutting `byod.abstracteducation.loan` over to the round-robin.
 - Since 2026-11-08 the fleet's addresses are split between that name (16 IPv4 + 1 IPv6)
   and Fracital's `byod.fracit.al` (15 IPv4 + 1 IPv6, zone `byod.fracit.al`, same Gcore
   token); README "Two byod names". The edge nameservers serve and health-check both apexes (README "Edge DNS"); Gcore holds a static rollback copy.
-- Every edge runs OpenResty 1.31.1.1 + lua-resty-auto-ssl, terminates TLS, and
+- Every edge runs OpenResty (1.31.8.1 rebuilt with nginx 1.31.9's fixes since 2026-11-19, on amph
+  and terp too; README "OpenResty packages on Debian 13") + lua-resty-auto-ssl, terminates TLS, and
   relays to amph `:9080` with the shared `X-BYOD-Token`.
 - All edges share **one** Let's Encrypt cert via the central Redis (`auto-ssl:*`),
   on terp.db since 2026-11-17 ("Shared Redis on terp.db"). Any edge can answer the ACME http-01 challenge; a cert issued
@@ -733,6 +734,13 @@ abulxt-edge-wisp`. Every stream then goes direct with no verdict.
   also leaves a timestamped `/etc/nftables.conf.<pid>.<date>@<time>~` copy beside
   it, which nftables ignores. Set `edge_firewall_manage: false` before rerunning
   the edge play, or it puts the contract back.
+- **OpenResty package (edge, amph, terp):** `/root/openresty-rollback/` on each host has the
+  1.31.1.1 packages and a tarball of `/usr/local/openresty` from before 2026-11-19 (amph and terp
+  also `ROLLBACK.txt`).
+  1.31.1.1 has nginx2root, so turn HTTP/2 off first (`openresty_http2: false` in the host_vars,
+  abulxt's `deploy/openresty`, terp's `20-fracital-dev.conf`) and set `openresty_min_version: ""`.
+  Then, under a `policy-rc.d` that exits 101, `dpkg -i --force-downgrade --force-confold` the four
+  `.debs` and run `/usr/local/sbin/openresty-binary-upgrade`: the same SIGUSR2 swap, no restart.
 - **mcnode :8080:** remove `listen 8080` lines and the catch-all `server` block from
   `roles/edge_relay/templates/mc-routes.conf.j2`, then rerun `playbooks/edges.yml`.
   Clients fall back to 443.

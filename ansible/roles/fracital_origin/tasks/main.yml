@@ -51,6 +51,19 @@
             path: /usr/sbin/policy-rc.d
             state: absent
 
+# The OpenResty package on Debian 13 (roles/openresty tasks/debs.yml, host_vars openresty_*): kept at
+# openresty.org's newest and at openresty_min_version or newer, and it refuses openresty_http2 on an
+# older package. The flush swaps a new binary in (SIGUSR2, handler "upgrade openresty binary") here,
+# so the reloads below already reach the new master and never turn HTTP/2 on in the old one.
+- name: OpenResty package
+  ansible.builtin.include_role:
+    name: openresty
+    tasks_from: debs.yml
+  when: openresty_install_method | default('apt') == 'debs'
+
+- name: A new OpenResty binary is in before anything is rendered
+  ansible.builtin.meta: flush_handlers
+
 # terp is an unprivileged container (CT 216 on divide, 2026-11-17) and cannot load modules:
 # divide loads tcp_bbr (/etc/modules-load.d/bbr.conf, docs/divide-host.md "TCP tuning and modules").
 - name: No modules-load file in the container
