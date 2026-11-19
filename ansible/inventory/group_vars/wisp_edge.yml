@@ -528,6 +528,20 @@ edge_warp_bypass_hosts:
   - "*.github.com"
   - githubusercontent.com
   - "*.githubusercontent.com"
+  # Speedtest by Ookla (2026-11-19, the user's request): the site, its API and assets (cdnst.net),
+  # custom-branded tests, and the test servers' Ookla names (<server>.prod.hosts.ooklaserver.net,
+  # 153 of 215 sampled). A server listed under its host's own name (speedtest.<isp>.net:8080) is
+  # still on WARP.
+  - speedtest.net
+  - "*.speedtest.net"
+  - ookla.com
+  - "*.ookla.com"
+  - ooklaserver.net
+  - "*.ooklaserver.net"
+  - speedtestcustom.com
+  - "*.speedtestcustom.com"
+  - cdnst.net
+  - "*.cdnst.net"
 # Clean TCP dialled by holyWisp itself, marked for the router's WARP tunnel; only names the
 # gate sends to the relay (shady, adult) go through edge-router.py (roles/edge_wisp/defaults
 # holywisp_tcp_direct). On since 2026-11-16, at the user's request.
