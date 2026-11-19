@@ -60,9 +60,11 @@ edge_tcp_sysctl:
 edge_network_load_bbr: false
 # Bytes queued toward one client before holyWisp pauses that client's remotes: 2 MiB, not the
 # 8 MiB default, so what tcp_notsent_lowat keeps out of the kernel does not queue here instead.
-# It is also the refill CONTINUE budget (conn_window): 2 MiB in flight per connection is
-# ~200 Mbit/s of upload at 80 ms, past what a client of this box sends.
 holywisp_ws_write_high_water: 2097152
+# The upload budget is its own (holyWisp upload-window, 2026-11-19): with the mark's 2 MiB a
+# connection's uploads stopped near 370 Mbit/s at 45 ms and 200 at 80 ms. 16 MiB is a gigabit at
+# 130 ms; what queues toward slow remotes is still bounded by conn-queue-max.
+holywisp_upload_window: 16777216
 
 # Access-log edge="..." (edge_relay edge_log_name): named after the host.
 edge_log_name: divide

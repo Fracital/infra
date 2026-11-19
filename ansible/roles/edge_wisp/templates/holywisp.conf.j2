@@ -142,6 +142,9 @@ stream-queue-max = {{ holywisp_stream_queue_max }}
 # tcp_notsent_lowat keeps the kernel queue short (host_vars); wispurr had no equivalent (it dropped the WebSocket at 64 MiB, patch 0003 in
 # edge-wisp/patches).
 ws-write-high-water = {{ holywisp_ws_write_high_water }}
+# upload-window: what one client may have in flight toward its remotes across its streams (the
+# refill CONTINUE budget). 0 = ws-write-high-water, which the edge keeps short for latency.
+upload-window = {{ holywisp_upload_window }}
 # A connect that has an address of the other family left waits this long before trying it; the
 # last address waits connect-timeout-ms (edge_wisp defaults: a lost SYN on WARP).
 family-fallback-ms = {{ holywisp_family_fallback_ms }}
