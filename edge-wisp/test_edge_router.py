@@ -11,6 +11,7 @@ import hashlib
 import importlib.util
 import json
 import socket
+import ssl
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -896,6 +897,150 @@ class WarpBypass(unittest.TestCase):
             with self.assertRaises(OSError):  # not bypassed: no tunnel, no fallback
                 asyncio.run(er.open_clean(cfg, "192.0.2.7", 443, socket.AF_INET, key="k"))
         self.assertEqual(opened, [("192.0.2.7", 443)])
+
+
+class SlowPaths(unittest.TestCase):
+    """warp_slow_targets: a tunnel that is up but far slower than the others to some host."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.dir.name, "warp.json")
+        self.wt = er.WarpTunnels(tunnels(3), state_path=self.path, slow_targets=["proof.ovh.net"])
+        for t in self.wt.tunnels:
+            for f in (V4, V6):
+                self.wt.record(t.name, f, True)
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def names(self, family=V4):
+        return [t.name for t in self.wt.healthy(family)]
+
+    def test_verdict(self):
+        v = er.slow_verdict
+        # 2026-11-19: warp2 to OVH.
+        self.assertEqual(v({"warp1": 0.19, "warp2": 19.7, "warp3": 0.18}), {"warp2"})
+        self.assertEqual(v({"warp1": 0.19, "warp2": None, "warp3": 0.18}), {"warp2"})
+        # All slow alike: that is the host, not a tunnel.
+        self.assertEqual(v({"a": 1.5, "b": 1.6, "c": 1.4}), set())
+        # Under the floor nothing is slow, however it compares.
+        self.assertEqual(v({"a": 0.9, "b": 0.05, "c": 0.05}), set())
+        # Nothing to compare with: no verdict.
+        self.assertEqual(v({"a": None, "b": None}), set())
+        self.assertEqual(v({"a": 30.0}), set())
+        self.assertEqual(v({}), set())
+        # Two tunnels, one far slower: it is the slow one, the fast one is not judged by it.
+        self.assertEqual(v({"a": 0.2, "b": 9.0}), {"b"})
+
+    def test_out_after_rounds_and_back(self):
+        slow = {V4: {"proof.ovh.net": {"warp0": 0.18, "warp1": 0.19, "warp2": 19.7}}}
+        fast = {V4: {"proof.ovh.net": {"warp0": 0.18, "warp1": 0.19, "warp2": 0.2}}}
+        for _ in range(er.SLOW_ROUNDS - 1):
+            self.wt.slow_round(slow)
+            self.assertEqual(self.names(), ["warp0", "warp1", "warp2"])
+        self.wt.slow_round(slow)
+        self.assertEqual(self.names(), ["warp0", "warp1"])
+        self.assertEqual(self.names(V6), ["warp0", "warp1", "warp2"])     # judged per family
+        self.wt.slow_round(slow)
+        self.assertEqual(self.names(), ["warp0", "warp1"])
+        self.wt.slow_round(fast)
+        self.assertEqual(self.names(), ["warp0", "warp1", "warp2"])
+
+    def test_one_fast_round_between_resets_the_streak(self):
+        slow = {V4: {"h": {"warp0": 0.1, "warp1": 0.1, "warp2": 9.0}}}
+        fast = {V4: {"h": {"warp0": 0.1, "warp1": 0.1, "warp2": 0.1}}}
+        for _ in range(4):
+            for r in [slow] * (er.SLOW_ROUNDS - 1) + [fast]:
+                self.wt.slow_round(r)
+        self.assertEqual(self.names(), ["warp0", "warp1", "warp2"])
+
+    def test_never_more_than_half(self):
+        slow = {V4: {"a": {"warp0": 0.1, "warp1": 9.0, "warp2": None}, "b": {"warp0": 9.0, "warp1": 0.1, "warp2": 0.1}}}
+        for _ in range(er.SLOW_ROUNDS + 1):
+            self.wt.slow_round(slow)
+        # All three are slow for some host; one of three may be out (the longest streak, then by name).
+        self.assertEqual(len(self.names()), 2)
+        self.assertEqual(len(self.wt.slow_out), 1)
+
+    def test_two_up_one_out_one_up_none(self):
+        self.wt.record("warp2", V4, False)
+        self.wt.record("warp2", V4, False)
+        slow = {V4: {"h": {"warp0": 0.1, "warp1": 9.0}}}
+        for _ in range(er.SLOW_ROUNDS):
+            self.wt.slow_round(slow)
+        self.assertEqual(self.names(), ["warp0"])
+        self.wt.record("warp0", V4, False)
+        self.wt.record("warp0", V4, False)
+        # Only the slow one is left up: it is used, a slow tunnel being better than none.
+        self.assertEqual(self.names(), ["warp1"])
+        self.wt.slow_round({V4: {"h": {"warp1": 9.0}}})
+        self.assertEqual(self.names(), ["warp1"])
+        self.assertEqual(self.wt.slow_out, set())
+
+    def test_state_file_follows(self):
+        async def slow_marked(ip, port, family, mark, **kw):
+            if mark == 0x7703:
+                await asyncio.sleep(1.0)
+            return asyncio.StreamReader(), mock.Mock()
+
+        async def resolve(host, port, family=0, type=0):
+            self.assertEqual((host, port, type), ("proof.ovh.net", 443, socket.SOCK_STREAM))
+            return [(family, type, 6, "", ("192.0.2.1", 443) if family == V4 else ("2001:db8::1", 443, 0, 0))]
+
+        async def go():
+            asyncio.get_event_loop().getaddrinfo = resolve
+            with mock.patch.object(er, "open_marked", slow_marked), mock.patch.object(er, "SLOW_TIMEOUT", 0.3), \
+                    mock.patch.object(er, "SLOW_FLOOR", 0.01):
+                for _ in range(er.SLOW_ROUNDS):
+                    await self.wt.slow_probe_all()
+
+        asyncio.run(go())
+        state = json.loads(Path(self.path).read_text())
+        self.assertEqual([t["name"] for t in state["v4"]], ["warp0", "warp1"])
+        self.assertEqual([t["name"] for t in state["v6"]], ["warp0", "warp1"])
+
+    def test_handshake_through_the_mark_with_the_name(self):
+        calls = []
+        writer = mock.Mock()
+
+        async def fake_marked(ip, port, family, mark, **kw):
+            calls.append((ip, port, family, mark, kw.get("server_hostname"), kw.get("ssl") is not None))
+            return asyncio.StreamReader(), writer
+
+        async def go():
+            with mock.patch.object(er, "open_marked", fake_marked):
+                return await self.wt.handshake_time(self.wt.tunnels[1], V4, "proof.ovh.net", "192.0.2.1")
+
+        secs = asyncio.run(go())
+        self.assertIsNotNone(secs)
+        self.assertEqual(calls, [("192.0.2.1", 443, V4, 0x7702, "proof.ovh.net", True)])
+        writer.close.assert_called_once()
+
+    def test_failure_and_timeout_are_none(self):
+        async def hang(*a, **kw):
+            await asyncio.sleep(5)
+
+        async def go(fake):
+            with mock.patch.object(er, "open_marked", fake), mock.patch.object(er, "SLOW_TIMEOUT", 0.05):
+                return await self.wt.handshake_time(self.wt.tunnels[0], V4, "h.example", "192.0.2.1")
+
+        self.assertIsNone(asyncio.run(go(hang)))
+        self.assertIsNone(asyncio.run(go(mock.AsyncMock(side_effect=ssl.SSLCertVerificationError("bad certificate")))))
+
+    def test_config(self):
+        base = {"doh_adult": "a", "doh_shady": "b", "doh_plain": "c", "relay_host": "1.2.3.4", "relay_port": 1,
+                "relay_user": "u", "relay_pass": "p", "warp_tunnels": [{"name": "warp0", "mark": 30465}]}
+
+        def load(**extra):
+            with mock.patch.object(er, "CONFIG_PATH", mock.Mock(read_text=lambda: json.dumps(dict(base, **extra)))):
+                return er.load_config()["warp_kernel"]
+
+        self.assertEqual(load().slow_targets, [])
+        self.assertEqual(load(warp_slow_targets=["Proof.OVH.net", "fsn1-speed.hetzner.com", "proof.ovh.net"]).slow_targets,
+                         ["proof.ovh.net", "fsn1-speed.hetzner.com"])
+        for bad in ("proof.ovh.net", ["1.2.3.4"], [""], ["a b.example"], [5], ["localhost"], ["-x.example"]):
+            with self.assertRaises(SystemExit, msg=repr(bad)):
+                load(warp_slow_targets=bad)
 
 if __name__ == "__main__":
     unittest.main()

@@ -230,6 +230,17 @@ holywisp_tcp_direct: false
 # Takes effect only with kernel WARP; holyWisp's lines need holywisp_udp_warp and a holyWisp
 # with warp-bypass-host. Rollout check: /stats "udpWarp"/"tcpWarp" "bypassed".
 edge_warp_bypass_hosts: []
+# Hosts whose TLS handshake, timed through every WARP tunnel every 2 minutes, compares the
+# tunnels (edge-router.json warp_slow_targets): a tunnel far slower than the others for one of
+# them two rounds in a row is taken out as a dead one is (its sites and their UDP move), and comes
+# back after a fast round. Never more than half of a family's tunnels. The trace probe only sees a
+# tunnel up or down: on 2026-11-19 warp2 was up while its TLS to OVH answered 19.7 s late. Speed
+# test hosts, meant to be hit; [] turns it off. About 16 handshakes a minute with 4 tunnels up.
+edge_warp_slow_targets:
+  - proof.ovh.net
+  - proof.ovh.ca
+  - fsn1-speed.hetzner.com
+  - ash-speed.hetzner.com
 holywisp_tcp_direct_on: >-
   {{ holywisp_tcp_direct | bool and holywisp_udp_warp | bool and edge_wisp_manage_router | bool
      and holywisp_proxy | length > 0 and edge_router_dns_port | int > 0

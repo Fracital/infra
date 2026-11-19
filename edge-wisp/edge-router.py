@@ -61,7 +61,12 @@ Gateway locations are locked to the edge networks) never touch WARP.
   healthy tunnel for the family: out directly with "warp_fallback_direct"
   (logged at most once a minute), else the stream fails. A connect that fails
   through a healthy tunnel fails as a direct one would; the probes alone judge
-  the tunnel. After every probe round the tunnels up per family go to
+  the tunnel. With "warp_slow_targets" (host names), every SLOW_INTERVAL each
+  tunnel's TLS handshake with each of them is timed too, and a tunnel far
+  slower than the others for one host (slow_verdict) SLOW_ROUNDS rounds in a
+  row is taken out as a dead one is, until a round finds it fast again; never
+  more than half of a family's tunnels, so this alone never empties one.
+  After every probe round the tunnels up per family go to
   "warp_state" (default WARP_STATE_PATH; "" writes nothing), atomically, as
   {"v4": [{"name", "mark"}...], "v6": [...]}. A holyWisp with udp-warp-state
   reads it and marks a UDP stream for the tunnel this router would pick for
@@ -117,6 +122,15 @@ PROBE_TIMEOUT = 5.0          # one tunnel health probe, connect to last byte
 PROBE_INTERVAL = 15.0
 PROBE_DEAD_AFTER = 2         # consecutive failed probes before a tunnel that was up goes down
 PROBE_READ_MAX = 8192        # bytes of a probe response read at most
+# Slow paths: a tunnel can pass its probe and still be slow to some sites. On 2026-11-19
+# warp2's TLS to OVH answered 19.7 s late every time while warp1, warp3 and the box's own address
+# took 16 to 190 ms. Every SLOW_INTERVAL each tunnel's TLS handshake with each "warp_slow_targets"
+# host is timed, per family, and compared with the other tunnels' for the same host.
+SLOW_INTERVAL = 120.0
+SLOW_TIMEOUT = 8.0           # one handshake; not done by then is slow, when another tunnel did it
+SLOW_FLOOR = 1.0             # seconds: a handshake faster than this is never slow
+SLOW_FACTOR = 4.0            # times the median of the other tunnels' handshakes with that host
+SLOW_ROUNDS = 2              # rounds in a row slow for some host before a tunnel is taken out
 # holyWisp reads this to mark its own UDP the same way (udp-warp-state). It treats a file older
 # than 60 s as stale, so it is rewritten after every probe round, not only on a change.
 WARP_STATE_PATH = "/run/abulxt-edge-router/warp.json"
@@ -142,7 +156,8 @@ def load_config():
             tunnels,
             probe_target(cfg.get("warp_probe_v4", "1.1.1.1"), 4, "warp_probe_v4"),
             probe_target(cfg.get("warp_probe_v6", "2606:4700:4700::1111"), 6, "warp_probe_v6"),
-            state_path=cfg.get("warp_state", WARP_STATE_PATH) or None)
+            state_path=cfg.get("warp_state", WARP_STATE_PATH) or None,
+            slow_targets=slow_targets(cfg.get("warp_slow_targets")))
     return cfg
 
 
@@ -232,6 +247,42 @@ def warp_tunnels(value):
         marks.add(mark)
         out.append(WarpTunnel(name, mark))
     return out
+
+
+HOSTNAME_RE = re.compile(r"^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
+
+
+def slow_targets(value):
+    """edge-router.json "warp_slow_targets": host names whose TLS handshake times compare the tunnels."""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise SystemExit("edge-router.json: warp_slow_targets must be a list of host names")
+    out = []
+    for entry in value:
+        if not isinstance(entry, str) or not HOSTNAME_RE.match(entry.lower()):
+            raise SystemExit("edge-router.json: warp_slow_targets entry %r is not a host name" % (entry,))
+        if entry.lower() not in out:
+            out.append(entry.lower())
+    return out
+
+
+def slow_verdict(times):
+    """{tunnel: seconds or None (no handshake within SLOW_TIMEOUT)} for one host -> the slow tunnels.
+
+    A tunnel is slow when it took more than SLOW_FLOOR and more than SLOW_FACTOR times the median of
+    the others that finished, or did not finish while another did. With no other to compare, none is.
+    """
+    slow = set()
+    for name, t in times.items():
+        others = sorted(v for n, v in times.items() if n != name and v is not None)
+        if not others:
+            continue
+        mid = len(others) // 2
+        median = others[mid] if len(others) % 2 else (others[mid - 1] + others[mid]) / 2
+        if t is None or (t > SLOW_FLOOR and t > SLOW_FACTOR * median):
+            slow.add(name)
+    return slow
 
 
 def probe_target(text, version, key):
@@ -515,8 +566,12 @@ class WarpTunnels:
 
     FAMILIES = (socket.AF_INET, socket.AF_INET6)
 
-    def __init__(self, tunnels, probe_v4="1.1.1.1", probe_v6="2606:4700:4700::1111", state_path=None):
+    def __init__(self, tunnels, probe_v4="1.1.1.1", probe_v6="2606:4700:4700::1111", state_path=None,
+                 slow_targets=()):
         self.tunnels = list(tunnels)
+        self.slow_targets = list(slow_targets)
+        self.slow_rounds = {}    # (name, family) -> rounds in a row found slow for some host
+        self.slow_out = set()    # (name, family) taken out for it: up, and not used
         self.state_path = state_path     # warp.json for holyWisp; None writes nothing
         self._state_err_logged = 0.0
         self.targets = {socket.AF_INET: probe_v4, socket.AF_INET6: probe_v6}
@@ -525,7 +580,9 @@ class WarpTunnels:
         self._ctx = None
 
     def healthy(self, family):
-        return [t for t in self.tunnels if self.up.get((t.name, family))]
+        up = [t for t in self.tunnels if self.up.get((t.name, family))]
+        fast = [t for t in up if (t.name, family) not in self.slow_out]
+        return fast or up        # a slow tunnel is still better than none
 
     def pick(self, key, family):
         """Rendezvous hashing: the healthy tunnel scoring highest for key, or None.
@@ -597,6 +654,98 @@ class WarpTunnels:
         for (t, f), ok in zip(jobs, results):
             self.record(t.name, f, ok is True)
         self.write_state()
+
+    def slow_round(self, results):
+        """One round of handshake times: {family: {host: {tunnel name: seconds or None}}}.
+
+        A tunnel slow for some host SLOW_ROUNDS rounds in a row is taken out of healthy(); one
+        round with no host slow puts it back. At most half of a family's tunnels that are up are
+        out for this at once (the slowest streaks first), so it never empties a family.
+        """
+        for family, hosts in results.items():
+            slow_now = set()
+            judged = set()
+            for times in hosts.values():
+                judged.update(times)
+                slow_now |= slow_verdict(times)
+            for name in judged:
+                k = (name, family)
+                self.slow_rounds[k] = self.slow_rounds.get(k, 0) + 1 if name in slow_now else 0
+            up = [t.name for t in self.tunnels if self.up.get((t.name, family))]
+            want = sorted((n for n in up if self.slow_rounds.get((n, family), 0) >= SLOW_ROUNDS),
+                          key=lambda n: (-self.slow_rounds[(n, family)], n))[:len(up) // 2]
+            for t in self.tunnels:
+                k = (t.name, family)
+                if t.name in want and k not in self.slow_out:
+                    self.slow_out.add(k)
+                    log.warning("WARP tunnel %s is slow for %s (%s); its sites move to the others",
+                                t.name, FAMILY_NAME[family], self._slow_detail(hosts, t.name))
+                elif t.name not in want and k in self.slow_out:
+                    self.slow_out.discard(k)
+                    if t.name in up:     # a tunnel that went down meanwhile is the probe's to report
+                        why = "fast again" if self.slow_rounds.get(k, 0) == 0 else "the others are out or slow too"
+                        log.info("WARP tunnel %s is back in use for %s (%s)", t.name, FAMILY_NAME[family], why)
+
+    @staticmethod
+    def _slow_detail(hosts, name):
+        parts = []
+        for host, times in sorted(hosts.items()):
+            if name in slow_verdict(times):
+                t = times[name]
+                parts.append("%s %s against %s" % (host, "no handshake" if t is None else "%.1f s" % t,
+                             "/".join("%.2f" % v for n, v in sorted(times.items()) if n != name and v is not None)))
+        return "; ".join(parts) or "slow streak"
+
+    async def handshake_time(self, tunnel, family, host, ip):
+        """Seconds for a TCP connect and TLS handshake with host at ip through the tunnel, or None."""
+        if self._ctx is None:
+            self._ctx = ssl.create_default_context()
+        loop = asyncio.get_event_loop()
+        start = loop.time()
+        writer = None
+        try:
+            _reader, writer = await asyncio.wait_for(
+                open_marked(ip, 443, family, tunnel.mark, ssl=self._ctx, server_hostname=host), SLOW_TIMEOUT)
+            return loop.time() - start
+        except Exception:
+            return None
+        finally:
+            if writer is not None:
+                writer.close()
+
+    async def slow_probe_all(self):
+        """Every host, both families, through every tunnel that is up, at once; then slow_round."""
+        loop = asyncio.get_event_loop()
+        results = {}
+        for family in self.FAMILIES:
+            up = [t for t in self.tunnels if self.up.get((t.name, family))]
+            if len(up) < 2:
+                continue
+            hosts = {}
+            for host in self.slow_targets:
+                try:
+                    infos = await asyncio.wait_for(
+                        loop.getaddrinfo(host, 443, family=family, type=socket.SOCK_STREAM), SLOW_TIMEOUT)
+                except Exception:
+                    continue     # no address of this family, or no answer: nothing to compare
+                if infos:
+                    hosts[host] = infos[0][4][0]
+            jobs = [(t, host, ip) for host, ip in hosts.items() for t in up]
+            times = await asyncio.gather(*(self.handshake_time(t, family, host, ip) for t, host, ip in jobs))
+            per_host = {}
+            for (t, host, _ip), secs in zip(jobs, times):
+                per_host.setdefault(host, {})[t.name] = secs
+            results[family] = per_host
+        self.slow_round(results)
+        self.write_state()
+
+    async def run_slow(self, interval=SLOW_INTERVAL):
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                await self.slow_probe_all()
+            except Exception as e:
+                log.error("WARP slow-path probes failed: %r", e)
 
     def state(self):
         """What holyWisp reads: the tunnels up per family, in config order."""
@@ -1091,7 +1240,7 @@ async def main():
     clf = Classifier(cfg)
     pins = FamilyPins()
     kernel = cfg["warp_kernel"]
-    probes = None                # the loop only holds tasks weakly
+    probes = slow_probes = None  # the loop only holds tasks weakly
     if kernel is not None:
         # Before we listen, so the first streams already know which tunnels work.
         # Each probe is bounded by PROBE_TIMEOUT and they all run at once.
@@ -1099,6 +1248,7 @@ async def main():
         for t in kernel.tunnels:
             log.info("%s", kernel.describe(t))
         probes = asyncio.ensure_future(kernel.run())
+        slow_probes = asyncio.ensure_future(kernel.run_slow()) if kernel.slow_targets else None
     server = await asyncio.start_server(
         lambda r, w: handle(cfg, clf, pins, r, w), LISTEN_HOST, LISTEN_PORT, backlog=1024)
     log.info("listening on %s:%d; relay=%s:%s", LISTEN_HOST, LISTEN_PORT, cfg["relay_host"], cfg["relay_port"])
@@ -1109,6 +1259,9 @@ async def main():
         log.info("clean streams leave through WARP tunnels %s (marks %s; fallback direct: %s)",
                  ", ".join(t.name for t in kernel.tunnels), ", ".join("%#x" % t.mark for t in kernel.tunnels),
                  bool(cfg.get("warp_fallback_direct")))
+        if kernel.slow_targets:
+            log.info("tunnels compared by TLS handshake every %d s with %s",
+                     SLOW_INTERVAL, ", ".join(kernel.slow_targets))
     exact, suffixes = cfg["warp_bypass"]
     if exact or suffixes:
         log.info("kept off WARP: %s", ", ".join(sorted(exact) + ["*" + x for x in suffixes]))
