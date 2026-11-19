@@ -489,6 +489,45 @@ edge_warp_bypass_hosts:
   - "*.blockshooter.io"
   - blockshooter.club
   - "*.blockshooter.club"
+  # OVH (2026-11-19, the user's request): through warp2 (mark 30467) its TLS answered 19.7 s late
+  # every time (proof.ovh.ca, proof.ovh.net), where warp1, warp3 and the box's own address took
+  # 16 to 190 ms. OVH's own sites only: a name hosted on OVH's network is still on WARP.
+  - ovh.com
+  - "*.ovh.com"
+  - ovh.net
+  - "*.ovh.net"
+  - ovh.ca
+  - "*.ovh.ca"
+  - ovh.us
+  - "*.ovh.us"
+  - ovh.co.uk
+  - "*.ovh.co.uk"
+  - ovh.ie
+  - "*.ovh.ie"
+  - ovh.de
+  - "*.ovh.de"
+  - ovh.es
+  - "*.ovh.es"
+  - ovh.it
+  - "*.ovh.it"
+  - ovh.nl
+  - "*.ovh.nl"
+  - ovh.pl
+  - "*.ovh.pl"
+  - ovh.pt
+  - "*.ovh.pt"
+  - ovh.cz
+  - "*.ovh.cz"
+  - ovh.lt
+  - "*.ovh.lt"
+  - ovhcloud.com
+  - "*.ovhcloud.com"
+  # GitHub (2026-11-19, the user's request): the site, its API, and user content (raw files,
+  # release and LFS downloads, avatars: raw., objects., avatars.githubusercontent.com).
+  - github.com
+  - "*.github.com"
+  - githubusercontent.com
+  - "*.githubusercontent.com"
 # Clean TCP dialled by holyWisp itself, marked for the router's WARP tunnel; only names the
 # gate sends to the relay (shady, adult) go through edge-router.py (roles/edge_wisp/defaults
 # holywisp_tcp_direct). On since 2026-11-16, at the user's request.
