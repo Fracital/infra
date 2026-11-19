@@ -147,7 +147,9 @@ holywisp_repo: https://github.com/Fracital/holyWisp.git
 # 2026-11-19 bumped to 4f16a9b: Wisp stream credit (0xE2, stream-credit on by default; only a
 # client that names it is held to a per-stream window), and bbr2 as a congestion-control value
 # (bbr stays the default).
-holywisp_ref: 4f16a9b3fe250c75d72e461b80fd4f22e51555de
+# 2026-11-19 bumped to 78095bf: a WebSocket v2 server sends the stream-0 CONTINUE with its INFO
+# (no password users: v2 opens in v1's round trips), and bbr2 makes room for a second session.
+holywisp_ref: 78095bfddf41853f0e79fb46daa940d965111f92
 # Controller cache for both sources: built binaries, npm downloads, and the
 # per-host configs tasks/verify.yml checks.
 holywisp_build_dir: "{{ lookup('env', 'HOME') }}/.cache/abulxt/holywisp"
