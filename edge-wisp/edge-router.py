@@ -64,7 +64,7 @@ Gateway locations are locked to the edge networks) never touch WARP.
   the tunnel. With "warp_slow_targets" (host names), every SLOW_INTERVAL each
   tunnel's TLS handshake with each of them is timed too, and a tunnel far
   slower than the others for one host (slow_verdict) SLOW_ROUNDS rounds in a
-  row is taken out as a dead one is, until a round finds it fast again; never
+  row is taken out as a dead one is, until SLOW_CLEAR_ROUNDS find it fast; never
   more than half of a family's tunnels, so this alone never empties one.
   After every probe round the tunnels up per family go to
   "warp_state" (default WARP_STATE_PATH; "" writes nothing), atomically, as
@@ -129,8 +129,9 @@ PROBE_READ_MAX = 8192        # bytes of a probe response read at most
 SLOW_INTERVAL = 120.0
 SLOW_TIMEOUT = 8.0           # one handshake; not done by then is slow, when another tunnel did it
 SLOW_FLOOR = 1.0             # seconds: a handshake faster than this is never slow
-SLOW_FACTOR = 4.0            # times the median of the other tunnels' handshakes with that host
+SLOW_FACTOR = 4.0            # times the fastest other tunnel's handshake with that host
 SLOW_ROUNDS = 2              # rounds in a row slow for some host before a tunnel is taken out
+SLOW_CLEAR_ROUNDS = 2        # rounds in a row with no host slow before it is used again
 # holyWisp reads this to mark its own UDP the same way (udp-warp-state). It treats a file older
 # than 60 s as stale, so it is rewritten after every probe round, not only on a change.
 WARP_STATE_PATH = "/run/abulxt-edge-router/warp.json"
@@ -270,17 +271,17 @@ def slow_targets(value):
 def slow_verdict(times):
     """{tunnel: seconds or None (no handshake within SLOW_TIMEOUT)} for one host -> the slow tunnels.
 
-    A tunnel is slow when it took more than SLOW_FLOOR and more than SLOW_FACTOR times the median of
-    the others that finished, or did not finish while another did. With no other to compare, none is.
+    A tunnel is slow when it took more than SLOW_FLOOR and more than SLOW_FACTOR times the fastest
+    other tunnel, or did not finish while another did. The fastest, not the median: two slow
+    tunnels of three would each count the other in a median and hide each other. With no other to
+    compare, none is.
     """
     slow = set()
     for name, t in times.items():
-        others = sorted(v for n, v in times.items() if n != name and v is not None)
+        others = [v for n, v in times.items() if n != name and v is not None]
         if not others:
             continue
-        mid = len(others) // 2
-        median = others[mid] if len(others) % 2 else (others[mid - 1] + others[mid]) / 2
-        if t is None or (t > SLOW_FLOOR and t > SLOW_FACTOR * median):
+        if t is None or (t > SLOW_FLOOR and t > SLOW_FACTOR * min(others)):
             slow.add(name)
     return slow
 
@@ -571,6 +572,7 @@ class WarpTunnels:
         self.tunnels = list(tunnels)
         self.slow_targets = list(slow_targets)
         self.slow_rounds = {}    # (name, family) -> rounds in a row found slow for some host
+        self.clean_rounds = {}   # (name, family) -> rounds in a row found slow for none
         self.slow_out = set()    # (name, family) taken out for it: up, and not used
         self.state_path = state_path     # warp.json for holyWisp; None writes nothing
         self._state_err_logged = 0.0
@@ -658,9 +660,12 @@ class WarpTunnels:
     def slow_round(self, results):
         """One round of handshake times: {family: {host: {tunnel name: seconds or None}}}.
 
-        A tunnel slow for some host SLOW_ROUNDS rounds in a row is taken out of healthy(); one
-        round with no host slow puts it back. At most half of a family's tunnels that are up are
-        out for this at once (the slowest streaks first), so it never empties a family.
+        A tunnel slow for some host SLOW_ROUNDS rounds in a row is taken out of healthy();
+        SLOW_CLEAR_ROUNDS rounds in a row with no host slow put it back, so a tunnel that is slow
+        on and off stays out rather than moving its sites' exit address every round. At most half
+        of a family's tunnels that are up are out for this at once, so it never empties a family:
+        those already out keep their place, then the longest streaks, so two slow tunnels never
+        trade places.
         """
         for family, hosts in results.items():
             slow_now = set()
@@ -670,10 +675,20 @@ class WarpTunnels:
                 slow_now |= slow_verdict(times)
             for name in judged:
                 k = (name, family)
-                self.slow_rounds[k] = self.slow_rounds.get(k, 0) + 1 if name in slow_now else 0
+                slow = name in slow_now
+                self.slow_rounds[k] = self.slow_rounds.get(k, 0) + 1 if slow else 0
+                self.clean_rounds[k] = 0 if slow else self.clean_rounds.get(k, 0) + 1
             up = [t.name for t in self.tunnels if self.up.get((t.name, family))]
-            want = sorted((n for n in up if self.slow_rounds.get((n, family), 0) >= SLOW_ROUNDS),
-                          key=lambda n: (-self.slow_rounds[(n, family)], n))[:len(up) // 2]
+
+            def keeps_out(n):
+                k = (n, family)
+                if k in self.slow_out:
+                    return self.clean_rounds.get(k, 0) < SLOW_CLEAR_ROUNDS
+                return self.slow_rounds.get(k, 0) >= SLOW_ROUNDS
+
+            want = sorted((n for n in up if keeps_out(n)),
+                          key=lambda n: ((n, family) not in self.slow_out, -self.slow_rounds.get((n, family), 0), n))
+            want = want[:len(up) // 2]
             for t in self.tunnels:
                 k = (t.name, family)
                 if t.name in want and k not in self.slow_out:

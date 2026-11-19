@@ -931,6 +931,8 @@ class SlowPaths(unittest.TestCase):
         self.assertEqual(v({}), set())
         # Two tunnels, one far slower: it is the slow one, the fast one is not judged by it.
         self.assertEqual(v({"a": 0.2, "b": 9.0}), {"b"})
+        # Two slow of three do not hide each other.
+        self.assertEqual(v({"a": 0.1, "b": 9.0, "c": 9.0}), {"b", "c"})
 
     def test_out_after_rounds_and_back(self):
         slow = {V4: {"proof.ovh.net": {"warp0": 0.18, "warp1": 0.19, "warp2": 19.7}}}
@@ -943,8 +945,35 @@ class SlowPaths(unittest.TestCase):
         self.assertEqual(self.names(V6), ["warp0", "warp1", "warp2"])     # judged per family
         self.wt.slow_round(slow)
         self.assertEqual(self.names(), ["warp0", "warp1"])
+        for _ in range(er.SLOW_CLEAR_ROUNDS - 1):
+            self.wt.slow_round(fast)
+            self.assertEqual(self.names(), ["warp0", "warp1"])
         self.wt.slow_round(fast)
         self.assertEqual(self.names(), ["warp0", "warp1", "warp2"])
+
+    def test_slow_on_and_off_stays_out(self):
+        slow = {V4: {"h": {"warp0": 0.1, "warp1": 0.1, "warp2": 9.0}}}
+        fast = {V4: {"h": {"warp0": 0.1, "warp1": 0.1, "warp2": 0.1}}}
+        for _ in range(er.SLOW_ROUNDS):
+            self.wt.slow_round(slow)
+        for r in [fast, slow] * 5:
+            self.wt.slow_round(r)
+            self.assertEqual(self.names(), ["warp0", "warp1"])
+
+    def test_two_slow_never_trade_places(self):
+        # 2026-11-19: warp1 out, then warp2 slow too while warp1 had a fast round. With room for one,
+        # the one already out stays out, however the streaks compare.
+        both = {V4: {"h": {"warp0": 0.1, "warp1": 9.0, "warp2": 9.0}}}
+        only2 = {V4: {"h": {"warp0": 0.1, "warp1": 0.1, "warp2": 9.0}}}
+        self.wt.slow_round({V4: {"h": {"warp0": 0.1, "warp1": 9.0, "warp2": 0.1}}})
+        self.wt.slow_round(both)
+        self.assertEqual(self.names(), ["warp0", "warp2"])
+        for r in [only2, both, only2]:
+            self.wt.slow_round(r)
+            self.assertEqual(self.names(), ["warp0", "warp2"])
+        # warp1 clean for SLOW_CLEAR_ROUNDS: it is used again, and the slow one takes its place.
+        self.wt.slow_round(only2)
+        self.assertEqual(self.names(), ["warp0", "warp1"])
 
     def test_one_fast_round_between_resets_the_streak(self):
         slow = {V4: {"h": {"warp0": 0.1, "warp1": 0.1, "warp2": 9.0}}}
