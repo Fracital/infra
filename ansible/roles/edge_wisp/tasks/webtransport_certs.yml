@@ -71,7 +71,8 @@
       loop: [abulxt-wisp-wt-certs.service, abulxt-wisp-wt-certs.timer]
       register: edge_wisp_wt_cert_units
 
-    - name: Reload systemd for the exporter's units
+    # Not a handler: the exporter runs once below, and systemd must know its units by then.
+    - name: Reload systemd for the exporter's units # noqa: no-handler
       ansible.builtin.systemd:
         daemon_reload: true
       when: edge_wisp_wt_cert_units.changed
@@ -163,7 +164,9 @@
         - "{{ holywisp_webtransport_host_cert_config }}"
       register: edge_wisp_wt_cert_removed
 
-    - name: Reload systemd after removing the exporter's units
+    # Not a handler: the units are gone now, and a failed play before the end would leave
+    # systemd holding them.
+    - name: Reload systemd after removing the exporter's units # noqa: no-handler
       ansible.builtin.systemd:
         daemon_reload: true
       when: edge_wisp_wt_cert_removed.changed
