@@ -203,6 +203,23 @@ edge_static_sites:
     cache_map:
       - ['\.html$', "no-cache"]
       - ["^/_astro/", "public, max-age=31536000, immutable"]
+    # /?2 (the browser, and its old /app/ paths) is cross-origin isolated, so a page in it that
+    # isolates itself (Blockshooter's SharedArrayBuffer) is isolated through STomp too; STomp then
+    # serves every proxied document with require-corp. Only that page: COEP would block the chat's
+    # Discord images and Fracital's hub frame elsewhere, and SystemYA makes the move into or out of
+    # /?2 a full page load (src/systemya/router.ts). A worker of an isolated page starts only when
+    # its script has an embedder policy too: STomp's runtime and the UI under /vendor/ and /ui/
+    # always send require-corp, which is a no-op on a page that is not isolated.
+    header_maps:
+      - name: Cross-Origin-Opener-Policy
+        map:
+          - ['^/(?:index\.html)?\?2(?:[&=]|$)', "same-origin"]
+          - ['^/app(?:/|/index\.html)?\?', "same-origin"]
+      - name: Cross-Origin-Embedder-Policy
+        map:
+          - ['^/(?:index\.html)?\?2(?:[&=]|$)', "require-corp"]
+          - ['^/app(?:/|/index\.html)?\?', "require-corp"]
+          - ["^/(?:ui|vendor)/", "require-corp"]
     deploy:
       user: systemya
       keys:

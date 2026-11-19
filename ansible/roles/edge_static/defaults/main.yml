@@ -26,6 +26,10 @@ edge_static_keys: []
 #                served with 200. Without it they are 404. Not with listing.
 #   maintenance: regex of the URIs that answer 503 while <root>/.maintenance/<host> exists.
 #   cache_map:   [regex, Cache-Control] pairs for $es_<site>_cc, used by apps and unity_prefixes.
+#   header_maps: [{ name, map: [[regex, value], ...] }]: a response header whose value depends on
+#                "$uri?$args" (first matching regex; no header where none matches or the value is
+#                ""), on the static files of `location /` and apps. Lets one page of a site set
+#                headers its other pages must not have (cross-origin isolation on SystemYA's /?2).
 #   redirects:   exact locations that redirect: { at, code, to }.
 #   proxies:     { at, pass, websocket, ... }: backends. Defaults match a small JSON API.
 #                host: the Host header (default $host). headers: [{ name, value }] set on the

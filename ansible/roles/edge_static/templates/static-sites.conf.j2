@@ -16,6 +16,15 @@ map $uri $es_{{ id }}_cc {
 {%     endfor %}
 }
 {%   endif %}
+{%   for hm in site.header_maps | default([]) %}
+# {{ hm.name }} by "$uri?$args".
+map "$uri?$args" $es_{{ id }}_h{{ loop.index }} {
+    default "";
+{%     for rule in hm.map %}
+    ~{{ rule[0] }} "{{ rule[1] }}";
+{%     endfor %}
+}
+{%   endfor %}
 {%   if site.maintenance is defined %}
 # 503 while {{ edge_static_root }}/.maintenance/{{ site.host }} exists (a publish in progress).
 map $uri $es_{{ id }}_maint {
@@ -152,6 +161,9 @@ server {
     location {{ a }} {
         expires off;
         add_header Cache-Control $es_{{ id }}_cc always;
+{%     for hm in site.header_maps | default([]) %}
+        add_header {{ hm.name }} $es_{{ id }}_h{{ loop.index }} always;
+{%     endfor %}
         index index.html;
         autoindex off;
         try_files $uri $uri/ =404;
@@ -196,6 +208,9 @@ server {
         # The site's cache_map (no header where it maps to "").
         add_header Cache-Control $es_{{ id }}_cc always;
 {%   endif %}
+{%   for hm in site.header_maps | default([]) %}
+        add_header {{ hm.name }} $es_{{ id }}_h{{ loop.index }} always;
+{%   endfor %}
 {%   if site.listing | default(false) %}
         # nginx lists the directory as JSON; the filters turn that into the styled page
         # giftshop's XSLT stylesheet made (OpenResty has no XSLT module).
