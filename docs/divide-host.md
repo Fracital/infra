@@ -2,7 +2,8 @@
 
 divide (alias wisp.baby) is the Proxmox host that every abulxt host, terp and holy have been
 guests of since 2026-11-16 (G-Core Labs AS202422, Ashburn/Manassas). It has one public IPv4,
-**91.199.82.174** (`divide_public_ip`, on `bond0`), and no public IPv6 for guests. The guests sit
+**91.199.82.174** (`divide_public_ip`, on `bond0`), and no public IPv6 for guests (the edge leaves
+over divide's own IPv6, below). The guests sit
 behind NAT on `vmbr1`, **172.16.5.0/24**, with divide at **172.16.5.1** as their gateway.
 
 **Second uplink (2026-11-17).** VLAN 2832 on `bond0` (`/etc/network/interfaces.d/60-wan2832`)
@@ -11,6 +12,27 @@ Every connection the edge opens leaves that way: the nftables chain `inet divide
 it `0x2832` and routing table 2832 sends it out the VLAN. That covers holyWisp's direct streams,
 the WARP tunnels and the name gate's Gateway DoH (so `gateway_dns_extra_networks` lists
 37.9.34.169/32). Replies to inbound clients still leave from 91.199.82.174.
+
+**IPv6 egress for the edge (2026-11-19).** divide has native IPv6 on `bond0`:
+**2a03:90c0:32:1::49f/64** (static), default route by router advertisement (the RA also
+announces 2a03:90c0:32::/48 on-link). One flow from divide measured 686 MB/s to Hetzner Ashburn
+over it, against 440 MB/s over the VLAN's IPv4. The edge alone uses it, NATed, as IPv4 is:
+- the edge CT's `net0` has `ip6=fd42:172:16:5::10/64,gw6=fd42:172:16:5::1` (`vmbr1` holds
+  fd42:172:16:5::1/64), which also puts the ULA in Proxmox's `ipfilter` for that NIC;
+- `/etc/sysctl.d/90-divide-forward.conf`: `net.ipv6.conf.bond0.accept_ra = 2` and then
+  `net.ipv6.conf.all.forwarding = 1`. A router ignores RAs unless `accept_ra` is 2, and bond0's
+  default route comes from one; set it first, or divide loses its IPv6 route (systemd-sysctl
+  applies the bond0 key from udev when bond0 appears, so the order holds at boot too);
+- `/etc/nftables.conf`: `table ip6 divide_nat6` SNATs `EDGE6` (fd42:172:16:5::10) out of `bond0`
+  to `WAN6` (2a03:90c0:32:1::49f); `inet divide forward` drops IPv6 from `vmbr1` from any other
+  source, and `divide_guests antispoof` drops the edge's ULA from any port but the edge's
+  (`veth201i0`, `fwpr201p0`). Nothing is DNATed over IPv6, so no guest is reachable on it.
+- Gateway DoH allows 2a03:90c0:32:1::49f/128 (`gateway_dns_extra_networks`), listed before the
+  edge had the route: the router opens DoH by name, and a REFUSED fails the classifier open.
+
+The ULA source ranks below a global one (RFC 6724), so the edge still picks IPv4 for a
+dual-stack name; IPv6 carries the IPv6-only names and the fallback. WARP-marked IPv6 is
+unaffected (the tunnels' tables, and a mark whose tunnel is gone is unreachable, never main).
 
 **No role in this repo configures divide.** `roles/proxmox_host` is for the wisp cloud's routed
 10GbE hosts (`[wisp_pve]`, public addresses on `vmbr0`); divide is NATed and was set up by hand.

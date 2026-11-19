@@ -10,6 +10,10 @@ gateway_dns_extra_networks:
   # The edge's outbound since 2026-11-17: divide NATs the connections the edge opens out VLAN 2832
   # (172.16.0.2), which the provider NATs to this address. edge-router.py asks Gateway from it.
   - "37.9.34.169/32"
+  # The edge's IPv6 egress since 2026-11-19: divide NAT66s the edge's ULA (fd42:172:16:5::10) to
+  # its own address on bond0 (docs/divide-host.md). Listed before the edge got the route: the
+  # Gateway hostname has AAAA records, and a REFUSED from an unlisted source fails the classifier open.
+  - "2a03:90c0:32:1::49f/128"
 
 # Cap on cached verdict TTL per location (seconds). Bounds how long an edge
 # keeps a stale verdict after a category change. 60..36000.
