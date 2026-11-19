@@ -112,9 +112,10 @@ shared Redis, not in files, and the older ones are RSA.
   renames the pair into `/etc/abulxt/webtransport/{cert,key}.pem` (`root:abulxt-wisp`, 0640;
   readable under the unit's `ProtectSystem=strict`). `holywisp.conf` names them only once both
   exist, so a box without the certificate yet keeps the self-signed one.
-- **Reload.** The pinned holyWisp reads the files at start only, so the hook restarts
-  `abulxt-edge-wisp` after a renewal (`holywisp_webtransport_acme_restart`), about every 60 days.
-  A holyWisp that re-reads them on change makes that `false`.
+- **Reload.** holyWisp (at or after cc6782f) re-reads the files once both have stopped changing:
+  new sessions get the new certificate, live ones keep theirs, nothing restarts. For an older
+  `holywisp_ref`, `holywisp_webtransport_acme_restart: true` makes the hook restart
+  `abulxt-edge-wisp` after a renewal instead.
 - **Checks in the play.** `/webtransport.json` lists no hash with the certificate and at least
   one without; the play fails when the installed certificate has under 7 days left
   (`holywisp_webtransport_acme_min_days`).

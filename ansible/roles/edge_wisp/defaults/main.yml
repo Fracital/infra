@@ -111,7 +111,11 @@ holywisp_repo: https://github.com/Fracital/holyWisp.git
 # and webtransport-cert/-key (holywisp_webtransport_acme), read at start only.
 # Also aa58935 (npm wrapper keeps its error listeners) and 5d814ec (bench only). The WebSocket path
 # is unchanged. Before that, a37af7d: the demo page's fields and row toggles.
-holywisp_ref: a1d06e6ddff027028d075cf1b201e74296266430
+# 2026-11-18 bumped to cc6782f: QUIC starts every connection at 1200-byte datagrams and probes for
+# more (cc2130f; a1d06e6 sent 1452 from the start and a path under 1480 that drops without ICMP
+# carried nothing after the handshake), and the WebTransport listener re-reads webtransport-cert
+# and -key when they change (cc6782f), so a certbot renewal restarts nothing. No new keys.
+holywisp_ref: cc6782f725f770f7e1a08572c5149e626653ecf3
 # Controller cache for both sources: built binaries, npm downloads, and the
 # per-host configs tasks/verify.yml checks.
 holywisp_build_dir: "{{ lookup('env', 'HOME') }}/.cache/abulxt/holywisp"
@@ -325,12 +329,11 @@ holywisp_webtransport_acme_webroot: /var/lib/abulxt-wisp-acme
 # Where holyWisp reads the pair: cert.pem (the full chain) and key.pem. Under /etc/abulxt, which
 # the unit's ProtectSystem=strict leaves readable; certbot's own /etc/letsencrypt/archive is root's.
 holywisp_webtransport_acme_dir: /etc/abulxt/webtransport
-# Restart holyWisp when a renewal replaced the pair. holyWisp at holywisp_ref reads the files at
-# start only; a build that re-reads them when they change (in progress in holyWisp on 2026-11-18)
-# makes this false, and a renewal then drops no session. A restart drops every WebSocket and
-# WebTransport session once per renewal (about every 60 days, at a random hour: certbot.timer
-# runs at 00:00 and 12:00 plus up to 12 h).
-holywisp_webtransport_acme_restart: true
+# Restart holyWisp when a renewal replaced the pair. holyWisp at or after cc6782f re-reads the files
+# once both have stopped changing, and new sessions get the new certificate while live ones keep
+# theirs, so this is false. True only for a holywisp_ref before that: a restart drops every
+# WebSocket and WebTransport session once per renewal (about every 60 days).
+holywisp_webtransport_acme_restart: false
 # The play fails when the installed certificate has less than this left: renewal starts 30 days
 # before the end, so this means certbot.timer has been failing for weeks.
 holywisp_webtransport_acme_min_days: 7

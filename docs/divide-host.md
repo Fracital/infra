@@ -585,8 +585,8 @@ http://holywisp.fracit.al/.well-known/acme-challenge/x` is a 404, as before.
 holywisp.fracit.al` against Let's Encrypt's staging (it runs no deploy hook, so nothing restarts).
 
 Renewal is certbot.timer's: 30 days before the end, at 00:00 or 12:00 plus up to 12 hours. The
-hook replaces the two files and, while the pinned holyWisp reads them only at start, restarts
-`abulxt-edge-wisp` (`holywisp_webtransport_acme_restart`; false once holyWisp watches the files).
+hook replaces the two files, and holyWisp (cc6782f on) picks them up within a few seconds for new
+sessions, with no restart (`holywisp_webtransport_acme_restart: false`; true only for an older pin).
 A failed renewal changes nothing on the box (the old files stay); a play run fails once fewer
 than 7 days are left.
 
