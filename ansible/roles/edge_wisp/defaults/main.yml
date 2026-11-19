@@ -125,7 +125,8 @@ holywisp_repo: https://github.com/Fracital/holyWisp.git
 # 2026-11-19 bumped to e458fec: WebTransport datagrams carry DF and are never fragmented. The
 # route to the gateway carries 1360, the kernel fragmented every 1452-byte QUIC packet, and
 # WebTransport ran at a tenth of a WebSocket's speed.
-holywisp_ref: e458fec1aa8f3141866e29cfce4c1bbf53124e23
+# 2026-11-19 bumped to 0fadf81: a WebTransport session's end logs its congestion events at debug.
+holywisp_ref: 0fadf81b0a31be621e35ff54d425916977eaf8e0
 # Controller cache for both sources: built binaries, npm downloads, and the
 # per-host configs tasks/verify.yml checks.
 holywisp_build_dir: "{{ lookup('env', 'HOME') }}/.cache/abulxt/holywisp"
