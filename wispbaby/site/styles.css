@@ -642,7 +642,8 @@ body[data-mode='gcore'] .node-oca {
 	gap: 8px;
 	font-size: 15px;
 }
-.settings input[type='number'] {
+.settings input[type='number'],
+.settings select {
 	font: inherit;
 	width: 72px;
 	padding: 6px 8px;
@@ -650,6 +651,14 @@ body[data-mode='gcore'] .node-oca {
 	border-radius: 8px;
 	background: var(--bg);
 	color: var(--fg);
+}
+.settings select {
+	width: auto;
+	max-width: 100%;
+}
+.settings fieldset label:has(select) {
+	flex-wrap: wrap;
+	max-width: 100%;
 }
 .settings input[type='checkbox'] {
 	width: 18px;

@@ -159,8 +159,9 @@
 							><span class="node-label">Netflix Open Connect</span>
 						</li>
 					</ol>
-					<figcaption class="route-caption" id="route-caption">
-						The wisp box is the test server
+					<figcaption class="route-caption">
+						<span id="route-caption">The wisp box is the test server</span
+						><span id="route-via" hidden></span>
 					</figcaption>
 				</figure>
 			</section>
@@ -233,6 +234,10 @@
 						<dd id="fact-wisp">…</dd>
 					</div>
 					<div class="fact">
+						<dt>Transport</dt>
+						<dd id="fact-transport">…</dd>
+					</div>
+					<div class="fact">
 						<dt>Test servers</dt>
 						<dd id="fact-targets">…</dd>
 					</div>
@@ -300,6 +305,17 @@
 								inputmode="numeric"
 								required
 						/></label>
+					</fieldset>
+					<fieldset>
+						<legend>Transport</legend>
+						<label
+							>Wisp over
+							<select name="transport">
+								<option value="auto">Automatic</option>
+								<option value="webtransport">WebTransport (QUIC)</option>
+								<option value="websocket">WebSocket</option>
+							</select>
+						</label>
 					</fieldset>
 					<label class="check"
 						><input type="checkbox" name="showAll" /> Always show all

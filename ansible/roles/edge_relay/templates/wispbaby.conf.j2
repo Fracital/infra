@@ -14,7 +14,9 @@
 #     GET /you          this visitor on this box: address, GeoIP, TCP RTT, last 24 h; no-store
 #     GET /health       holyWisp's /health
 #     GET /webtransport.json  holyWisp's WebTransport URL and certificate hashes (holywisp_webtransport),
-#                       no-store; the WebTransport session itself is udp 443 to holyWisp, not nginx
+#                       no-store; the WebTransport session itself is udp 443 to holyWisp, not nginx.
+#                       The speed test runs over it by default (WebSocket when it does not open), so
+#                       the CSP's connect-src names that URL's origin (holywisp_webtransport_url).
 #     /<file>           the page's other static files; anything else 404
 #
 #   http://{{ wisp_zone }}/ (:80)
@@ -42,6 +44,14 @@
 {% set wispbaby_self = (wisp_ips | default([])) + (wisp_ips_v6 | default([]))
      + ([ansible_host] if (ansible_host | default('')) is match('^[0-9A-Fa-f:.]+$') else [])
      + ['127.0.0.1', '::1'] + (wispbaby_speedtest_allow_extra | default([])) %}
+{#
+  The WebTransport listener's origin for connect-src, with a leading space (empty without a listener,
+  or when holywisp_webtransport_url is "": holyWisp then names the relay's own host, which 'self'
+  covers). The page dials it from /webtransport.json.
+#}
+{% set wispbaby_wt_src = (' ' ~ (holywisp_webtransport_url | urlsplit('scheme')) ~ '://' ~ (holywisp_webtransport_url | urlsplit('netloc')))
+     if (holywisp_webtransport | default(false) | bool) and (holywisp_webtransport_url | default('') | length > 0)
+     else '' %}
 {% macro wispbaby_headers() -%}
         add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
         add_header X-Content-Type-Options "nosniff" always;
@@ -55,13 +65,14 @@ map $http_upgrade $wispbaby_websocket {
 }
 
 # The page's Content-Security-Policy (a map only to hold the long constant). The page talks to:
-# itself (static files, /where), the relay (wss:// on this zone; 'self' covers the same host in CSP3,
-# the explicit names cover the apex/site split and older Safari), and jsDelivr for libcurl.js (netflix
-# mode), which the engine fetches, hash-checks and then imports / instantiates from blob: URLs (hence
-# blob: in script-src and connect-src, and 'wasm-unsafe-eval'). No inline scripts or inline event
-# handlers: script-src has no 'unsafe-inline'.
+# itself (static files, /where, /webtransport.json), the relay (wss:// on this zone; 'self' covers the
+# same host in CSP3, the explicit names cover the apex/site split and older Safari), holyWisp's
+# WebTransport listener (wispbaby_wt_src above: WebTransport is checked against connect-src like a
+# fetch), and jsDelivr for libcurl.js (netflix mode), which the engine fetches, hash-checks and then
+# imports / instantiates from blob: URLs (hence blob: in script-src and connect-src, and
+# 'wasm-unsafe-eval'). No inline scripts or inline event handlers: script-src has no 'unsafe-inline'.
 map $host $wispbaby_csp {
-    default "default-src 'none'; script-src 'self' blob: 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' wss://{{ wisp_zone }} wss://*.{{ wisp_zone }} https://cdn.jsdelivr.net blob:; worker-src 'self' blob:; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+    default "default-src 'none'; script-src 'self' blob: 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' wss://{{ wisp_zone }} wss://*.{{ wisp_zone }}{{ wispbaby_wt_src }} https://cdn.jsdelivr.net blob:; worker-src 'self' blob:; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 }
 
 server {

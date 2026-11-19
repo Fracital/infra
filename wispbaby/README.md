@@ -16,7 +16,7 @@ holywisp.fracit.al.
 | `site/index.html`   | The page: markup and styles.                                                                                                                         |
 | `site/styles.css`   | Styles (light and dark).                                                                                                                             |
 | `site/app.js`       | UI: big number, mode switch, more info, settings. ES module.                                                                                         |
-| `site/speedtest.js` | Engine: Wisp v1 client, HTTP/1.1 over a Wisp stream, the fast.com algorithm. ES module, no dependencies.                                             |
+| `site/speedtest.js` | Engine: Wisp v1 client over WebTransport or WebSocket, HTTP/1.1 over a Wisp stream, the fast.com algorithm. ES module, no dependencies.              |
 | `site/livestats.js` | Live stats maths: formatting, the graph's series window and stacked-area geometry. No DOM; `app.js` draws.                                           |
 | `site/favicon.svg`  | Icon.                                                                                                                                                |
 | `dev/serve.py`      | Local harness: serves `site/`, `/where`, made-up `/live`, `/live/history` and `/you`, `/speedtest/range/*`, and points the page at a local holyWisp. |
@@ -26,6 +26,14 @@ The role copies `site/` to `/var/www/wispbaby/` on each box.
 Locally, `python3 wispbaby/dev/serve.py` serves the page with made-up stats; `--no-live`
 answers the stats with 503, like a box whose stats are down, and `--no-domains` leaves the
 by-domain fields out, like a v1 collector.
+
+Over WebTransport locally (the npm build `run-holywisp.sh` fetches has none, so the page runs over
+WebSocket with it): `HOLYWISP_BIN=~/src/holyWisp/build/release/holywisp wispbaby/dev/run-holywisp.sh`,
+then `python3 wispbaby/dev/serve.py` and open `http://127.0.0.1:8080/?wisp=ws://127.0.0.1:6011/`. The
+page finds `http://127.0.0.1:6011/webtransport.json` (from the `?wisp=` relay's origin) and pins the
+listener's self-signed certificate by the hashes in it. `&transport=ws` or `&transport=wt` forces one.
+`HOLYWISP_BIN=~/src/holyWisp/build/release/holywisp node --test wispbaby/test/browser.test.mjs` runs
+the whole page in headless Chrome against such a holyWisp (WebTransport, WebSocket, the fallback).
 
 ## Two modes (the switch on the page)
 
@@ -49,11 +57,21 @@ HTTPS (443):
 
 - `GET /`: `site/index.html` (and the other `site/` files at `/<name>`).
 - WebSocket upgrade on `/`: the Wisp relay (holyWisp, `127.0.0.1:{{ edge_wisp_port }}`). Public, no key, like holywisp.fracit.al. Wisp v1: the client sends no subprotocol.
+- `GET /webtransport.json` (with `holywisp_webtransport`): holyWisp's own answer from its TCP port, passed through, `Cache-Control: no-store`:
+  `{"url":"https://holywisp.fracit.al/","hashes":[]}`. `url` is the box's WebTransport listener (holyWisp
+  on udp 443, Wisp over HTTP/3), `""` meaning the relay's own host and port; `hashes`
+  (`[{"algorithm":"sha-256","value":"<base64>"}]`) are listed only for a self-signed certificate and the
+  page then passes them as `serverCertificateHashes`. On the boxes the listener has a Let's Encrypt
+  certificate for holywisp.fracit.al, so the list is empty and the browser checks it like any https
+  site. Absent (404, not JSON, no `url`): the page runs over WebSocket. The session itself is udp 443
+  straight to holyWisp (docs/divide-host.md "WebTransport on udp 443"), not through OpenResty.
+- The page's `Content-Security-Policy` allows the WebTransport URL's origin in `connect-src`
+  (WebTransport is a fetch to the browser: `https://holywisp.fracit.al`), beside `'self'` and the
+  `wss://` relay names (`$wispbaby_csp` in `wispbaby.conf.j2`, from `holywisp_webtransport_url`).
 - `GET /where`: `application/json`, `Cache-Control: no-store`:
   `{"site":"chi","host":"chi.wisp.baby","city":"Chicago","country":"US","addr":"<$server_addr, the address the browser reached>","speedPort":80}`
   (`speedPort` is 80 on the boxes; the dev harness uses another port.)
 - `GET /health`: holyWisp's health.
-- `GET /webtransport.json` (with `holywisp_webtransport`): holyWisp's WebTransport URL and certificate hashes, `Cache-Control: no-store`, from holyWisp's TCP port. The session itself is udp 443 straight to holyWisp (docs/divide-host.md "WebTransport on udp 443"), not through OpenResty.
 - `GET /live`, `GET /live/history`, `GET /you`: live usage stats, see "Live stats" below.
 
 HTTP (80), from the box's own addresses only (anything else: 403):
@@ -75,22 +93,43 @@ const t = createSpeedtest({
   connections: { min: 1, max: 8 },
   duration: { min: 5, max: 30 }, // seconds; the tester's bounds (UI settings)
   libcurlBase: 'https://cdn.jsdelivr.net/npm/libcurl.js@0.7.4/', // netflix mode only, see below
+  transport: 'auto' | 'webtransport' | 'websocket', // default "auto"
+  webtransport: { url, hashes }, // /webtransport.json as served, or null/absent: no listener
 });
 t.on(event, cb);
 t.start();
 t.stop();
 ```
 
+`start()` resolves `{ download, latency, upload, transport }` (the payloads of the final events
+and of `transport`), or `null` if the run was stopped or failed.
+
+Transport (decided once per run, before the download, and never mixed within a run):
+
+- `websocket`: `wispUrl`.
+- `webtransport`: a session to `webtransport.url`; the run fails (`error`, phase `servers`) if the
+  browser has no `WebTransport`, there is no listener, or the first session does not open in 10 s.
+- `auto`: WebTransport when the browser has `WebTransport` and `webtransport` names a listener,
+  else WebSocket. The first session is opened before the download; if it fails or has not
+  delivered its stream-0 CONTINUE within 3 s, the whole run goes over WebSocket and the `transport`
+  event says why. The page remembers such a failure for an hour (`localStorage`, when it may) and
+  skips WebTransport meanwhile; `?transport=` ignores that.
+
+Netflix mode's one `api.fast.com` call (libcurl.js) always goes over the WebSocket; its downloads
+and uploads use the run's transport.
+
 Events (every payload is a plain object):
 
 - `phase` `{ phase: "servers" | "download" | "latency" | "upload" | "done" }`
 - `servers` `{ wisp: { host, addr, city, country }, targets: [{ label, addr }] }`
+- `transport` `{ transport: "webtransport" | "websocket", url, fallback }` (once, after `servers`,
+  before the download; `fallback` is why WebTransport did not open when `auto` fell back, else null)
 - `download` `{ speedBps, bytes, loadedLatencyMs, final }` (fired every progress tick, `final: true` once)
 - `latency` `{ unloadedMs, count, final }`
 - `upload` `{ speedBps, bytes, final }`
 - `error` `{ message, phase }`
 
-Order: servers, download (with loaded latency), unloaded latency, upload, done.
+Order: servers, transport, download (with loaded latency), unloaded latency, upload, done.
 
 libcurl.js (netflix mode only, loaded lazily): `libcurl.js@0.7.4` from jsDelivr
 (`https://cdn.jsdelivr.net/npm/libcurl.js@0.7.4/libcurl.mjs` and `libcurl.wasm`).
@@ -137,13 +176,29 @@ Both match libcurl.js 0.7.4 (the version abulxt pins in `main/package.json`). li
 - **Display**: < 1 Mb/s → Kbps; ≥ 995 Mb/s → Gbps; < 9.95 → one decimal; < 100 → integer; else rounded to 10.
   MB: < 1 → two decimals, < 10 → one decimal, else rounded to 10.
 
-Over Wisp each worker uses **its own WebSocket** (so the browser ⇄ box leg has as many TCP flows as fast.com has to
-its OCAs), with the data stream and the pinger as two Wisp streams on it. The run opens its `connections.max`
-sockets once, before the download, and a worker leases one exclusively and hands it back when it stops, so later
-phases reuse them: Chrome holds a new WebSocket handshake to the same endpoint for 5 to 15 s while other sockets to
-it are saturated with uploads, which left ramp workers idle and restarted the test on the 10 s handshake timeout.
-Upload progress counts bytes that have left the WebSocket: bytes handed to `ws.send` minus `ws.bufferedAmount`,
-sending only while the stream's Wisp CONTINUE window allows and `bufferedAmount` is under a few MiB.
+Over Wisp each worker uses **its own connection**, a WebTransport session or a WebSocket (so the browser ⇄ box leg
+has as many congestion-controlled flows as fast.com has TCP connections to its OCAs: separate QUIC connections over
+WebTransport, separate TCP connections over WebSocket), with the data stream and the pinger as two Wisp streams on it.
+The run opens its `connections.max` connections once, before the download, and a worker leases one exclusively and
+hands it back when it stops, so later phases reuse them: Chrome holds a new WebSocket handshake to the same endpoint
+for 5 to 15 s while other sockets to it are saturated with uploads, which left ramp workers idle and restarted the
+test on the 10 s handshake timeout.
+
+Wisp over WebTransport (holyWisp `docs/webtransport.md`, "Wisp on the session"): the page opens the session with no
+`protocols` (that selects Wisp v1, as no subprotocol does on a WebSocket) and one bidirectional stream, the Wisp
+stream, which carries Wisp packets back to back, each preceded by its length as a u32 LE. The packets are exactly
+those a WebSocket message carries, and the server opens with the same stream-0 CONTINUE; the CONTINUE window is
+honoured the same way. Datagrams carry only UDP stream DATA, which the speed test never opens.
+
+Upload progress counts bytes that have left the connection, sending only while the stream's Wisp CONTINUE window
+allows and the connection's `bufferedAmount` is under a few MiB:
+
+- WebSocket: bytes handed to `ws.send` minus `ws.bufferedAmount`.
+- WebTransport: bytes written to the Wisp stream minus those whose `writer.write()` has not resolved. A write
+  resolves when the browser has moved the bytes out of the stream's queue into its network stack (Chrome: into the
+  data pipe to its network service, the hand-off at which a WebSocket's `bufferedAmount` stops counting them too),
+  so it is the same measure. The page counts its own unresolved writes rather than reading `writer.desiredSize`,
+  whose high-water mark is the browser's and may count chunks rather than bytes.
 
 ## Live stats
 
@@ -164,7 +219,9 @@ How the numbers get there (the page talks to nothing but the box it was loaded f
 
 Sessions are WebSocket upgrades on the relay (wisp.baby, abulxt's byod and Fracital's relay names,
 all on the same holyWisp). Bytes are holyWisp's, so they include the speed tests, which are also
-counted on their own.
+counted on their own. A WebTransport session (the speed test's default) reaches holyWisp on udp 443
+without passing OpenResty, so it is not counted as a session and its bytes land in "other" by domain;
+the speed test's own byte counter (the `/speedtest/range/` endpoint) counts it either way.
 
 By domain: every relay route tags its sessions with the organization whose domain they came in on:
 Abstract (abulxt's byod names), Fracital (Fracital's names and holywisp.fracit.al), STomp
