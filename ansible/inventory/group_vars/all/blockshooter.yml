@@ -1,6 +1,7 @@
 # blockshooter.io on the wisp boxes (blockshooter/README.md): a mirror of
 # blockshooter.club's frontend served from each box's disk (/var/www/blockshooter), with the
-# tower defense backend (/towerdefense/api, /towerdefense/ws) proxied to blockshooter.club.
+# tower defense backend (/towerdefense/api, /towerdefense/ws), the main game's staging build
+# (/play-staging/) and its API (/api/) proxied to blockshooter.club.
 # Cloudflare: @ and www are proxied CNAMEs to wisp.baby, SSL mode full. false: edge_relay
 # removes the routes. Only [wisp_edge] hosts get them (blockshooter_on, roles/edge_relay/defaults).
 blockshooter_enabled: true
@@ -16,5 +17,5 @@ blockshooter_redirect_hosts:
 blockshooter_discord_host: discord.blockshooter.io
 blockshooter_discord_invite: https://discord.gg/q3hRjdud9F
 
-# Where /towerdefense/api/ and /towerdefense/ws go (accounts, saves, multiplayer).
+# Where /towerdefense/api/, /towerdefense/ws, /play-staging/ and /api/ go.
 blockshooter_backend_host: blockshooter.club

@@ -14,6 +14,19 @@ What is NOT mirrored: the tower defense backend. The game calls `/towerdefense/a
 .club ones. The API authenticates with a token header (localStorage), not cookies, and the backend
 accepts a blockshooter.io Origin.
 
+The main game's staging build is not mirrored either: `/play-staging/` is proxied to
+`https://blockshooter.club/play-staging/` (since 2026-11-19). It changes with every build (its HTML
+loads `v/<build>/`) and fetches a ~1.1 GB asset pack in Range pieces from `/play-staging/parts/`,
+so the edge streams it unbuffered. The client calls its API at `location.origin + /api/v1/` (guest
+sign-in, profile, loadout, matchmaking), so `/api/` is proxied to the same backend; the mirror has
+no `/api/` of its own. The session is a host-only `bs_session` cookie, which works on
+blockshooter.io as is, and the backend's CORS list includes `https://blockshooter.io`. Matches
+connect to the game servers directly (WebTransport, WebSocket or WebRTC to the host and port the
+API hands out), not through the edge. The production game (`/play/`) answers 403 on
+blockshooter.club and is not proxied. blockshooter.club's Cloudflare sees the edge as the client
+(`CF-Connecting-IP`); the player's address only travels in `X-Forwarded-For`, like
+`/towerdefense/api/`'s.
+
 ## Refreshing the mirror
 
 The game's modules are loaded by `import`, which `wget --mirror` does not follow. The crawler that
@@ -37,5 +50,7 @@ the box serves the file whatever the query.
 ## DNS
 
 blockshooter.io is a Cloudflare zone (registrar Spaceship). `@`, `www` and `discord` are proxied CNAMEs to
-`wisp.baby`, like holyunb.locker: Cloudflare reaches the nearest box through wisp.baby's geo DNS,
-and each box has its own certificate for both names (approved locally in `nginx.conf.j2`).
+`wisp.baby`, like holyunb.locker. Since 2026-11-16 wisp.baby is a plain A record for divide's one
+address (91.199.82.174), so Cloudflare reaches the one edge (`edge`, CT 201), which has its own
+certificate for the names (approved locally in `nginx.conf.j2`). Deploy a change with
+`ansible-playbook playbooks/wisp.yml --limit edge --tags relay`.

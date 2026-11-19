@@ -3,6 +3,7 @@
 #
 #   client -> Cloudflare (proxied CNAME to {{ wisp_zone }}) -> edge :443
 #     -> /towerdefense/api/, /towerdefense/ws: https://{{ blockshooter_backend_host }} (the game's backend)
+#     -> /play-staging/, /api/: https://{{ blockshooter_backend_host }} (the main game's staging build and its API)
 #     -> everything else: /var/www/blockshooter (the mirrored frontend, blockshooter/site/)
 
 server {
@@ -141,6 +142,52 @@ server {
         proxy_connect_timeout {{ edge_proxy_connect_timeout }};
         proxy_read_timeout 86400s;
         proxy_send_timeout 86400s;
+    }
+
+    # The staging build of the main game (/play-staging/), proxied, not mirrored: a new build
+    # every deploy (v/<build>/), and a ~1.1 GB asset pack the client fetches in Range pieces from
+    # /play-staging/parts/. Unbuffered, so a 128 MB part streams instead of filling the edge's
+    # temp files. Matches go straight to the game servers (host:port from the API), not here.
+    location ^~ /play-staging/ {
+        proxy_pass https://{{ blockshooter_backend_host }};
+        proxy_http_version 1.1;
+        proxy_ssl_server_name on;
+        proxy_ssl_name {{ blockshooter_backend_host }};
+        proxy_set_header Host {{ blockshooter_backend_host }};
+        proxy_set_header Connection "";
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        # A redirect from the backend names its own host; keep the player on blockshooter.io.
+        proxy_redirect https://{{ blockshooter_backend_host }}/ /;
+        proxy_redirect http://{{ blockshooter_backend_host }}/ /;
+        proxy_buffering off;
+        proxy_connect_timeout {{ edge_proxy_connect_timeout }};
+        proxy_read_timeout 60s;
+        # The client's log upload (POST v/<build>/__bs_log).
+        client_max_body_size 1m;
+    }
+
+    location = /play-staging {
+        return 301 /play-staging/$is_args$args;
+    }
+
+    # The game's API: the client calls location.origin + /api/v1/ (guest sign-in, profile,
+    # loadout, matchmaking). The mirror has no /api/ of its own. The session is a host-only
+    # bs_session cookie (no Domain), and the backend accepts a blockshooter.io Origin.
+    location ^~ /api/ {
+        proxy_pass https://{{ blockshooter_backend_host }};
+        proxy_http_version 1.1;
+        proxy_ssl_server_name on;
+        proxy_ssl_name {{ blockshooter_backend_host }};
+        proxy_set_header Host {{ blockshooter_backend_host }};
+        proxy_set_header Connection "";
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_redirect https://{{ blockshooter_backend_host }}/ /;
+        proxy_cookie_domain {{ blockshooter_backend_host }} {{ blockshooter_host }};
+        proxy_connect_timeout {{ edge_proxy_connect_timeout }};
+        proxy_read_timeout 60s;
+        client_max_body_size 1m;
     }
 
     # Pages: /faq -> faq/index.html (the crawl saved each route as <route>/index.html).
