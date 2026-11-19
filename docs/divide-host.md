@@ -659,6 +659,7 @@ leaves the running connector alone.
 | `krunker.party`             | `https://127.0.0.1:443`   | the edge's krunk.io relay as `assets.krunk.io`, `noTLSVerify`    |
 | `coordinator.krunker.party` | `https://127.0.0.1:443`   | as `coordinator.krunk.io` (`originServerName`, `httpHostHeader`) |
 | `matchmaker.krunker.party`  | `https://127.0.0.1:443`   | as `matchmaker.krunk.io`                                         |
+| `kru.eli.gift`              | `http://172.16.5.47:80`   | kru's nginx vhost `kru-eli-gift.conf` to krunkbox (see below)    |
 | anything else               | `http_status:404`         |                                                                  |
 
 The krunker.party names ride the edge's own krunk.io relay (OpenResty to kru :443 with the
@@ -684,11 +685,41 @@ Retired the same evening (2026-11-17, about 22:35 to 22:50 UTC):
 - Those six tunnels, giftshop's two (`giftshop` and `pages`), `goldenticket-mcp` and `abulxt-mcp2`:
   deleted in Cloudflare, which also revokes the tokens that were in plain text in their units.
   `divide-edge` is the account's only tunnel.
-- DNS `kru.eli.gift`, `mcp.eli.gift` and `mcp2.eli.gift`: deleted. kru's tunnel also listed
+- DNS `kru.eli.gift`, `mcp.eli.gift` and `mcp2.eli.gift`: deleted (`kru.eli.gift` came back on
+  2026-11-19 through `divide-edge`, see below). kru's tunnel also listed
   krunk.io names whose DNS is not on Cloudflare; those rows died with it.
 
-Rolling a name back now means a new tunnel: create it, run its connector where the origin is, and
-point the CNAME at it.
+Rolling a name back now means a row in `divide-edge`'s ingress that the edge can reach (a guest
+address on a port its `.fw` opens to the edge) and the CNAME to the tunnel, as `kru.eli.gift` did.
+
+### kru.eli.gift (back on 2026-11-19)
+
+Retiring `kru.eli.gift` took krunkbox off the internet, and other code still fetches from it:
+KrunkNative's `krunker-build` workflow and `tools/krunker/extract_build.py` read
+`https://kru.eli.gift/game.deob.js`, and sketch's loader reads `/loader/<build>/...` from it. It
+came back as a row of `divide-edge`, not as kru's own tunnel again, so the edge stays the only
+guest with `cloudflared`:
+
+- **krunkbox** is the pm2 app of user `kru` (`/home/kru/krunkbox`, y9x/krunkbox) on
+  `127.0.0.1:2025`. It serves `/game.deob.js` and `/game.js` (`application/javascript`),
+  `/loader/current.json` and the loader artifacts, and answers 404 on `/`. kru's old connector
+  sent the name straight to that port, which the edge cannot reach.
+- **kru's nginx** (hand-made, like the rtc files above; neither this repository nor KrunkNative
+  renders it): `/etc/nginx/sites-available/kru-eli-gift.conf`, linked from `sites-enabled`, a
+  `listen 80` server for `kru.eli.gift` that proxies to `127.0.0.1:2025` and admits only the edge
+  (`allow 172.16.5.10`) and loopback. krunkbox takes the client address from `CF-Connecting-IP`,
+  which cloudflared sets and nginx passes on, so the allowlist is what keeps other guests from
+  forging it. The edge already reaches kru on tcp 80 (kru's `.fw`), so no firewall change.
+- **Tunnel and DNS**: the `kru.eli.gift` ingress row above, just before the 404 catch-all, and
+  `kru.eli.gift` as a proxied CNAME to `<tunnel id>.cfargotunnel.com`, like the other rows.
+- **Check**: `curl -sI https://kru.eli.gift/game.deob.js` gives 200 and
+  `application/javascript; charset=utf-8`; on the edge,
+  `curl -s -o /dev/null -w '%{http_code}' -H 'Host: kru.eli.gift' http://172.16.5.47/game.deob.js`
+  gives 200.
+- **Credentials**: the cloaks `.env` tokens and `cloudflare_zt_api_token` cannot edit this
+  account's tunnels. The ingress and the record were changed with the API token inside the
+  `cloudflared tunnel login` origin certificate for `eli.gift` (`~/.cloudflared/cert.pem` on the
+  admin workstation, never committed).
 
 ## holy: VM 127 to CT 205 (2026-11-17)
 
