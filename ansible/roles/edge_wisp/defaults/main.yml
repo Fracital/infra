@@ -255,7 +255,14 @@ holywisp_proxy_client_key: false
 # Per box, derived from one vaulted master (group_vars/all/secrets.yml
 # vault_holywisp_client_key_master, 32+ random characters), so every box has its own stable
 # secret and the vault holds one value. Evaluated only with holywisp_proxy_client_key on.
-holywisp_proxy_client_key_secret: "{{ (vault_holywisp_client_key_master ~ '/' ~ inventory_hostname) | hash('sha256') }}"
+# Raise holywisp_proxy_client_key_epoch to rotate every box's secret without touching the vault
+# (epoch 1 is the derivation before 2026-11-19; 2 rotated the edge's after it was shown in a
+# session log). Each client's key changes once with it, and so does its tunnel per site.
+holywisp_proxy_client_key_epoch: 2
+holywisp_proxy_client_key_secret: >-
+  {{ (vault_holywisp_client_key_master ~ '/' ~ inventory_hostname
+      ~ ('' if holywisp_proxy_client_key_epoch | int <= 1 else '/' ~ holywisp_proxy_client_key_epoch | string))
+     | hash('sha256') }}
 # holyWisp `allow-direct-ip`: a CONNECT may name a literal IP instead of a hostname. Off
 # keeps every stream classifiable by name (edge-router.py waves literal IPs through as
 # clean, so this is the only place they are refused). The edges turn it on in
