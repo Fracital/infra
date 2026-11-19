@@ -219,3 +219,11 @@ edge_static_sites:
         host: holyunb.locker
         passthrough: true
         timeout: 3600s
+        # holy's theatre file server (website2 runtime.js serveFile) only takes send's 200 and 206:
+        # a revalidation that matches (send's 304) falls through to its HTML 404 page, so every
+        # cached thumbnail broke on reload (2026-11-18). holy says max-age=0, so browsers revalidate
+        # every load; holyunb.locker hides it behind Cloudflare's 4 h max-age. Without the
+        # validators holy answers 200 with the file.
+        headers:
+          - { name: If-None-Match, value: "" }
+          - { name: If-Modified-Since, value: "" }
