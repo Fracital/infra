@@ -139,7 +139,10 @@ holywisp_repo: https://github.com/Fracital/holyWisp.git
 # 2026-11-19 bumped to d2bce28: WebTransport lanes (webtransport-lanes, 8 by default: a client may
 # spread its streams over several QUIC streams, so one window or loss stalls only its own lane) and
 # a Wisp stream the server opens with its INFO and CONTINUE (wt-protocol wisp-v2-server-stream).
-holywisp_ref: d2bce28d71d80d93e95e046c4a671b6377bf6afd
+# 2026-11-19 bumped to ccfef34: a WebTransport session's close capsule waits for the Wisp CLOSE
+# before it to be acknowledged (Chrome dropped it unread) and carries its reason; a client's close
+# is answered after our FIN, not with "refused".
+holywisp_ref: ccfef34dc8aebf2ae9a8555eb9182a99c6b012cd
 # Controller cache for both sources: built binaries, npm downloads, and the
 # per-host configs tasks/verify.yml checks.
 holywisp_build_dir: "{{ lookup('env', 'HOME') }}/.cache/abulxt/holywisp"
