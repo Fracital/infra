@@ -117,7 +117,9 @@ holywisp_repo: https://github.com/Fracital/holyWisp.git
 # and -key when they change (cc6782f), so a certbot renewal restarts nothing. No new keys.
 # 2026-11-18 bumped to cecccd6: the web client on GET / picks WebTransport through
 # /webtransport.json, falls back to a WebSocket, and has Wisp v2 and a UDP (DNS) check on by default.
-holywisp_ref: cecccd6489a5d6a171eebe8b3fbf682499cc75c6
+# 2026-11-18 bumped to d495cef: the web client has one UDP toggle (WebTransport, falling back to a
+# WebSocket) in place of a transport menu and a DNS check, and Holo's look for fields and panels.
+holywisp_ref: d495cef4ba586630d8e0d8ef81fa6b6deb9f0240
 # Controller cache for both sources: built binaries, npm downloads, and the
 # per-host configs tasks/verify.yml checks.
 holywisp_build_dir: "{{ lookup('env', 'HOME') }}/.cache/abulxt/holywisp"
