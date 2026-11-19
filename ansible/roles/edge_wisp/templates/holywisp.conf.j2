@@ -200,4 +200,5 @@ webtransport-path = {{ rule }}
 {%   endif %}
 # A keepalive PING goes out after 20 s idle, inside a NAT's UDP timeout (divide's: about 30 s).
 webtransport-idle-timeout-s = {{ holywisp_webtransport_idle_timeout_s }}
+webtransport-congestion-control = {{ holywisp_webtransport_congestion_control }}
 {% endif %}

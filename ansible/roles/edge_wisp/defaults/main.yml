@@ -336,6 +336,10 @@ holywisp_webtransport_url: ""
 # entry alive: divide's lasts about 30 s, and a packet after that would leave the edge by divide's
 # second uplink, from an address the client never talked to (docs/divide-host.md).
 holywisp_webtransport_idle_timeout_s: 30
+# webtransport-congestion-control: bbr (holyWisp's default), bbr2 or newreno. Needs holywisp_ref
+# at or after 4f16a9b for bbr2. 2026-11-19: bbr2, for STomp's A/B against bbr with the pacer of
+# 507d2c0 (bbr phase: 309 Mbit/s single, 328 parallel, medians).
+holywisp_webtransport_congestion_control: bbr2
 # webtransport-cert / webtransport-key. Without holywisp_webtransport_acme they are not rendered:
 # holyWisp then makes its own P-256 certificate, valid 13 days and replaced every 6, which is what
 # Chrome's serverCertificateHashes accepts (at most 14 days, ECDSA P-256), and publishes its hashes
