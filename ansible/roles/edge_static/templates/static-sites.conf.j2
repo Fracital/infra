@@ -192,6 +192,10 @@ server {
 
     location / {
         index index.html;
+{%   if site.cache_map | default([]) | length > 0 %}
+        # The site's cache_map (no header where it maps to "").
+        add_header Cache-Control $es_{{ id }}_cc always;
+{%   endif %}
 {%   if site.listing | default(false) %}
         # nginx lists the directory as JSON; the filters turn that into the styled page
         # giftshop's XSLT stylesheet made (OpenResty has no XSLT module).

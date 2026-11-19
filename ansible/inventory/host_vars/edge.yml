@@ -198,6 +198,11 @@ edge_static_sites:
   - host: systemya.fracit.al
     root: /var/www/systemya
     fallback: /index.html
+    # Pages (and every route, which falls back to /index.html) revalidate, so a deploy reaches a
+    # returning visitor on the next load; Astro's /_astro/ bundles are content-hashed.
+    cache_map:
+      - ['\.html$', "no-cache"]
+      - ["^/_astro/", "public, max-age=31536000, immutable"]
     deploy:
       user: systemya
       keys:
