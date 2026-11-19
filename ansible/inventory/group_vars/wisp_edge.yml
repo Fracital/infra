@@ -451,6 +451,38 @@ edge_warp_bypass_hosts:
   # (*.us.archive.org), 2026-11-17, the user's request.
   - archive.org
   - "*.archive.org"
+  # Wikimedia (2026-11-19, the user's request): Wikipedia's Varnish rate rule answered 429 to the
+  # shared WARP IPv4 exits (104.28.228.77, 104.28.196.78), native Chrome included; the box's own
+  # address got 200. Every project, Commons and the uploads (upload.wikimedia.org), the API
+  # (wikidata, mediawiki.org), user content (wmfusercontent.org) and the short links (w.wiki).
+  - wikipedia.org
+  - "*.wikipedia.org"
+  - wikimedia.org
+  - "*.wikimedia.org"
+  - wikidata.org
+  - "*.wikidata.org"
+  - wiktionary.org
+  - "*.wiktionary.org"
+  - wikibooks.org
+  - "*.wikibooks.org"
+  - wikinews.org
+  - "*.wikinews.org"
+  - wikiquote.org
+  - "*.wikiquote.org"
+  - wikisource.org
+  - "*.wikisource.org"
+  - wikiversity.org
+  - "*.wikiversity.org"
+  - wikivoyage.org
+  - "*.wikivoyage.org"
+  - wikifunctions.org
+  - "*.wikifunctions.org"
+  - mediawiki.org
+  - "*.mediawiki.org"
+  - wmfusercontent.org
+  - "*.wmfusercontent.org"
+  - w.wiki
+  - "*.w.wiki"
 # Clean TCP dialled by holyWisp itself, marked for the router's WARP tunnel; only names the
 # gate sends to the relay (shady, adult) go through edge-router.py (roles/edge_wisp/defaults
 # holywisp_tcp_direct). On since 2026-11-16, at the user's request.
