@@ -134,7 +134,9 @@ holywisp_repo: https://github.com/Fracital/holyWisp.git
 # 2026-11-19 bumped to 411455f: WebTransport may hold 32 MiB in flight beyond ws-write-high-water
 # (it was capped at the 2 MiB mark: 7.6 -> 57 MiB/s on a 1 Gbit/s 138 ms lossy path), PMTU probes
 # alone in their datagram, and the server's flight resent on a repeated ClientHello.
-holywisp_ref: 411455fd6c181c8a8482dfdfc6b7cd3a0385f3b1
+# 2026-11-19 bumped to 7dcc0ee: BBR leaves startup behind a full send buffer (it paced at 2.89x the
+# path), and PROBE_RTT can no longer erase the estimate (the rate fell to 1 Mbit/s 10 s into downloads).
+holywisp_ref: 7dcc0ee9ac76e4892a5955d2cb1f04b955a906b5
 # Controller cache for both sources: built binaries, npm downloads, and the
 # per-host configs tasks/verify.yml checks.
 holywisp_build_dir: "{{ lookup('env', 'HOME') }}/.cache/abulxt/holywisp"
