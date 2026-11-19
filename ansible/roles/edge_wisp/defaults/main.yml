@@ -122,7 +122,10 @@ holywisp_repo: https://github.com/Fracital/holyWisp.git
 # 2026-11-19 bumped to a69c3e4: webtransport-cert-dir (a certificate per host by SNI, filled by
 # holywisp_webtransport_host_certs below), webtransport-path (sessions only on the relay's paths)
 # and 421 + alt-svc: clear for HTTP/3 requests that are not a WebTransport CONNECT.
-holywisp_ref: a69c3e44fbe63203ad704c37f19130550544ca1b
+# 2026-11-19 bumped to e458fec: WebTransport datagrams carry DF and are never fragmented. The
+# route to the gateway carries 1360, the kernel fragmented every 1452-byte QUIC packet, and
+# WebTransport ran at a tenth of a WebSocket's speed.
+holywisp_ref: e458fec1aa8f3141866e29cfce4c1bbf53124e23
 # Controller cache for both sources: built binaries, npm downloads, and the
 # per-host configs tasks/verify.yml checks.
 holywisp_build_dir: "{{ lookup('env', 'HOME') }}/.cache/abulxt/holywisp"
