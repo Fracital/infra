@@ -149,7 +149,9 @@ holywisp_repo: https://github.com/Fracital/holyWisp.git
 # (bbr stays the default).
 # 2026-11-19 bumped to 78095bf: a WebSocket v2 server sends the stream-0 CONTINUE with its INFO
 # (no password users: v2 opens in v1's round trips), and bbr2 makes room for a second session.
-holywisp_ref: 78095bfddf41853f0e79fb46daa940d965111f92
+# 2026-11-19 bumped to 507d2c0: the WebTransport pacer releases 2 to 32 datagrams at a time on
+# microsecond timers (a burst was 2 ms of the rate, more than a browser's UDP receive buffer).
+holywisp_ref: 507d2c0984cb7832c3d39f274a574e132793b570
 # Controller cache for both sources: built binaries, npm downloads, and the
 # per-host configs tasks/verify.yml checks.
 holywisp_build_dir: "{{ lookup('env', 'HOME') }}/.cache/abulxt/holywisp"
