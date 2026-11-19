@@ -142,7 +142,9 @@ holywisp_repo: https://github.com/Fracital/holyWisp.git
 # 2026-11-19 bumped to ccfef34: a WebTransport session's close capsule waits for the Wisp CLOSE
 # before it to be acknowledged (Chrome dropped it unread) and carries its reason; a client's close
 # is answered after our FIN, not with "refused".
-holywisp_ref: ccfef34dc8aebf2ae9a8555eb9182a99c6b012cd
+# 2026-11-19 bumped to c5aa282: BBR times its rate samples in microseconds (on the ms clock its
+# estimate ran ~3 percent over the path: a standing queue and 5-8 percent loss behind a shallow buffer).
+holywisp_ref: c5aa2828fe06be343592830b39ee85bc105febb4
 # Controller cache for both sources: built binaries, npm downloads, and the
 # per-host configs tasks/verify.yml checks.
 holywisp_build_dir: "{{ lookup('env', 'HOME') }}/.cache/abulxt/holywisp"
