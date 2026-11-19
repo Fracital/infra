@@ -35,12 +35,24 @@ official Makefile does. The configure line is the official package's (`nginx -V`
 
 ## CVEs this closes
 
-Fixed in 1.31.9 (all in this build): CVE-2026-123007 (HTTP/2 flow-control underflow, RCE),
-CVE-2026-123633 (HTTP/2 use-after-free when proxying), CVE-2026-121810 (HTTP/3 use-after-free),
-CVE-2026-123634 (resolver use-after-free with subrequests), CVE-2026-113425 (mail auth_http
-use-after-free), CVE-2026-125283 (try_files with alias, buffer overflow), CVE-2026-118899,
-CVE-2026-120967, CVE-2026-120993 and CVE-2026-123640. Moving the edge from 1.31.1.1 also brings the
-fixes OpenResty 1.31.8.1 already had over 1.31.1.1.
+nginx 1.31.9's ten, all in this build (upstream commits from nginx's GitHub mirror):
+
+| CVE             | Commits                                               | What                                           |
+| --------------- | ----------------------------------------------------- | ---------------------------------------------- |
+| CVE-2026-123007 | e27f5fa84                                             | HTTP/2 flow-control window underflow (RCE)     |
+| CVE-2026-123633 | 2df48a501                                             | HTTP/2 use-after-free (proxying)               |
+| CVE-2026-121810 | b5252dae1                                             | QUIC use-after-free                            |
+| CVE-2026-123634 | 8492a8b8a, e39708edc                                  | resolver use-after-free                        |
+| CVE-2026-113425 | e505109a3, 754fe68c2, a22ab7105, 013ce1879, 1d1d861a5 | mail use-after-free (mail is not compiled in)  |
+| CVE-2026-120967 | 6f9fceed8                                             | stream: client certificates not checked by SNI |
+| CVE-2026-120993 | c4892abca                                             | PROXY protocol v2 with dynamic certificates    |
+| CVE-2026-123640 | 30b8bf67e, d9fd14eb3                                  | stream ssl_preread parsing                     |
+| CVE-2026-118899 | 2b129b936, c51ffa2d1                                  | endless loop reading a body over TLS           |
+| CVE-2026-125283 | d1ffe6fa8                                             | try_files with alias, buffer overflow          |
+
+Moving the edge from 1.31.1.1 also closes the twelve nginx fixed between 1.31.2 and 1.31.8, which
+OpenResty 1.31.8.1 already had: CVE-2026-42530, -42055, -48142 (1.31.2), -42533, -60005, -56434
+(1.31.3), -90439 (1.31.6), -15176, -93479, -95101, -97629, -97205 (1.31.7).
 
 ## Tests (`tests/`)
 
@@ -51,3 +63,9 @@ binary and this build:
   window plus queued DATA past 2^31-1 must end in GOAWAY FLOW_CONTROL_ERROR. The official binary
   fails 2 of 6, this build passes 6 of 6.
 - `or_proxy_discard_subrequest_body.t`: the subrequest body patch above.
+
+With these and nginx-tests' h2, h3, proxy, body, ssl, stream_ssl, resolver and try_files scripts
+(192 files, 2932 subtests, both binaries made to report 1.31.9 so the 1.31.9 checks run), the
+official 1.31.8.1 fails 33 subtests in 8 files and this build 26 in 3: `h2_server_tokens.t` and
+`h3_server_tokens.t` (OpenResty's `Server: openresty`) and `h3_reusable.t`, which fail on the
+official build too.
