@@ -115,7 +115,9 @@ holywisp_repo: https://github.com/Fracital/holyWisp.git
 # more (cc2130f; a1d06e6 sent 1452 from the start and a path under 1480 that drops without ICMP
 # carried nothing after the handshake), and the WebTransport listener re-reads webtransport-cert
 # and -key when they change (cc6782f), so a certbot renewal restarts nothing. No new keys.
-holywisp_ref: cc6782f725f770f7e1a08572c5149e626653ecf3
+# 2026-11-18 bumped to cecccd6: the web client on GET / picks WebTransport through
+# /webtransport.json, falls back to a WebSocket, and has Wisp v2 and a UDP (DNS) check on by default.
+holywisp_ref: cecccd6489a5d6a171eebe8b3fbf682499cc75c6
 # Controller cache for both sources: built binaries, npm downloads, and the
 # per-host configs tasks/verify.yml checks.
 holywisp_build_dir: "{{ lookup('env', 'HOME') }}/.cache/abulxt/holywisp"
