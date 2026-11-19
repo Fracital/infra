@@ -144,7 +144,10 @@ holywisp_repo: https://github.com/Fracital/holyWisp.git
 # is answered after our FIN, not with "refused".
 # 2026-11-19 bumped to c5aa282: BBR times its rate samples in microseconds (on the ms clock its
 # estimate ran ~3 percent over the path: a standing queue and 5-8 percent loss behind a shallow buffer).
-holywisp_ref: c5aa2828fe06be343592830b39ee85bc105febb4
+# 2026-11-19 bumped to 4f16a9b: Wisp stream credit (0xE2, stream-credit on by default; only a
+# client that names it is held to a per-stream window), and bbr2 as a congestion-control value
+# (bbr stays the default).
+holywisp_ref: 4f16a9b3fe250c75d72e461b80fd4f22e51555de
 # Controller cache for both sources: built binaries, npm downloads, and the
 # per-host configs tasks/verify.yml checks.
 holywisp_build_dir: "{{ lookup('env', 'HOME') }}/.cache/abulxt/holywisp"
