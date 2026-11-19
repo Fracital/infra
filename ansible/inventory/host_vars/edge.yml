@@ -74,6 +74,10 @@ openresty_min_version: "{{ openresty_http2_fixed_version }}"
 # HTTP/2 back on (off 2026-11-18 to 2026-11-19 for nginx2root); the openresty role refuses it on an
 # older package. WebSockets still upgrade over HTTP/1.1 (no RFC 8441 Extended CONNECT).
 openresty_http2: true
+# The internal plain-HTTP front for holyWisp's HTTP/3 (edge_relay edge_front_*, README.md "Internal
+# HTTP front"): the box's own address only, not DNATed by divide; holyWisp runs here.
+edge_front_listen: "172.16.5.10:8088"
+edge_front_peers: ["172.16.5.10"]
 # One address, set by Proxmox (pct net0): edge_network adds nothing.
 edge_extra_interface_ips: []
 edge_extra_interface_ips_v6: []

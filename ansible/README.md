@@ -729,6 +729,33 @@ with HTTP/2 off; they are private (the edge reaches them over HTTP/1.1), and mov
 openresty.org ships 1.31.9.1. HTTP/3 stays out of OpenResty (CVE-2026-121810 needs `quic`):
 holyWisp answers udp 443, and no server block sends `Alt-Svc`.
 
+## Internal HTTP front
+
+`edge_relay` `templates/front.conf.j2` (`conf.d/02-front.conf`; `edge_front_*` in group_vars/all and edge_relay's defaults): a
+plain-HTTP listener on the edge for holyWisp's coming HTTP/3 front, `172.16.5.10:8088` since
+2026-11-19 (`host_vars/edge.yml`). holyWisp would terminate QUIC on udp 443 and hand each request
+here as HTTP/1.1, the client's address in `X-Forwarded-For` (its last entry) or `X-Real-IP`.
+Nothing is wired to it yet.
+
+- **Who may connect.** `allow` for `edge_front_peers` (`172.16.5.10`, the edge itself, where
+  holyWisp runs), `deny all` for the rest. Nothing outside reaches it anyway: divide DNATs only
+  tcp 53/80/443/8080 to the edge, and the edge's guest firewall (`201.fw`) admits no 8088 from the
+  other guests (`docs/divide-host.md`).
+- **Same server blocks.** The front proxies every request, Host unchanged, to a unix socket
+  (`edge_front_socket`, `/run/openresty/front/vhosts.sock`) that every :443 server block also
+  listens on (the catch-all as its default), so the caches, Lua, wisp stats, flood guard and link
+  routing are the ones :443 runs. WebSockets pass (Upgrade only when asked); bodies and responses
+  stream (no buffering on the front).
+- **Client address.** The front sends the client as `CF-Connecting-IP`, which `nginx.conf`'s
+  realip believes from `unix:` (and Cloudflare's ranges) only. The socket's directory is
+  `root:openresty` 0750, made at each start by the drop-in `60-front-socket.conf` (it is under
+  the service's RuntimeDirectory, so no stale socket survives a stop), so no other local process
+  can connect and claim an address. realip is not used on the front itself: it would make
+  `allow`/`deny` judge the forwarded address instead of the peer.
+- **Scheme.** Over the socket `$scheme` is `http`. `$edge_scheme` (`nginx.conf`) says `https` there
+  for the origins' `X-Forwarded-Proto`, and the front turns `http://<host>/` redirects nginx builds
+  itself back into `https://`.
+
 ## Flood guard
 
 The edge, not the origin, sheds HTTP floods: it is where the clients connect, and a request it

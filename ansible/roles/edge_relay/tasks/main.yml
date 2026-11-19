@@ -255,6 +255,58 @@
   diff: false # holds the token and the gate keys
   notify: reload openresty
 
+# The internal front for holyWisp's HTTP/3 (defaults edge_front_*, README.md "Internal HTTP
+# front"). The vhosts' unix socket lives in a directory only root and the workers can enter, so no
+# other local process can hand them a CF-Connecting-IP. It is under openresty.service's
+# RuntimeDirectory (wiped at every stop, so no stale socket blocks a start): a drop-in makes it at
+# each start, and the task below makes it now for the running service's next reload.
+- name: Internal front
+  when: edge_front_listen | length > 0
+  block:
+    - name: The front has peers
+      ansible.builtin.assert:
+        that: edge_front_peers | length > 0
+        fail_msg: edge_front_listen is set but edge_front_peers is empty
+
+    - name: Socket directory at every start (openresty.service drop-in)
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/openresty.service.d/60-front-socket.conf
+        content: |
+          # Managed by Ansible (edge_relay role, edge_front_*): the internal front's vhost socket.
+          [Service]
+          ExecStartPre=/usr/bin/install -d -m 0750 -o root -g {{ openresty_group }} {{ edge_front_socket_dir }}
+        owner: root
+        group: root
+        mode: "0644"
+      notify: reload openresty unit
+
+    - name: Socket directory now
+      ansible.builtin.file:
+        path: "{{ edge_front_socket_dir }}"
+        state: directory
+        owner: root
+        group: "{{ openresty_group }}"
+        mode: "0750"
+
+    - name: Render the internal front
+      ansible.builtin.template:
+        src: front.conf.j2
+        dest: "{{ openresty_conf_dir }}/conf.d/02-front.conf"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: reload openresty
+
+- name: Internal front absent (edge_front_listen is empty)
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ openresty_conf_dir }}/conf.d/02-front.conf"
+    - /etc/systemd/system/openresty.service.d/60-front-socket.conf
+  when: edge_front_listen | length == 0
+  notify: [reload openresty unit, reload openresty]
+
 # Maps and zones for the :443 default server's flood guard and nginx.conf's access_log filter
 # (defaults edge_flood_guard_*). Always rendered: nginx.conf references $edge_loggable.
 - name: Render the flood guard

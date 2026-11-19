@@ -40,6 +40,9 @@ server {
 server {
     listen 443 ssl;
     listen [::]:443 ssl;
+{% if edge_front_listen %}
+    listen unix:{{ edge_front_socket }};
+{% endif %}
     http2 {{ 'on' if (openresty_http2 | default(false) | bool) else 'off' }};
     server_name {{ holyunb_hosts | join(' ') }};
 

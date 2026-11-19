@@ -11,7 +11,7 @@ proxy_set_header Connection $krunkio_connection;
 # kru trusts these only after the token check; the services read X-Real-IP.
 proxy_set_header X-Real-IP $remote_addr;
 proxy_set_header X-Forwarded-For $remote_addr;
-proxy_set_header X-Forwarded-Proto $scheme;
+proxy_set_header X-Forwarded-Proto $edge_scheme;
 proxy_set_header CF-Connecting-IP "";
 proxy_set_header X-KN-Edge "{{ inventory_hostname }}";
 proxy_set_header X-KN-Edge-Token "{{ krunkio_origin_token }}";

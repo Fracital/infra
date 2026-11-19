@@ -1,0 +1,71 @@
+# Managed by Ansible (edge_relay role, templates/front.conf.j2; README.md "Internal HTTP front").
+#
+# Internal plain-HTTP front on {{ edge_front_listen }}, for holyWisp's HTTP/3 listener: holyWisp
+# terminates QUIC on udp 443 and hands each request here as HTTP/1.1 with the end client in
+# X-Forwarded-For (or X-Real-IP). Not public: divide DNATs only tcp 80/443/8080 here, and only
+# {{ edge_front_peers | join(', ') }} may connect.
+#
+#   client -h3-> holyWisp -> {{ edge_front_listen }} (this server) -> unix:{{ edge_front_socket }}
+#   -> the same server block :443 picks for the Host (its caches, Lua, wisp stats, link routing)
+#
+# The client address: this server reads it from the trusted peer's header and passes it as
+# CF-Connecting-IP, which nginx.conf's realip believes over the unix socket only (set_real_ip_from
+# unix:). realip is not used here because it would make allow/deny judge the forwarded address,
+# not the peer. The vhosts see $scheme http over the socket: $edge_scheme (nginx.conf) says https
+# for it, and redirects nginx builds from $scheme are turned back to https below.
+
+# The end client: X-Forwarded-For's last address (the one the peer added), else X-Real-IP, else
+# the peer itself. Anything that is not an address falls back the same way.
+map $http_x_forwarded_for $edge_front_xff {
+    "~(?:^|,)\s*(?<a>[0-9A-Fa-f:.]+)\s*$" $a;
+    default "";
+}
+
+map "$edge_front_xff|$http_x_real_ip" $edge_front_client {
+    "~^(?<a>[0-9A-Fa-f:.]+)\|" $a;
+    "~^\|\s*(?<a>[0-9A-Fa-f:.]+)\s*$" $a;
+    default $remote_addr;
+}
+
+# Keep-alive to the socket for plain requests, Upgrade only for WebSockets.
+map $http_upgrade $edge_front_connection {
+    ~*^websocket$ upgrade;
+    default "";
+}
+
+upstream edge_front_vhosts {
+    server unix:{{ edge_front_socket }};
+    keepalive 64;
+}
+
+server {
+    listen {{ edge_front_listen }};
+    http2 off;
+    server_name _;
+
+{% for peer in edge_front_peers %}
+    allow {{ peer }};
+{% endfor %}
+    deny all;
+
+    access_log off;
+    client_max_body_size 0;
+
+    location / {
+        proxy_pass http://edge_front_vhosts;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header CF-Connecting-IP $edge_front_client;
+        proxy_set_header X-Real-IP $edge_front_client;
+        proxy_set_header X-Forwarded-For $edge_front_client;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Upgrade $ws_upgrade;
+        proxy_set_header Connection $edge_front_connection;
+        proxy_redirect http://$host/ https://$host/;
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 1d;
+        proxy_read_timeout 1d;
+    }
+}

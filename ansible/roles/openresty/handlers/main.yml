@@ -1,4 +1,11 @@
 ---
+# A drop-in another role renders (edge_relay's 60-front-socket.conf): systemd reads it, nothing
+# restarts. It applies at the next start.
+- name: Reload openresty unit
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  listen: reload openresty unit
+
 # First, so a play that also reloads restarts before it (tasks/restart_isolated.yml).
 - name: Restart openresty isolated
   ansible.builtin.include_tasks: "{{ role_path }}/tasks/restart_isolated.yml"

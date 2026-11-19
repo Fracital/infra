@@ -81,6 +81,9 @@ server {
 server {
     listen 443 ssl;
     listen [::]:443 ssl;
+{% if edge_front_listen %}
+    listen unix:{{ edge_front_socket }};
+{% endif %}
 {% for ip in edge_advertise_ips_fracital | default([]) %}
     listen {{ ip }}:443 ssl default_server;
 {% endfor %}
@@ -235,6 +238,9 @@ server {
 server {
     listen 443 ssl;
     listen [::]:443 ssl;
+{% if edge_front_listen %}
+    listen unix:{{ edge_front_socket }};
+{% endif %}
 {% for ip in edge_advertise_ips_fracital | default([]) %}
     listen {{ ip }}:443 ssl;
 {% endfor %}

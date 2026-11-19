@@ -66,7 +66,19 @@ http {
     set_real_ip_from 127.0.0.1;
     set_real_ip_from ::1;
 {% endif %}
+{% if edge_front_listen %}
+    # The internal front (conf.d/02-front.conf) sets CF-Connecting-IP to the client holyWisp names;
+    # only it connects to the vhosts' unix socket (a directory for root and the workers only).
+    set_real_ip_from unix:;
+{% endif %}
     real_ip_header CF-Connecting-IP;
+
+    # X-Forwarded-Proto for the origins: https over the internal front's unix socket too (the
+    # client spoke HTTP/3 to holyWisp), $scheme elsewhere.
+    map $server_addr $edge_scheme {
+        ~^unix: https;
+        default $scheme;
+    }
 
     # Forward Upgrade only for real WebSocket requests (see 01-maps.conf on origin).
     map $http_upgrade $ws_upgrade {

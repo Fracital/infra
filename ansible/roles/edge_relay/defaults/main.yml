@@ -176,3 +176,10 @@ krunkio_direct_hosts: []
 # Name of a cloudflared tunnel running on the edge itself (installed by hand, not by this role), or
 # empty. When set, realip also trusts CF-Connecting-IP from loopback, where cloudflared connects.
 edge_local_cloudflared_tunnel: ""
+
+# Internal plain-HTTP front for holyWisp's HTTP/3 listener (templates/front.conf.j2,
+# conf.d/02-front.conf; README.md "Internal HTTP front"): edge_front_listen and the vhosts'
+# socket are in group_vars/all (edge_static's server blocks listen on it too). Only these
+# addresses may connect, and only their X-Forwarded-For (its last address) or X-Real-IP is
+# believed.
+edge_front_peers: []

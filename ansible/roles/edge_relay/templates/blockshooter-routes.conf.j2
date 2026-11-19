@@ -25,6 +25,9 @@ server {
 server {
     listen 443 ssl;
     listen [::]:443 ssl;
+{% if edge_front_listen %}
+    listen unix:{{ edge_front_socket }};
+{% endif %}
     http2 {{ 'on' if (openresty_http2 | default(false) | bool) else 'off' }};
     server_name {{ blockshooter_redirect_hosts | join(' ') }};
 
@@ -52,6 +55,9 @@ server {
 server {
     listen 443 ssl;
     listen [::]:443 ssl;
+{% if edge_front_listen %}
+    listen unix:{{ edge_front_socket }};
+{% endif %}
     http2 {{ 'on' if (openresty_http2 | default(false) | bool) else 'off' }};
     server_name {{ blockshooter_discord_host }};
 
@@ -78,6 +84,9 @@ server {
 server {
     listen 443 ssl;
     listen [::]:443 ssl;
+{% if edge_front_listen %}
+    listen unix:{{ edge_front_socket }};
+{% endif %}
     http2 {{ 'on' if (openresty_http2 | default(false) | bool) else 'off' }};
     server_name {{ blockshooter_host }};
 

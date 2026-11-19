@@ -38,6 +38,14 @@ openresty_http2: false
 # (openresty-build/). OpenResty's own 1.31.9.1 sorts above it.
 openresty_http2_fixed_version: "1.31.8.1-1~bookworm1+nginx2root1"
 
+# The edge's internal plain-HTTP front for holyWisp's HTTP/3 (roles/edge_relay templates/front.conf.j2,
+# README.md "Internal HTTP front"): "<address>:<port>", or empty for none (host_vars/edge.yml sets
+# it). Requests go on to the same TLS server blocks :443 uses (edge_relay's and edge_static's) over a
+# unix socket each of them also listens on, in a directory only root and openresty_group can enter.
+edge_front_listen: ""
+edge_front_socket_dir: /run/openresty/front
+edge_front_socket: "{{ edge_front_socket_dir }}/vhosts.sock"
+
 # OpenResty's workers run as a user and group of their own, not Debian's shared www-data (or
 # nobody); the master stays root to bind :80/:443 and read the keys. The role owns the user, the
 # directories the workers write and a systemd sandbox for the whole service (roles/openresty

@@ -53,6 +53,9 @@ server {
 server {
     listen 443 ssl;
     listen [::]:443 ssl;
+{% if edge_front_listen %}
+    listen unix:{{ edge_front_socket }};
+{% endif %}
     http2 {{ 'on' if (openresty_http2 | default(false) | bool) else 'off' }};
     server_name {{ krunkio_proxy_hosts | join(' ') }};
 
@@ -81,6 +84,9 @@ server {
 server {
     listen 443 ssl;
     listen [::]:443 ssl;
+{% if edge_front_listen %}
+    listen unix:{{ edge_front_socket }};
+{% endif %}
     http2 {{ 'on' if (openresty_http2 | default(false) | bool) else 'off' }};
     server_name {{ krunkio_assets_hosts | join(' ') }};
 
@@ -135,6 +141,9 @@ server {
 server {
     listen 443 ssl;
     listen [::]:443 ssl;
+{% if edge_front_listen %}
+    listen unix:{{ edge_front_socket }};
+{% endif %}
     http2 {{ 'on' if (openresty_http2 | default(false) | bool) else 'off' }};
     server_name {{ h }};
 
@@ -155,7 +164,7 @@ server {
         proxy_set_header Connection "";
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $remote_addr;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Proto $edge_scheme;
         proxy_set_header CF-Connecting-IP "";
         proxy_ssl_server_name on;
         proxy_ssl_name {{ h }};
