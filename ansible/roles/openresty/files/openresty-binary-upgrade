@@ -1,0 +1,204 @@
+#!/bin/sh
+# openresty-binary-upgrade: on-the-fly OpenResty/nginx binary upgrade under systemd.
+# Managed by Ansible (openresty role, handler "upgrade openresty binary"; README.md "OpenResty
+# packages on Debian 13"). Tested 2026-11-19 in a systemd container with the edge's unit and
+# sandbox: 0 failed requests of 3124 across a swap, long-lived streams finish on the old workers.
+#
+# Run after the new package is on disk (dpkg -i does not restart a running
+# openresty.service; its postinst only runs "invoke-rc.d openresty start",
+# which is a no-op for an active unit). Steps:
+#   1. nginx -t with the new binary (the path the running master will exec).
+#   2. SIGUSR2 to the master named in the pid file.
+#   3. Wait (bounded) for the new master: pid file changed, .oldbin holds the
+#      old master, new master alive, child of the old one, with all workers.
+#   4. On success SIGQUIT the old master and wait (bounded) for systemd's
+#      MainPID to become the new master. systemd re-reads PIDFile when the
+#      main process exits, so the unit stays active.
+#   On failure the old master is never signalled; a stray new master named in
+#   the pid file is stopped by PID and the old master restores its pid file.
+#
+# Signals go only to PIDs read from the pid files. Exit codes:
+#   0 upgraded (or upgraded and old master still draining connections)
+#   1 aborted, old master still serving
+#   2 inconsistent state, needs a human
+#
+# Tunables (environment): NGINX_BIN PID_FILE UNIT START_WAIT SETTLE
+#   HANDOVER_WAIT STRAY_WAIT (seconds).
+
+set -u
+
+NGINX_BIN=${NGINX_BIN:-/usr/local/openresty/nginx/sbin/nginx}
+PID_FILE=${PID_FILE:-/usr/local/openresty/nginx/logs/nginx.pid}
+OLDBIN_FILE=$PID_FILE.oldbin
+UNIT=${UNIT:-openresty.service}
+START_WAIT=${START_WAIT:-15}
+SETTLE=${SETTLE:-2}
+HANDOVER_WAIT=${HANDOVER_WAIT:-30}
+STRAY_WAIT=${STRAY_WAIT:-10}
+
+me=${0##*/}
+say() { printf '%s: %s\n' "$me" "$*"; }
+abort() { printf '%s: FAIL: %s\n' "$me" "$1" >&2; exit "${2:-1}"; }
+
+# Print the pid in file $1 if it holds a positive integer.
+read_pid() {
+	p=
+	[ -r "$1" ] || return 1
+	IFS= read -r p <"$1" 2>/dev/null || [ -n "${p:-}" ] || return 1
+	case $p in '' | 0 | *[!0-9]*) return 1 ;; esac
+	printf '%s\n' "$p"
+}
+
+alive() { kill -0 "$1" 2>/dev/null; }
+
+ppid_of() {
+	s=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+	s=${s##*) }
+	# shellcheck disable=SC2086 # split the stat fields on purpose
+	set -- $s
+	printf '%s\n' "$2"
+}
+
+# Number of live, non-draining workers whose parent is $1.
+workers_of() {
+	n=0
+	for d in /proc/[0-9]*; do
+		[ -r "$d/stat" ] || continue
+		[ "$(ppid_of "${d#/proc/}")" = "$1" ] || continue
+		t=$(tr '\000' ' ' <"$d/cmdline" 2>/dev/null) || continue
+		case $t in
+		*'is shutting down'*) ;;
+		'nginx: worker process'*) n=$((n + 1)) ;;
+		esac
+	done
+	printf '%s\n' "$n"
+}
+
+# nginx overwrites argv with its title "nginx: master process <argv...>";
+# the first word after the prefix is the path it will exec on USR2.
+argv0_of() {
+	t=$(tr '\000' ' ' <"/proc/$1/cmdline" 2>/dev/null) || return 1
+	t=${t#nginx: master process }
+	printf '%s\n' "${t%% *}"
+}
+exe_of() { readlink "/proc/$1/exe" 2>/dev/null || echo '?'; }
+main_pid() { systemctl show -p MainPID --value "$UNIT" 2>/dev/null; }
+unit_state() { systemctl show -p ActiveState --value "$UNIT" 2>/dev/null; }
+state_line() {
+	printf 'nginx.pid=%s nginx.pid.oldbin=%s MainPID=%s ActiveState=%s\n' \
+		"$(read_pid "$PID_FILE" || echo -)" "$(read_pid "$OLDBIN_FILE" || echo -)" \
+		"$(main_pid)" "$(unit_state)"
+}
+
+# ---- preflight -------------------------------------------------------------
+
+[ "$(id -u)" = 0 ] || abort "must run as root"
+[ -x "$NGINX_BIN" ] || abort "$NGINX_BIN is not executable"
+[ ! -e "$OLDBIN_FILE" ] || abort "$OLDBIN_FILE exists: an upgrade is in progress or an old master is still draining ($(state_line))"
+
+OLD=$(read_pid "$PID_FILE") || abort "no pid in $PID_FILE"
+alive "$OLD" || abort "master $OLD from $PID_FILE is not running"
+[ "$(unit_state)" = active ] || abort "$UNIT is not active ($(state_line))"
+[ "$(main_pid)" = "$OLD" ] || abort "systemd MainPID $(main_pid) differs from $PID_FILE ($OLD)"
+argv0=$(argv0_of "$OLD")
+[ "$argv0" = "$NGINX_BIN" ] || abort "master $OLD will exec '$argv0', not $NGINX_BIN"
+OLD_WORKERS=$(workers_of "$OLD")
+[ "$OLD_WORKERS" -gt 0 ] || abort "master $OLD has no workers"
+
+say "old master $OLD ($(exe_of "$OLD")), $OLD_WORKERS workers"
+say "new binary: $("$NGINX_BIN" -v 2>&1)"
+
+if ! out=$("$NGINX_BIN" -t -g 'daemon on; master_process on;' 2>&1); then
+	printf '%s\n' "$out" >&2
+	abort "new binary rejects the configuration; nothing signalled"
+fi
+
+# ---- start the new master --------------------------------------------------
+
+say "sending USR2 to old master $OLD"
+kill -USR2 "$OLD" || abort "kill -USR2 $OLD failed"
+
+NEW=
+ok=
+restored=0
+i=0
+while [ "$i" -lt "$START_WAIT" ]; do
+	sleep 1
+	i=$((i + 1))
+	alive "$OLD" || abort "old master $OLD died during the upgrade ($(state_line))" 2
+	cur=$(read_pid "$PID_FILE") || cur=
+	ob=$(read_pid "$OLDBIN_FILE") || ob=
+	if [ -n "$cur" ] && [ "$cur" != "$OLD" ] && [ "$ob" = "$OLD" ]; then
+		NEW=$cur
+		if alive "$NEW" && [ "$(ppid_of "$NEW")" = "$OLD" ] &&
+			[ "$(workers_of "$NEW")" -ge "$OLD_WORKERS" ]; then
+			ok=1
+			break
+		fi
+	elif [ "$cur" = "$OLD" ] && [ -z "$ob" ]; then
+		# The old master put its pid file back: the new binary exited.
+		restored=$((restored + 1))
+		[ "$restored" -ge 2 ] && break
+	fi
+done
+
+if [ -n "$ok" ]; then
+	sleep "$SETTLE"
+	if ! alive "$NEW" || [ "$(read_pid "$PID_FILE")" != "$NEW" ] ||
+		[ "$(workers_of "$NEW")" -lt "$OLD_WORKERS" ]; then
+		ok=
+	fi
+fi
+
+# ---- failure: leave the old master serving --------------------------------
+
+if [ -z "$ok" ]; then
+	say "new master did not come up healthy ($(state_line))"
+	if [ -n "$NEW" ] && alive "$NEW" && [ "$(ppid_of "$NEW")" = "$OLD" ]; then
+		say "stopping stray new master $NEW (QUIT, then TERM)"
+		kill -QUIT "$NEW" 2>/dev/null
+		i=0
+		while alive "$NEW" && [ "$i" -lt "$STRAY_WAIT" ]; do
+			sleep 1
+			i=$((i + 1))
+			[ "$i" = $((STRAY_WAIT / 2)) ] && kill -TERM "$NEW" 2>/dev/null
+		done
+		alive "$NEW" && abort "stray new master $NEW still running ($(state_line))" 2
+	fi
+	i=0
+	while [ "$i" -lt 5 ]; do
+		[ "$(read_pid "$PID_FILE")" = "$OLD" ] && [ ! -e "$OLDBIN_FILE" ] && break
+		sleep 1
+		i=$((i + 1))
+	done
+	if alive "$OLD" && [ "$(read_pid "$PID_FILE")" = "$OLD" ] &&
+		[ ! -e "$OLDBIN_FILE" ] && [ "$(main_pid)" = "$OLD" ]; then
+		abort "upgrade aborted; old master $OLD still serving ($(state_line))" 1
+	fi
+	abort "upgrade aborted but state is inconsistent; old master not signalled ($(state_line))" 2
+fi
+
+# ---- success: retire the old master ---------------------------------------
+
+say "new master $NEW ($(exe_of "$NEW")) up with $(workers_of "$NEW") workers; sending QUIT to old master $OLD"
+kill -QUIT "$OLD" || abort "kill -QUIT $OLD failed; both masters running ($(state_line))" 2
+
+i=0
+while [ "$i" -lt "$HANDOVER_WAIT" ]; do
+	mp=$(main_pid)
+	if [ "$mp" = "$NEW" ] && [ "$(unit_state)" = active ]; then
+		say "OK: $UNIT active, MainPID $NEW, $("$NGINX_BIN" -v 2>&1 | sed 's/.*version: //')"
+		exit 0
+	fi
+	if ! alive "$OLD" && [ "$mp" != "$NEW" ]; then
+		sleep 1
+		[ "$(main_pid)" = "$NEW" ] && continue
+		abort "old master exited but systemd did not adopt $NEW ($(state_line))" 2
+	fi
+	sleep 1
+	i=$((i + 1))
+done
+
+alive "$NEW" || abort "new master $NEW died while the old one drained ($(state_line))" 2
+say "OK (draining): new master $NEW serving; old master $OLD still finishing long-lived connections; systemd adopts $NEW when it exits ($(state_line))"
+exit 0

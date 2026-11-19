@@ -61,7 +61,7 @@
       tags: [always]
   roles:
     - edge_network
-    - openresty
+    - { role: openresty, tags: ["openresty"] }
     - {
         role: edge_warp,
         tags: ["warp"],

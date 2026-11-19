@@ -4,6 +4,15 @@
   ansible.builtin.include_tasks: "{{ role_path }}/tasks/restart_isolated.yml"
   listen: restart openresty isolated
 
+# A new nginx binary or library (tasks/debs.yml): swapped in on the fly (SIGUSR2, then SIGQUIT to
+# the old master), so open connections finish on the old workers. Before the reload handlers, which
+# then reach the new master. files/openresty-binary-upgrade aborts, leaving the old master serving,
+# when the new one does not come up.
+- name: Upgrade openresty binary
+  ansible.builtin.command: /usr/local/sbin/openresty-binary-upgrade
+  changed_when: true
+  listen: upgrade openresty binary
+
 - name: Test openresty configuration
   ansible.builtin.command: "{{ openresty_prefix }}/nginx/sbin/nginx -t"
   register: openresty_test

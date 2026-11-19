@@ -9,7 +9,7 @@ nothing here deploys the app itself (that stays in CI/CD per repo policy).
 | Layer           | Role                                                                 | Hosts                                   | What it does                                                                                                                                                                                                                                                                          |
 | --------------- | -------------------------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Origin          | `abulxt_origin`                                                      | `amph`                                  | Firewall open to the edge (9080/8822/1082); amph's Redis only with `shared_redis_on_terp_db: false`                                                                                                                                                                                   |
-| Edge install    | `openresty`                                                          | all `edge`                              | OpenResty from openresty.org apt repo + lua-resty-auto-ssl via luarocks + fallback cert                                                                                                                                                                                               |
+| Edge install    | `openresty`                                                          | all `edge`                              | OpenResty from openresty.org (Debian 13: its checked `.debs`, kept current, see [OpenResty packages on Debian 13](#openresty-packages-on-debian-13)) + lua-resty-auto-ssl via luarocks + fallback cert                                                                                |
 | Edge relay      | `edge_relay`                                                         | all `edge`                              | On-demand TLS (shared Redis) + reverse-proxy to amph `:9080` with `X-BYOD-Token`                                                                                                                                                                                                      |
 | krunk.io routes | `edge_relay` (`krunkio_enabled`)                                     | all `edge`                              | `assets.`/`coordinator.`/`matchmaker.`/`play.krunk.io` relayed straight to KrunkNative's kru over pinned TLS, assets cached on the edge. See [krunk.io routes](#krunkio-routes)                                                                                                       |
 | Fracital routes | `edge_relay` (`fracital_enabled`)                                    | all `edge`                              | `fracital_hosts` (+ `www.`) relayed to Fracital's terp over pinned TLS; the keyed relay path goes to the edge's own holyWisp; `fracital_wisp_hosts` (`holywisp.fracit.al`) serve only a placeholder page, the relay, that path and `/health`. See [Fracital routes](#fracital-routes) |
@@ -691,6 +691,43 @@ and `abulxt_origin` (amph, whose `nginx.conf` comes from abulxt's `deploy/openre
 The static sites need nothing from it: their trees are world-readable (`edge_static`). Switched on
 2026-11-18 (all three restarted once). A path the workers must write somewhere else needs a line in
 `openresty_rw_paths` and, if they own it, `openresty_worker_paths`.
+
+## OpenResty packages on Debian 13
+
+Debian 13's apt refuses openresty.org's repository (its `sqv` rejects the SHA1 key binding), so a
+host with `openresty_install_method: debs` (the edge) gets the bookworm `.debs` from
+`roles/openresty` `tasks/debs.yml` instead, checked the way apt would: `files/openresty-debs`
+verifies `InRelease` with `gpgv` against the pinned key (`openresty_signing_key_fpr`), `Packages`
+against `InRelease`'s SHA256 and each `.deb` against `Packages`. Every run installs whatever the
+repository has newer than the host (`openresty_debs`: openresty and its openssl3, pcre2 and zlib),
+so applying the role is how the edge stays current.
+
+A new binary or library goes in without a restart. `dpkg -i` leaves the running service alone
+(the package's postinst only starts a stopped one, and a `policy-rc.d` refuses even that during the
+transaction; `--force-confold` keeps `nginx.conf`, one of its conffiles), then the handler `upgrade openresty binary` runs `files/openresty-binary-upgrade`:
+`nginx -t`, SIGUSR2 to the master, and once the new master and its workers are up, SIGQUIT to the
+old one, whose workers finish their connections (WebSockets included) while the new ones take every
+new connection. systemd follows the new master through the PID file. If the new master does not come
+up, the old one keeps serving and the play fails.
+
+`openresty_min_version` (dpkg order) is the oldest `openresty` a host may keep. When neither the
+host nor the repository has it, the role installs `openresty_local_debs`, paths on the controller
+to a build from `openresty-build/` (`-e '{"openresty_local_debs": ["/path/openresty_...deb"]}'`),
+and fails without them. The edge holds `openresty_http2_fixed_version`, so a CI apply leaves its
+build alone and moves to openresty.org's own fixed release when that appears.
+
+### nginx2root and HTTP/2
+
+nginx2root (CVE-2026-123007, an HTTP/2 flow-control underflow, RCE with HTTP/2 on; CVE-2026-123633,
+an HTTP/2 use-after-free when proxying) is in nginx 1.9.5 to 1.31.8. nginx fixed it in 1.31.9 and
+1.30.7 on 2026-11-18; OpenResty had no fixed release (openresty/openresty#1166), so HTTP/2 went
+off everywhere (`openresty_http2: false`, group_vars/all). On 2026-11-19 the edge moved to
+OpenResty 1.31.8.1 rebuilt with nginx 1.31.9's changes (`openresty-build/`, package version
+`1.31.8.1-1~bookworm1+nginx2root1`) and turned HTTP/2 back on in `host_vars/edge.yml`. The role
+refuses to run with `openresty_http2` on and an older package. amph and terp still run 1.31.1.1
+with HTTP/2 off; they are private (the edge reaches them over HTTP/1.1), and move once
+openresty.org ships 1.31.9.1. HTTP/3 stays out of OpenResty (CVE-2026-121810 needs `quic`):
+holyWisp answers udp 443, and no server block sends `Alt-Svc`.
 
 ## Flood guard
 

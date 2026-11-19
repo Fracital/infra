@@ -68,6 +68,9 @@ holywisp_ws_write_high_water: 2097152
 edge_log_name: divide
 openresty_apt_suite: bookworm
 openresty_install_method: debs
+# nginx2root (group_vars/all openresty_http2): at least OpenResty 1.31.8.1 rebuilt with nginx
+# 1.31.9's fixes (openresty-build/), installed 2026-11-19, until openresty.org ships 1.31.9.1.
+openresty_min_version: "{{ openresty_http2_fixed_version }}"
 # One address, set by Proxmox (pct net0): edge_network adds nothing.
 edge_extra_interface_ips: []
 edge_extra_interface_ips_v6: []

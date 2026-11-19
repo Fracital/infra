@@ -1,0 +1,176 @@
+#!/usr/bin/python3 -I
+"""Pick the OpenResty .debs a host should install from openresty.org's apt repository.
+
+Managed by Ansible (openresty role, tasks/debs.yml). Debian 13's apt (sqv) refuses the repo's
+SHA1 key binding, so the role does apt's checks itself: InRelease verified with gpgv against
+the pinned keyring, Packages against InRelease's SHA256, each .deb against Packages' SHA256
+(the role's get_url). Prints JSON:
+
+  {"installed": {pkg: version or null}, "repo": {pkg: version or null},
+   "install": [{"pkg", "version", "url", "sha256", "file"}], "local_needed": bool}
+
+A package is installed when the repo has a newer version than the host. `openresty` itself
+is held to --min: when neither the host nor the repo has --min or newer, "local_needed" is true
+and the role installs the build named in openresty_local_debs instead (README.md "OpenResty").
+"""
+
+import argparse
+import functools
+import hashlib
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import urllib.request
+
+
+def fetch(url):
+    req = urllib.request.Request(url, headers={"User-Agent": "openresty-debs"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return r.read()
+
+
+def vcmp(a, b):
+    if a == b:
+        return 0
+    lt = subprocess.run(["dpkg", "--compare-versions", a, "lt", b], check=False).returncode
+    return -1 if lt == 0 else 1
+
+
+def installed_version(pkg):
+    r = subprocess.run(
+        ["dpkg-query", "-W", "-f=${db:Status-Status} ${Version}", pkg],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    status, _, version = r.stdout.partition(" ")
+    return version if r.returncode == 0 and status == "installed" else None
+
+
+def stanzas(text):
+    for block in text.split("\n\n"):
+        fields = {}
+        for line in block.splitlines():
+            if line[:1] in (" ", "\t") or ":" not in line:
+                continue
+            key, _, value = line.partition(":")
+            fields[key] = value.strip()
+        if fields:
+            yield fields
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--repo", required=True)
+    ap.add_argument("--suite", required=True)
+    ap.add_argument("--component", default="openresty")
+    ap.add_argument("--arch", default="amd64")
+    ap.add_argument("--keyring", required=True)
+    # A host without the keyring yet (a check run before the role made it): fetch the key, check
+    # its fingerprint, use it from a temporary keyring.
+    ap.add_argument("--key-url", default="")
+    ap.add_argument("--key-fpr", default="")
+    ap.add_argument("--min", default="")
+    ap.add_argument("packages", nargs="+")
+    args = ap.parse_args()
+
+    base = args.repo.rstrip("/")
+    inrelease = fetch(f"{base}/dists/{args.suite}/InRelease")
+    with tempfile.TemporaryDirectory() as tmp:
+        keyring = args.keyring
+        if not os.path.exists(keyring):
+            if not (args.key_url and args.key_fpr):
+                sys.exit(f"{keyring} is missing and no --key-url/--key-fpr was given")
+            armored = f"{tmp}/key.asc"
+            with open(armored, "wb") as f:
+                f.write(fetch(args.key_url))
+            show = subprocess.run(
+                ["gpg", "--batch", "--with-colons", "--show-keys", armored],
+                capture_output=True,
+                text=True,
+                check=False,
+                env={**os.environ, "GNUPGHOME": tmp},
+            )
+            fprs = [
+                line.split(":")[9]
+                for line in show.stdout.splitlines()
+                if line.startswith("fpr:")
+            ]
+            if not fprs or fprs[0] != args.key_fpr:
+                sys.exit(f"{args.key_url} is not key {args.key_fpr} ({fprs[:1]})")
+            keyring = f"{tmp}/key.gpg"
+            subprocess.run(
+                ["gpg", "--batch", "--yes", "--dearmor", "-o", keyring, armored],
+                check=True,
+                env={**os.environ, "GNUPGHOME": tmp},
+            )
+        signed = f"{tmp}/InRelease"
+        with open(signed, "wb") as f:
+            f.write(inrelease)
+        out = f"{tmp}/Release"
+        v = subprocess.run(
+            ["gpgv", "--keyring", keyring, "--output", out, signed],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if v.returncode != 0:
+            sys.exit(f"InRelease signature check failed:\n{v.stderr}")
+        with open(out, encoding="utf-8") as f:
+            release = f.read()
+
+    want = f"{args.component}/binary-{args.arch}/Packages"
+    digest = None
+    in_sha256 = False
+    for line in release.splitlines():
+        if not line.startswith(" "):
+            in_sha256 = line.startswith("SHA256:")
+            continue
+        parts = line.split()
+        if in_sha256 and len(parts) == 3 and parts[2] == want:
+            digest = parts[0]
+    if digest is None:
+        sys.exit(f"InRelease lists no SHA256 for {want}")
+    packages = fetch(f"{base}/dists/{args.suite}/{want}")
+    if hashlib.sha256(packages).hexdigest() != digest:
+        sys.exit(f"{want} does not match InRelease's SHA256")
+
+    newest = {}
+    for st in stanzas(packages.decode("utf-8")):
+        name = st.get("Package")
+        if name not in args.packages or st.get("Architecture") not in (args.arch, "all"):
+            continue
+        cur = newest.get(name)
+        if cur is None or vcmp(st["Version"], cur["Version"]) > 0:
+            newest[name] = st
+
+    result = {"installed": {}, "repo": {}, "install": [], "local_needed": False}
+    for pkg in args.packages:
+        have = installed_version(pkg)
+        st = newest.get(pkg)
+        result["installed"][pkg] = have
+        result["repo"][pkg] = st["Version"] if st else None
+        if pkg == "openresty" and args.min:
+            have_ok = have is not None and vcmp(have, args.min) >= 0
+            repo_ok = st is not None and vcmp(st["Version"], args.min) >= 0
+            if not have_ok and not repo_ok:
+                result["local_needed"] = True
+                continue
+        if st and (have is None or vcmp(st["Version"], have) > 0):
+            result["install"].append(
+                {
+                    "pkg": pkg,
+                    "version": st["Version"],
+                    "url": f"{base}/{st['Filename']}",
+                    "sha256": st["SHA256"],
+                    "file": st["Filename"].rsplit("/", 1)[-1],
+                }
+            )
+    json.dump(result, sys.stdout, indent=1, sort_keys=True)
+    print()
+
+
+if __name__ == "__main__":
+    main()

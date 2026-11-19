@@ -35,9 +35,31 @@
     mode: "0644"
   register: openresty_key
 
+- name: The keyring and the downloaded key
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - /tmp/openresty-pubkey.gpg
+    - /usr/share/keyrings/openresty.gpg
+  register: openresty_key_files
+
+# A key swapped on openresty.org (or in transit) is not trusted for the packages.
+- name: The downloaded key is OpenResty's ({{ openresty_signing_key_fpr }})
+  ansible.builtin.shell: |
+    set -euo pipefail
+    gpg --batch --with-colons --show-keys /tmp/openresty-pubkey.gpg | awk -F: '$1 == "fpr" { print $10; exit }'
+  args:
+    executable: /bin/bash
+  register: openresty_key_fpr
+  changed_when: false
+  failed_when: openresty_key_fpr.stdout != openresty_signing_key_fpr
+  check_mode: false
+  when: openresty_key_files.results[0].stat.exists
+
 - name: Dearmor openresty GPG key into keyring
   ansible.builtin.command: gpg --batch --yes --dearmor -o /usr/share/keyrings/openresty.gpg /tmp/openresty-pubkey.gpg
-  when: openresty_key.changed
+  when: openresty_key.changed or not openresty_key_files.results[1].stat.exists
+  changed_when: true
 
 - name: Add openresty apt repository (deb822 format)
   ansible.builtin.deb822_repository:
@@ -58,40 +80,10 @@
   when: openresty_install_method | default('apt') == 'apt'
 
 # Debian 13 (trixie) edges: apt's sqv verifier rejects OpenResty's SHA1-signed
-# repo, so install the pinned bookworm .debs directly (dpkg resolves deps from
-# the same pool). Pinned to the same versions running on abulxt-ashburn.
-- name: Download openresty .debs (Debian 13 direct install)
-  ansible.builtin.get_url:
-    url: "https://openresty.org/package/debian/pool/openresty/o/{{ item.pkg }}/{{ item.file }}"
-    dest: "/tmp/{{ item.file }}"
-    mode: "0644"
-  loop:
-    - {
-        pkg: openresty-openssl3,
-        file: "openresty-openssl3_3.5.7-1~bookworm1_amd64.deb",
-      }
-    - {
-        pkg: openresty-pcre2,
-        file: "openresty-pcre2_10.48-1~bookworm1_amd64.deb",
-      }
-    - {
-        pkg: openresty-zlib,
-        file: "openresty-zlib_1.3.2-1~bookworm1_amd64.deb",
-      }
-    - { pkg: openresty, file: "openresty_1.31.1.1-1~bookworm1_amd64.deb" }
-  when: openresty_install_method | default('apt') == 'debs'
-
-- name: Install openresty .debs together (Debian 13 direct install)
-  # Install all four in one dpkg transaction so inter-package deps resolve.
-  ansible.builtin.command: >
-    dpkg -i
-    /tmp/openresty-openssl3_3.5.7-1~bookworm1_amd64.deb
-    /tmp/openresty-pcre2_10.48-1~bookworm1_amd64.deb
-    /tmp/openresty-zlib_1.3.2-1~bookworm1_amd64.deb
-    /tmp/openresty_1.31.1.1-1~bookworm1_amd64.deb
-  register: openresty_dpkg
-  changed_when: openresty_dpkg.rc == 0
-  failed_when: openresty_dpkg.rc != 0 and 'already installed' not in openresty_dpkg.stderr
+# repo, so the role installs the bookworm .debs itself, checked the way apt would
+# (tasks/debs.yml, files/openresty-debs), and keeps them at the repo's newest.
+- name: OpenResty .debs (Debian 13 direct install)
+  ansible.builtin.include_tasks: debs.yml
   when: openresty_install_method | default('apt') == 'debs'
 
 - name: Workers' own user and the service sandbox

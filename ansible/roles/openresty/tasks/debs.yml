@@ -1,0 +1,124 @@
+---
+# Debian 13 hosts (openresty_install_method: debs): OpenResty's bookworm .debs, checked as apt
+# would (files/openresty-debs: gpgv on InRelease, then SHA256 down to each .deb), kept at the
+# repository's newest on every run, and held at openresty_min_version or newer (a local build when
+# openresty.org has no fixed release yet). A changed binary or library is swapped in without a
+# restart (handler "upgrade openresty binary", files/openresty-binary-upgrade), so open
+# connections, WebSockets included, finish on the old workers.
+
+- name: Binary swap script (handler "upgrade openresty binary")
+  ansible.builtin.copy:
+    src: openresty-binary-upgrade
+    dest: /usr/local/sbin/openresty-binary-upgrade
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: gpgv, for the repository's signature
+  ansible.builtin.apt:
+    name: gpgv
+    state: present
+
+# Read-only on the host (it fetches the index and asks dpkg), so check runs make the pick too.
+- name: Pick the packages to install
+  ansible.builtin.script:
+    cmd: >-
+      openresty-debs --repo {{ openresty_repo_url | quote }} --suite {{ openresty_apt_suite | quote }}
+      --keyring /usr/share/keyrings/openresty.gpg --key-url https://openresty.org/package/pubkey.gpg
+      --key-fpr {{ openresty_signing_key_fpr | quote }} --min {{ openresty_min_version | quote }}
+      {{ openresty_debs | map('quote') | join(' ') }}
+    executable: /usr/bin/python3
+  register: openresty_pick_out
+  changed_when: false
+  check_mode: false
+
+- name: The pick
+  ansible.builtin.set_fact:
+    openresty_pick: "{{ openresty_pick_out.stdout | from_json }}"
+
+- name: Installed and repository versions
+  ansible.builtin.debug:
+    msg: "installed {{ openresty_pick.installed }}, repository {{ openresty_pick.repo }}"
+
+- name: A build is given when openresty.org has nothing at {{ openresty_min_version }} or newer
+  ansible.builtin.assert:
+    that: openresty_local_debs | length > 0
+    fail_msg: >-
+      openresty {{ openresty_pick.installed.openresty }} is older than openresty_min_version
+      ({{ openresty_min_version }}) and the repository's newest is {{ openresty_pick.repo.openresty }}.
+      Build one (openresty-build/README.md) and pass its paths as openresty_local_debs.
+  when: openresty_pick.local_needed
+
+- name: Package cache directory
+  ansible.builtin.file:
+    path: /var/cache/openresty-debs
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Download the repository's newer packages
+  ansible.builtin.get_url:
+    url: "{{ item.url }}"
+    dest: "/var/cache/openresty-debs/{{ item.file }}"
+    checksum: "sha256:{{ item.sha256 }}"
+    mode: "0644"
+  loop: "{{ openresty_pick.install }}"
+  loop_control:
+    label: "{{ item.file }}"
+  # A check run on a host without the cache directory has nowhere to fetch to.
+  ignore_errors: "{{ ansible_check_mode }}"
+
+- name: Copy the local build
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "/var/cache/openresty-debs/{{ item | basename }}"
+    mode: "0644"
+  loop: "{{ openresty_local_debs }}"
+  when: openresty_pick.local_needed
+  ignore_errors: "{{ ansible_check_mode }}"
+
+- name: The packages to install
+  ansible.builtin.set_fact:
+    openresty_deb_files: >-
+      {{ (openresty_pick.install | map(attribute='file') | list)
+      + ((openresty_local_debs | map('basename') | list) if openresty_pick.local_needed else []) }}
+
+# One dpkg transaction so the dependencies resolve. The package's postinst only runs
+# `invoke-rc.d openresty start` (a no-op while it runs; prerm stops it on remove only); a
+# policy-rc.d refuses even that for the transaction, so only the handler touches the service.
+# --force-confold keeps this repo's nginx.conf (a conffile of the package).
+- name: Install the packages without restarting openresty
+  ansible.builtin.shell: |
+    set -eu
+    cd /var/cache/openresty-debs
+    if [ ! -e /usr/sbin/policy-rc.d ]; then
+      printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d
+      chmod 0755 /usr/sbin/policy-rc.d
+      trap 'rm -f /usr/sbin/policy-rc.d' EXIT
+    fi
+    DEBIAN_FRONTEND=noninteractive dpkg -i --force-confold --force-confdef {{ openresty_deb_files | map('quote') | join(' ') }}
+  when: openresty_deb_files | length > 0
+  changed_when: true
+  notify: upgrade openresty binary
+
+- name: Installed openresty package
+  ansible.builtin.command: dpkg-query -W -f=${Version} openresty
+  register: openresty_installed
+  changed_when: false
+  check_mode: false
+
+# nginx2root (group_vars/all openresty_http2): HTTP/2 only on a build with nginx 1.31.9's fixes.
+- name: HTTP/2 is on only with a fixed OpenResty ({{ openresty_http2_fixed_version }} or newer)
+  ansible.builtin.command:
+    argv:
+      - dpkg
+      - --compare-versions
+      - "{{ openresty_installed.stdout }}"
+      - ge
+      - "{{ openresty_http2_fixed_version }}"
+  changed_when: false
+  check_mode: false
+  when:
+    - openresty_http2 | default(false) | bool
+    - not ansible_check_mode or openresty_deb_files | length == 0

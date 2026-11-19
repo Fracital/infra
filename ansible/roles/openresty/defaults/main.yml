@@ -23,3 +23,19 @@ openresty_worker_paths:
   - "{{ openresty_prefix }}/nginx/fastcgi_temp"
   - "{{ openresty_prefix }}/nginx/uwsgi_temp"
   - "{{ openresty_prefix }}/nginx/scgi_temp"
+
+# openresty.org's package signing key (pubkey.gpg). The role refuses any other.
+openresty_signing_key_fpr: E52218E7087897DC6DEA6D6D97DB7443D5EDEB74
+# Debian 13 hosts (openresty_install_method: debs) install from this repository and suite.
+openresty_repo_url: https://openresty.org/package/debian
+openresty_debs:
+  - openresty
+  - openresty-openssl3
+  - openresty-pcre2
+  - openresty-zlib
+# The oldest `openresty` package a host may keep (dpkg version order). "" holds nothing back. When
+# neither the host nor the repository has it or newer, the role installs openresty_local_debs (the
+# controller's paths to a build of openresty-build/, README.md "OpenResty builds") and fails without
+# them. Hosts set it (host_vars/edge.yml), so a host that does not ask keeps the repo's packages.
+openresty_min_version: ""
+openresty_local_debs: []

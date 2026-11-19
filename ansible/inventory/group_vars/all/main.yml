@@ -24,13 +24,19 @@ openresty_conf_dir: "{{ openresty_prefix }}/nginx/conf"
 openresty_auto_ssl_dir: /etc/resty-auto-ssl
 
 # HTTP/2 on every OpenResty server block this repo renders (edge_relay, edge_static,
-# abulxt_origin's mc relay, fracital_origin). Off since 2026-11-18: nginx2root
+# abulxt_origin's mc relay, fracital_origin). Off by default since 2026-11-18: nginx2root
 # (CVE-2026-123007, HTTP/2 flow-control underflow, RCE in default configs with HTTP/2 on;
 # CVE-2026-123633, HTTP/2 use-after-free when proxying) affects nginx 1.9.5 to 1.31.8, and
 # OpenResty had no fixed release (1.31.8.1 and older bundle the bug; openresty/openresty#1166).
-# Turn it back on only once every host runs an OpenResty built on nginx 1.30.7+ or 1.31.9+.
-# HTTP/3 (quic) is not configured anywhere (CVE-2026-121810 needs it).
+# A host turns it on in its host_vars only once it runs an OpenResty built on nginx 1.30.7+ or
+# 1.31.9+: openresty_http2_fixed_version or newer, which the openresty role checks (tasks/debs.yml)
+# before it renders anything. That is the edge since 2026-11-19 (host_vars/edge.yml); amph and terp
+# still run 1.31.1.1 and stay off. HTTP/3 (quic) is not configured in OpenResty anywhere
+# (CVE-2026-121810 needs it); holyWisp answers udp 443.
 openresty_http2: false
+# The first package with nginx 1.31.9's fixes: OpenResty 1.31.8.1 rebuilt with them
+# (openresty-build/). OpenResty's own 1.31.9.1 sorts above it.
+openresty_http2_fixed_version: "1.31.8.1-1~bookworm1+nginx2root1"
 
 # OpenResty's workers run as a user and group of their own, not Debian's shared www-data (or
 # nobody); the master stays root to bind :80/:443 and read the keys. The role owns the user, the
