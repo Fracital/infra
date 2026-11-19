@@ -151,7 +151,9 @@ holywisp_repo: https://github.com/Fracital/holyWisp.git
 # (no password users: v2 opens in v1's round trips), and bbr2 makes room for a second session.
 # 2026-11-19 bumped to 507d2c0: the WebTransport pacer releases 2 to 32 datagrams at a time on
 # microsecond timers (a burst was 2 ms of the rate, more than a browser's UDP receive buffer).
-holywisp_ref: 507d2c0984cb7832c3d39f274a574e132793b570
+# 2026-11-19 bumped to 15812f1: a QUIC packet with a stream fragment past the reassembly bound
+# (1024 gaps) is left unacknowledged and sent again, where it closed the session (heavy loss).
+holywisp_ref: 15812f19fd6311f7abed2309657c3dcf5e4ec906
 # Controller cache for both sources: built binaries, npm downloads, and the
 # per-host configs tasks/verify.yml checks.
 holywisp_build_dir: "{{ lookup('env', 'HOME') }}/.cache/abulxt/holywisp"
@@ -337,9 +339,10 @@ holywisp_webtransport_url: ""
 # second uplink, from an address the client never talked to (docs/divide-host.md).
 holywisp_webtransport_idle_timeout_s: 30
 # webtransport-congestion-control: bbr (holyWisp's default), bbr2 or newreno. Needs holywisp_ref
-# at or after 4f16a9b for bbr2. 2026-11-19: bbr2, for STomp's A/B against bbr with the pacer of
-# 507d2c0 (bbr phase: 309 Mbit/s single, 328 parallel, medians).
-holywisp_webtransport_congestion_control: bbr2
+# at or after 4f16a9b for bbr2. 2026-11-19 A/B with the pacer of 507d2c0 (STomp, medians): bbr
+# 309 Mbit/s single and 328 parallel, bbr2 166 and 206 (its startup held 10-50 Mbit/s for 2-5 s),
+# so bbr.
+holywisp_webtransport_congestion_control: bbr
 # webtransport-cert / webtransport-key. Without holywisp_webtransport_acme they are not rendered:
 # holyWisp then makes its own P-256 certificate, valid 13 days and replaced every 6, which is what
 # Chrome's serverCertificateHashes accepts (at most 14 days, ECDSA P-256), and publishes its hashes
