@@ -483,6 +483,12 @@ edge_warp_bypass_hosts:
   - "*.wmfusercontent.org"
   - w.wiki
   - "*.w.wiki"
+  # Blockshooter (2026-11-19, the user's request): its HTTP/3 through WARP ran at 5 to 6 MB/s
+  # where a bypassed host's did 23 to 29, and the game's 179 MB boot region took 33 s.
+  - blockshooter.io
+  - "*.blockshooter.io"
+  - blockshooter.club
+  - "*.blockshooter.club"
 # Clean TCP dialled by holyWisp itself, marked for the router's WARP tunnel; only names the
 # gate sends to the relay (shady, adult) go through edge-router.py (roles/edge_wisp/defaults
 # holywisp_tcp_direct). On since 2026-11-16, at the user's request.
