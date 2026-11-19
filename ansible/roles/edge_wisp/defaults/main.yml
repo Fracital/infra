@@ -129,7 +129,9 @@ holywisp_repo: https://github.com/Fracital/holyWisp.git
 # 2026-11-19 bumped to c26e046: WebTransport's QUIC runs BBR (NewReno halved its window at each of
 # the path's ~0.3% random losses and ran at 4 Mbit/s against TCP's 30), and a GRO read no longer
 # reads past its control message (a worker segfault).
-holywisp_ref: c26e046668288862a68514f34d7b2bbcbeeb3bb1
+# 2026-11-19 bumped to c0fd4f2: WebTransport backpressure counts only bytes not yet sent, so BBR's
+# window in flight no longer pauses the remotes.
+holywisp_ref: c0fd4f2bda47b61ffa3c34e873928dfce399fa69
 # Controller cache for both sources: built binaries, npm downloads, and the
 # per-host configs tasks/verify.yml checks.
 holywisp_build_dir: "{{ lookup('env', 'HOME') }}/.cache/abulxt/holywisp"
