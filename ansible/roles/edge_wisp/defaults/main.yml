@@ -136,7 +136,10 @@ holywisp_repo: https://github.com/Fracital/holyWisp.git
 # alone in their datagram, and the server's flight resent on a repeated ClientHello.
 # 2026-11-19 bumped to 7dcc0ee: BBR leaves startup behind a full send buffer (it paced at 2.89x the
 # path), and PROBE_RTT can no longer erase the estimate (the rate fell to 1 Mbit/s 10 s into downloads).
-holywisp_ref: 7dcc0ee9ac76e4892a5955d2cb1f04b955a906b5
+# 2026-11-19 bumped to d2bce28: WebTransport lanes (webtransport-lanes, 8 by default: a client may
+# spread its streams over several QUIC streams, so one window or loss stalls only its own lane) and
+# a Wisp stream the server opens with its INFO and CONTINUE (wt-protocol wisp-v2-server-stream).
+holywisp_ref: d2bce28d71d80d93e95e046c4a671b6377bf6afd
 # Controller cache for both sources: built binaries, npm downloads, and the
 # per-host configs tasks/verify.yml checks.
 holywisp_build_dir: "{{ lookup('env', 'HOME') }}/.cache/abulxt/holywisp"
