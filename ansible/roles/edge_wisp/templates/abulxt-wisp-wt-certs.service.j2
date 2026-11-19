@@ -1,0 +1,54 @@
+# Managed by Ansible (roles/edge_wisp, holywisp_webtransport_host_certs; tasks/webtransport_certs.yml).
+# Copies auto-ssl's P-256 certificates from the edges' shared Redis into
+# {{ holywisp_webtransport_host_cert_dir }} for holyWisp's WebTransport listener (webtransport-cert-dir).
+# Started by abulxt-wisp-wt-certs.timer every 60 s; one line of counts per run in the journal.
+[Unit]
+Description=abulxt: auto-ssl certificates for holyWisp's WebTransport listener
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Root for two things only: the root-only config (the Redis password) and giving the files to
+# group {{ edge_wisp_user }} (CAP_CHOWN). Everything it writes is in the one directory below.
+ExecStart=/usr/local/sbin/abulxt-wisp-wt-certs --config {{ holywisp_webtransport_host_cert_config }}
+TimeoutStartSec=120
+CapabilityBoundingSet=CAP_CHOWN
+AmbientCapabilities=
+NoNewPrivileges=yes
+ProtectSystem=strict
+# "-": a missing directory is the script's error to report, not a namespace failure (226).
+ReadWritePaths=-{{ holywisp_webtransport_host_cert_dir }}
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RemoveIPC=yes
+KeyringMode=private
+# AF_UNIX for the journal; the Redis connection is TCP.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+{% if edge_redis_host is match('^[0-9a-fA-F.:]+$') %}
+# It talks to the Redis and nothing else.
+IPAddressDeny=any
+IPAddressAllow={{ edge_redis_host }}
+{% endif %}
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @obsolete @cpu-emulation @swap @reboot @mount @debug @raw-io
+# @privileged holds the chown calls; the files go to the group with fchown.
+SystemCallFilter=fchown fchownat
+SystemCallErrorNumber=EPERM
+UMask=0077

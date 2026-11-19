@@ -94,8 +94,8 @@ QUIC and TLS, and signs with ECDSA P-256 only. With `holywisp_webtransport_acme`
 since 2026-11-18, `group_vars/edge.yml`) it uses a Let's Encrypt certificate of its own for
 `holywisp.fracit.al`, so a page calls `new WebTransport("https://holywisp.fracit.al/")` without
 `serverCertificateHashes`. Without it, holyWisp makes a self-signed certificate every 6 days and
-`/webtransport.json` lists its hashes. The auto-ssl certificates cannot serve here: they are in the
-shared Redis, not in files, and the older ones are RSA.
+`/webtransport.json` lists its hashes. Every other edge name gets its auto-ssl certificate, by SNI,
+once that certificate is P-256 (`holywisp_webtransport_host_certs`, below).
 
 - **Issuance.** Debian's `certbot` (4.0 on trixie), `certonly --webroot` with `--key-type ecdsa
 --elliptic-curve secp256r1`, run once by `roles/edge_wisp/tasks/acme.yml`; renewals are
@@ -119,6 +119,25 @@ shared Redis, not in files, and the older ones are RSA.
 - **Checks in the play.** `/webtransport.json` lists no hash with the certificate and at least
   one without; the play fails when the installed certificate has under 7 days left
   (`holywisp_webtransport_acme_min_days`).
+
+- **The other names (`holywisp_webtransport_host_certs`, on by default with WebTransport).**
+  holyWisp's `webtransport-cert-dir` picks the certificate by SNI from
+  `/etc/abulxt/webtransport/hosts/<name>.pem` (the chain, leaf first, then the key) and falls back
+  to the pair above. `abulxt-wisp-wt-certs.timer` runs `/usr/local/sbin/abulxt-wisp-wt-certs` every
+  60 s (`roles/edge_wisp/tasks/webtransport_certs.yml`): it reads every `auto-ssl:<name>:latest`
+  from the shared Redis (the settings, password included, in `/etc/abulxt/wisp-wt-certs.json`,
+  root 0600), keeps the names whose key is P-256, is the leaf's, and whose leaf has not expired,
+  writes each that changed (root:abulxt-wisp 0640, renamed into place) and removes the files of
+  names that stopped qualifying. The RSA certificates, issued before 2026-11-16, are skipped
+  until auto-ssl renews them; on 2026-11-18 that was 116 of 126 names. A Redis error changes
+  nothing. `journalctl -u abulxt-wisp-wt-certs` has one line of counts per run, and
+  `abulxt-wisp-wt-certs --dry-run` lists the names it would write. The play runs it once before
+  it renders `holywisp.conf` and fails when the directory is still empty.
+- **Paths (`holywisp_webtransport_paths`).** `webtransport-path` lines name the CONNECT paths a
+  session may open, the same routes OpenResty sends to holyWisp over a WebSocket: abulxt's,
+  Fracital's and holyunb's keyed paths and the keyless `/` of `fracital_wisp_hosts`
+  (`holywisp_webtransport_path_rules`). They hold the relay keys, so `holywisp.conf` gets no
+  `--diff`.
 
 Rollout and rollback: [docs/divide-host.md](../docs/divide-host.md) "Let's Encrypt certificate".
 

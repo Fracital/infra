@@ -1,0 +1,13 @@
+# Managed by Ansible (roles/edge_wisp, holywisp_webtransport_host_certs; tasks/webtransport_certs.yml).
+# auto-ssl issues and renews certificates on the TLS handshake that needs one, so a new name's
+# certificate reaches the WebTransport listener within a minute of its first HTTPS request.
+[Unit]
+Description=abulxt: copy auto-ssl certificates for holyWisp's WebTransport listener every minute
+
+[Timer]
+OnBootSec=30
+OnUnitActiveSec=60
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

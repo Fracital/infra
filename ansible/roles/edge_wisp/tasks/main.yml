@@ -92,6 +92,11 @@
   ansible.builtin.import_tasks: acme.yml
   when: holywisp_webtransport_acme | bool
 
+# Before the config too: the directory webtransport-cert-dir names is full when the config first
+# names it (holywisp_webtransport_host_certs; tasks/webtransport_certs.yml).
+- name: auto-ssl certificates for the WebTransport listener
+  ansible.builtin.import_tasks: webtransport_certs.yml
+
 - name: Render holyWisp config
   ansible.builtin.template:
     src: holywisp.conf.j2
@@ -100,8 +105,11 @@
     group: "{{ edge_wisp_user }}"
     mode: "0640"
   notify: restart edge wisp
-  # --diff would print proxy-client-key-secret.
-  diff: "{{ not (holywisp_proxy_client_key | bool) }}"
+  # --diff would print proxy-client-key-secret, or the relay keys in the webtransport-path lines.
+  diff: >-
+    {{ not (holywisp_proxy_client_key | bool)
+       and not (holywisp_webtransport | bool and holywisp_webtransport_paths | bool
+                and holywisp_webtransport_path_rules | length > 0) }}
 
 # Kernel-mode WARP: the router would mark clean dials for tunnels that don't exist (its
 # probes would fail and every clean stream go direct). The warp tag sets them up first.

@@ -119,7 +119,10 @@ holywisp_repo: https://github.com/Fracital/holyWisp.git
 # /webtransport.json, falls back to a WebSocket, and has Wisp v2 and a UDP (DNS) check on by default.
 # 2026-11-18 bumped to d495cef: the web client has one UDP toggle (WebTransport, falling back to a
 # WebSocket) in place of a transport menu and a DNS check, and Holo's look for fields and panels.
-holywisp_ref: d495cef4ba586630d8e0d8ef81fa6b6deb9f0240
+# 2026-11-19 bumped to a69c3e4: webtransport-cert-dir (a certificate per host by SNI, filled by
+# holywisp_webtransport_host_certs below), webtransport-path (sessions only on the relay's paths)
+# and 421 + alt-svc: clear for HTTP/3 requests that are not a WebTransport CONNECT.
+holywisp_ref: a69c3e44fbe63203ad704c37f19130550544ca1b
 # Controller cache for both sources: built binaries, npm downloads, and the
 # per-host configs tasks/verify.yml checks.
 holywisp_build_dir: "{{ lookup('env', 'HOME') }}/.cache/abulxt/holywisp"
@@ -308,9 +311,8 @@ holywisp_webtransport_idle_timeout_s: 30
 # holyWisp then makes its own P-256 certificate, valid 13 days and replaced every 6, which is what
 # Chrome's serverCertificateHashes accepts (at most 14 days, ECDSA P-256), and publishes its hashes
 # in /webtransport.json, so only a page that pins them can connect. The edge's other Let's Encrypt
-# certificates are no use to the listener: lua-resty-auto-ssl keeps them in the shared Redis, not
-# in files, and those issued before edge_relay's dehydrated KEY_ALGO stay RSA until they renew,
-# while the listener signs with P-256 only.
+# certificates reach the listener as files through holywisp_webtransport_host_certs (below), the
+# P-256 ones only: those issued before edge_relay's dehydrated KEY_ALGO stay RSA until they renew.
 #
 # holywisp_webtransport_acme: a Let's Encrypt certificate of its own for the listener (tasks/acme.yml),
 # so a page can call plain `new WebTransport("https://holywisp.fracit.al/")`. certbot (Debian's
@@ -341,6 +343,41 @@ holywisp_webtransport_acme_restart: false
 # The play fails when the installed certificate has less than this left: renewal starts 30 days
 # before the end, so this means certbot.timer has been failing for weeks.
 holywisp_webtransport_acme_min_days: 7
+# holyWisp `webtransport-cert-dir`: the listener picks its certificate by SNI from a directory of
+# <name>.pem files (chain, leaf first, then the P-256 key), and keeps webtransport-cert/-key above
+# for a name with no file. holywisp_webtransport_host_certs fills it from lua-resty-auto-ssl's
+# certificates in the edges' shared Redis (edge_redis_host; the store OpenResty serves tcp 443
+# from), so `new WebTransport("https://<any edge name>/<path>")` verifies like the HTTPS page does:
+# abulxt-wisp-wt-certs (templates/abulxt-wisp-wt-certs.py.j2, tasks/webtransport_certs.yml) runs
+# every 60 s, writes a file for each name whose key is P-256 and whose certificate is current, and
+# removes the files of names that stopped qualifying. RSA certificates (issued before
+# 2026-11-16, edge_relay's ecdsa.sh) are skipped until auto-ssl renews them. Only with
+# holywisp_webtransport. Needs a holywisp_ref that knows webtransport-cert-dir: the config check
+# (tasks/verify.yml) stops the play on the controller otherwise.
+holywisp_webtransport_host_certs: true
+# 0750 root:<edge_wisp_user>, files 0640: readable under the relay unit's ProtectSystem=strict.
+holywisp_webtransport_host_cert_dir: /etc/abulxt/webtransport/hosts
+# The exporter's Redis settings (host, port, password, prefix), root:root 0600.
+holywisp_webtransport_host_cert_config: /etc/abulxt/wisp-wt-certs.json
+# holyWisp `webtransport-path` (repeated, `[host] /path`, no host = any host; /path is that path and
+# everything under it, / is / alone): which CONNECT paths a WebTransport session may open. They
+# mirror the WebSocket routes OpenResty sends to holyWisp (edge_relay): abulxt's keyed path
+# (byod-edge.conf.j2, every edge), Fracital's and holyunb's keyed paths (fracital_enabled;
+# holyunb_on, a wisp_edge box with holyunb_enabled) and the keyless root of each
+# fracital_wisp_hosts name (fracital-routes.conf.j2 `location = /`). nginx matches abulxt's
+# path case-insensitively (~*); these are matched as written. Same holyWisp version as above.
+holywisp_webtransport_paths: true
+holywisp_webtransport_path_rules: >-
+  {{ (['/' ~ wisp_path ~ '/' ~ wisp_gate_key]
+      if wisp_path is defined and wisp_gate_key is defined else [])
+     + (['/' ~ fracital_wisp_path ~ '/' ~ fracital_wisp_gate_key]
+        if fracital_enabled | default(false) | bool
+           and fracital_wisp_path is defined and fracital_wisp_gate_key is defined else [])
+     + (['/' ~ holyunb_wisp_path ~ '/' ~ holyunb_wisp_gate_key]
+        if holyunb_on | default(holyunb_enabled | default(false) | bool and 'wisp_edge' in group_names) | bool
+           and holyunb_wisp_path is defined and holyunb_wisp_gate_key is defined else [])
+     + ((fracital_wisp_hosts | default([]) | map('regex_replace', '$', ' /') | list)
+        if fracital_enabled | default(false) | bool else []) }}
 # holyWisp `flood-protection`. OFF for parity with what the fleet actually ran:
 # the wispurr config this role rendered had no `floodProtection` key and
 # wispurr only arms its flood limiter when that key exists. holyWisp's default

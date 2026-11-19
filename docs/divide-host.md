@@ -515,7 +515,7 @@ divide changes:
 - **Hairpin.** Other guests reach it on 91.199.82.174:443 through `hairpin_mark`, like tcp 443.
   The edge itself cannot (a guest cannot hairpin to itself): from the edge, test 172.16.5.10:443.
 
-Rollout (a production change: the user's go-ahead first, AGENTS.md "Servers"):
+Rollout:
 
 1. `holywisp_ref` in `ansible/roles/edge_wisp/defaults/main.yml` is at or after holyWisp a1d06e6,
    the commit that adds WebTransport (pinned there on 2026-11-18).
@@ -595,6 +595,44 @@ Rollback: `holywisp_webtransport_acme: false` in `group_vars/edge.yml`, then the
 certificate and its hashes) and the `:80` server is as before. certbot, its account and the
 files stay; `certbot delete --cert-name holywisp.fracit.al` on the edge stops its renewals, which
 would otherwise fail without the token location.
+
+### Every edge name's certificate (deployed 2026-11-19)
+
+The pair above only verifies for holywisp.fracit.al. holyWisp's `webtransport-cert-dir` lets the
+listener answer each SNI with that name's own certificate, and `holywisp_webtransport_host_certs`
+(`ansible/README.md` "WebTransport certificate") fills the directory from auto-ssl's certificates
+in the shared Redis on terp.db, the same store OpenResty serves tcp 443 from. The edge already
+reaches that Redis from its own address, so nothing on divide changes. On 2026-11-18 a dry run on
+the edge found 126 certificates, 10 of them P-256 (the rest are RSA until they renew). The same
+change renders `webtransport-path` lines, so a session opens only the paths OpenResty relays.
+
+Rollout (a production change: the user's go-ahead first, AGENTS.md "Servers"):
+
+1. `holywisp_ref` at a holyWisp commit that knows `webtransport-cert-dir` and `webtransport-path`.
+   An older pin stops the play on the controller (tasks/verify.yml), before the edge is touched.
+2. `tags=wisp`. The play installs `abulxt-wisp-wt-certs` and its timer, runs it once (a Redis
+   error fails the play here, before the config), checks that `/etc/abulxt/webtransport/hosts`
+   holds a certificate, renders the two keys and restarts the relay once.
+3. On the edge: `journalctl -u abulxt-wisp-wt-certs -n 3` (counts, `exported=` then
+   `unchanged=`), `systemctl list-timers abulxt-wisp-wt-certs.timer`. From outside divide, a P-256
+   name from `abulxt-wisp-wt-certs --dry-run` with headless Chrome:
+   `new WebTransport('https://<name>/<keyed path>')` resolves.
+
+Deployed 2026-11-19 with holyWisp a69c3e4. The Fracital names, fracital.xyz and the 15 cloak
+domains (apex and www., 35 names) were still RSA, so they were reissued as P-256 at once rather
+than at renewal, by a one-off script left on the edge (`/root/wt-reissue/wt-reissue.py`, root
+only). For each name it backs up the auto-ssl entry to `/root/wt-reissue/backup/`. It then runs
+certbot (`--manual`, config dir `/root/wt-reissue/certbot`, so no lineage joins
+`/etc/letsencrypt` or certbot.timer), and the hooks put the http-01 token where auto-ssl's
+challenge server reads it (`auto-ssl:<name>:challenge:<token>`). Last it stores the result as
+the auto-ssl entry (`auto-ssl:<name>:latest`, storage.lua's JSON). auto-ssl renews those as it
+does every other. Restoring a backup is `SET auto-ssl:<name>:latest <file>`. OpenResty serves a
+stored certificate from its shared memory for up to an hour, so tcp 443 moves to the new one
+within that.
+
+Rollback: `holywisp_webtransport_host_certs: false` (and `holywisp_webtransport_paths: false` for
+the paths) in `group_vars/edge.yml`, then `tags=wisp`. The timer, the script and its Redis settings
+go; the directory stays, unnamed by the config.
 
 ## Cloudflare Tunnel: one daemon on the edge (2026-11-17)
 

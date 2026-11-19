@@ -185,6 +185,19 @@ webtransport-url = {{ holywisp_webtransport_url }}
 webtransport-cert = {{ holywisp_webtransport_acme_dir }}/cert.pem
 webtransport-key = {{ holywisp_webtransport_acme_dir }}/key.pem
 {%   endif %}
+{%   if holywisp_webtransport_host_certs | bool %}
+# By SNI: <name>.pem from here, copied from auto-ssl's P-256 certificates every 60 s
+# (abulxt-wisp-wt-certs.timer). Any other name gets the default: the pair above, or without it
+# holyWisp's own certificate.
+webtransport-cert-dir = {{ holywisp_webtransport_host_cert_dir }}
+{%   endif %}
+{%   if holywisp_webtransport_paths | bool and holywisp_webtransport_path_rules | length > 0 %}
+# The paths a session may open, the WebSocket routes OpenResty sends here: the keyed relay paths
+# (under each, as nginx's ^/<path>/<key>(/.*)?$) and the keyless root of the public relay names.
+{%     for rule in holywisp_webtransport_path_rules %}
+webtransport-path = {{ rule }}
+{%     endfor %}
+{%   endif %}
 # A keepalive PING goes out after 20 s idle, inside a NAT's UDP timeout (divide's: about 30 s).
 webtransport-idle-timeout-s = {{ holywisp_webtransport_idle_timeout_s }}
 {% endif %}

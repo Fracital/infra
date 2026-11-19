@@ -1,0 +1,446 @@
+#!/usr/bin/python3
+# Managed by Ansible (roles/edge_wisp, holywisp_webtransport_host_certs; tasks/webtransport_certs.yml).
+#
+# Copies the edge's P-256 Let's Encrypt certificates from lua-resty-auto-ssl's Redis store into
+# {{ holywisp_webtransport_host_cert_dir }}/<name>.pem, where holyWisp's WebTransport listener picks one by SNI
+# (webtransport-cert-dir). OpenResty terminates TLS for tcp 443 from the same store; the QUIC
+# listener on udp 443 is holyWisp's own and cannot read Redis, so it gets files.
+#
+# auto-ssl keeps each name under "auto-ssl:<name>:latest" as JSON (fullchain_pem, privkey_pem,
+# cert_pem, expiry; resty/auto-ssl/storage.lua). holyWisp signs with ECDSA P-256 only: the
+# certificates issued before 2026-11-16 are RSA (dehydrated's KEY_ALGO was changed then) and are
+# skipped until they renew. A file is the chain, leaf first, then the key, renamed into place
+# from a temporary file in the same directory, so the listener never reads half of one.
+#
+# Everything is read from Redis before anything is written or removed: a Redis failure exits 1
+# and leaves the directory as it was. Only names this script would write (<name>.pem, name as
+# NAME_RE) and its own temporary files are ever removed. It logs counts, never key material.
+# The Redis password comes from a root-only JSON file (--config), never from argv.
+#
+# --dry-run reads Redis and the directory and prints what it would do; it writes nothing.
+
+import argparse
+import base64
+import binascii
+import datetime
+import fcntl
+import grp
+import json
+import os
+import re
+import socket
+import stat
+import subprocess
+import sys
+import tempfile
+
+DEFAULT_CONFIG = "{{ holywisp_webtransport_host_cert_config }}"
+DEFAULT_DIR = "{{ holywisp_webtransport_host_cert_dir }}"
+DEFAULT_GROUP = "{{ edge_wisp_user }}"
+
+NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$")
+# "<name>.pem" has to fit in a file name (255 bytes), and a DNS name is 253 at most anyway.
+NAME_MAX = 251
+TMP_PREFIX = ".wtcert-"
+TMP_SUFFIX = ".tmp"
+SUFFIX = ":latest"
+MGET_BATCH = 200
+# One auto-ssl entry is a few KiB; anything far past that is not one.
+VALUE_MAX = 1 << 20
+ARRAY_MAX = 1 << 20
+
+CERT_RE = re.compile(rb"-----BEGIN CERTIFICATE-----\r?\n.+?-----END CERTIFICATE-----", re.S)
+KEY_RE = re.compile(
+    rb"-----BEGIN (EC PRIVATE KEY|PRIVATE KEY|RSA PRIVATE KEY|ENCRYPTED PRIVATE KEY)-----"
+    rb"\r?\n.+?-----END \1-----",
+    re.S,
+)
+
+
+# The algorithm OIDs a PKCS#8 "PRIVATE KEY" names in its first bytes (DER): rsaEncryption and
+# id-ecPublicKey. Telling RSA apart by these, not by loading the key: cryptography checks an RSA
+# key's primes on load, 0.16 s each, which was 20 s a run for the edge's 116 RSA certificates.
+OID_RSA = bytes.fromhex("06092a864886f70d010101")
+OID_EC = bytes.fromhex("06072a8648ce3d0201")
+
+
+class Fail(Exception):
+    pass
+
+
+# ------------------------------------------------------------------ Redis (RESP2, the few commands needed)
+
+
+class Redis:
+    def __init__(self, host, port, timeout):
+        try:
+            self.sock = socket.create_connection((host, port), timeout=timeout)
+        except OSError as e:
+            raise Fail("redis: cannot connect to %s:%s: %s" % (host, port, e.strerror or e)) from None
+        self.rf = self.sock.makefile("rb")
+
+    def close(self):
+        try:
+            self.rf.close()
+            self.sock.close()
+        except OSError:
+            pass
+
+    def call(self, *args):
+        out = [b"*%d\r\n" % len(args)]
+        for a in args:
+            if isinstance(a, str):
+                a = a.encode()
+            out.append(b"$%d\r\n%s\r\n" % (len(a), a))
+        try:
+            self.sock.sendall(b"".join(out))
+            return self._reply()
+        except OSError as e:
+            raise Fail("redis: %s" % (e.strerror or e)) from None
+
+    def _line(self):
+        line = self.rf.readline(65536)
+        if not line.endswith(b"\r\n"):
+            raise Fail("redis: connection closed mid-reply")
+        return line[:-2]
+
+    def _reply(self):
+        line = self._line()
+        kind, rest = line[:1], line[1:]
+        if kind == b"+":
+            return rest
+        if kind == b"-":
+            # Only the error code (WRONGPASS, NOAUTH, ...): the text is the server's, keep it short.
+            raise Fail("redis: server error %s" % rest.split(b" ", 1)[0].decode("ascii", "replace")[:32])
+        if kind == b":":
+            return int(rest)
+        if kind == b"$":
+            n = int(rest)
+            if n < 0:
+                return None
+            if n > VALUE_MAX:
+                raise Fail("redis: reply of %d bytes" % n)
+            data = self.rf.read(n + 2)
+            if len(data) != n + 2 or not data.endswith(b"\r\n"):
+                raise Fail("redis: connection closed mid-reply")
+            return data[:-2]
+        if kind == b"*":
+            n = int(rest)
+            if n < 0:
+                return None
+            if n > ARRAY_MAX:
+                raise Fail("redis: array of %d items" % n)
+            return [self._reply() for _ in range(n)]
+        raise Fail("redis: unexpected reply type")
+
+
+def read_store(conf, timeout):
+    """Every auto-ssl ":latest" key and its value, or Fail. Nothing partial is returned."""
+    r = Redis(conf["host"], int(conf["port"]), timeout)
+    try:
+        if conf.get("password"):
+            r.call("AUTH", conf["password"])
+        prefix = conf.get("prefix", "auto-ssl") + ":"
+        pattern = prefix + "*" + SUFFIX
+        keys = set()
+        cursor = b"0"
+        while True:
+            reply = r.call("SCAN", cursor, "MATCH", pattern, "COUNT", "1000")
+            if not isinstance(reply, list) or len(reply) != 2 or not isinstance(reply[1], list):
+                raise Fail("redis: unexpected SCAN reply")
+            cursor = reply[0]
+            keys.update(k for k in reply[1] if isinstance(k, bytes))
+            if cursor == b"0":
+                break
+        keys = sorted(keys)
+        values = {}
+        for i in range(0, len(keys), MGET_BATCH):
+            batch = keys[i : i + MGET_BATCH]
+            reply = r.call("MGET", *batch)
+            if not isinstance(reply, list) or len(reply) != len(batch):
+                raise Fail("redis: unexpected MGET reply")
+            for k, v in zip(batch, reply):
+                values[k] = v
+        return prefix.encode(), values
+    finally:
+        r.close()
+
+
+# ------------------------------------------------------------------ certificate checks
+
+# Verdicts.
+OK, RSA, INVALID, EXPIRED = "ok", "rsa", "invalid", "expired"
+
+
+def check_cryptography(chain, key, now):
+    from cryptography import x509
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec, rsa
+
+    try:
+        k = serialization.load_pem_private_key(key, password=None)
+    except (ValueError, TypeError):
+        return INVALID
+    if isinstance(k, rsa.RSAPrivateKey):
+        return RSA
+    if not isinstance(k, ec.EllipticCurvePrivateKey) or not isinstance(k.curve, ec.SECP256R1):
+        return INVALID
+    try:
+        leaf = x509.load_pem_x509_certificate(chain)
+    except ValueError:
+        return INVALID
+    spki = serialization.PublicFormat.SubjectPublicKeyInfo
+    der = serialization.Encoding.DER
+    if leaf.public_key().public_bytes(der, spki) != k.public_key().public_bytes(der, spki):
+        return INVALID
+    end = getattr(leaf, "not_valid_after_utc", None)
+    if end is None:
+        end = leaf.not_valid_after.replace(tzinfo=datetime.timezone.utc)
+    if end <= now:
+        return EXPIRED
+    return OK
+
+
+def openssl(args, data):
+    """openssl with the PEM on stdin (never argv); stdout, or None when it fails."""
+    try:
+        p = subprocess.run(
+            ["openssl"] + args, input=data, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=20
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        raise Fail("openssl is not usable") from None
+    return p.stdout if p.returncode == 0 else None
+
+
+def check_openssl(chain, key, now):
+    # -text_pub prints the public half only, so the private key never reaches a pipe back.
+    text = openssl(["pkey", "-noout", "-text_pub"], key)
+    if text is None:
+        return INVALID
+    if b"modulus:" in text.lower():
+        return RSA
+    if b"ASN1 OID: prime256v1" not in text and b"NIST CURVE: P-256" not in text:
+        return INVALID
+    leaf_pub = openssl(["x509", "-noout", "-pubkey"], chain)
+    leaf_der = openssl(["pkey", "-pubin", "-outform", "DER"], leaf_pub) if leaf_pub else None
+    key_der = openssl(["pkey", "-pubout", "-outform", "DER"], key)
+    if not leaf_der or leaf_der != key_der:
+        return INVALID
+    if openssl(["x509", "-noout", "-checkend", "0"], chain) is None:
+        return EXPIRED
+    return OK
+
+
+def pick_checker(force_openssl):
+    if not force_openssl:
+        try:
+            from cryptography import x509  # noqa: F401
+            from cryptography.hazmat.primitives.asymmetric import ec  # noqa: F401
+
+            return check_cryptography
+        except ImportError:
+            pass
+    return check_openssl
+
+
+def entry_file(value, check, now):
+    """(verdict, file bytes or None) for one auto-ssl JSON value."""
+    try:
+        doc = json.loads(value)
+        chain = doc["fullchain_pem"]
+        key = doc["privkey_pem"]
+    except (ValueError, TypeError, KeyError):
+        return INVALID, None
+    if not isinstance(chain, str) or not isinstance(key, str):
+        return INVALID, None
+    chain = chain.encode()
+    key = key.encode()
+    certs = CERT_RE.findall(chain)
+    keys = KEY_RE.findall(key)
+    # findall with a group returns the labels; one key block, and an encrypted one is no use here.
+    if not certs or len(keys) != 1 or keys[0] == b"ENCRYPTED PRIVATE KEY":
+        return INVALID, None
+    if keys[0] == b"RSA PRIVATE KEY":
+        return RSA, None
+    key_block = KEY_RE.search(key).group(0) + b"\n"
+    if keys[0] == b"PRIVATE KEY":
+        try:
+            der = base64.b64decode(b"".join(key_block.split(b"\n")[1:-2]), validate=False)
+        except (binascii.Error, ValueError):
+            return INVALID, None
+        if OID_RSA in der[:32]:
+            return RSA, None
+        if OID_EC not in der[:32]:
+            return INVALID, None
+    verdict = check(certs[0] + b"\n", key_block, now)
+    if verdict != OK:
+        return verdict, None
+    if not chain.endswith(b"\n"):
+        chain += b"\n"
+    if not key.endswith(b"\n"):
+        key += b"\n"
+    return OK, chain + key
+
+
+# ------------------------------------------------------------------ the directory
+
+
+def current_file(path, gid):
+    """The file's bytes when it is a regular file with the mode and owner this script gives, else None."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISREG(st.st_mode) or stat.S_IMODE(st.st_mode) != 0o640 or st.st_uid != 0 or st.st_gid != gid:
+        return None
+    with open(path, "rb") as f:
+        return f.read()
+
+
+def write_atomic(dirpath, name, data, gid):
+    fd, tmp = tempfile.mkstemp(prefix=TMP_PREFIX, suffix=TMP_SUFFIX, dir=dirpath)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+            os.fchown(f.fileno(), 0, gid)
+            os.fchmod(f.fileno(), 0o640)
+        os.rename(tmp, os.path.join(dirpath, name + ".pem"))
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def ours(entry):
+    """Names of the .pem files this script writes: <name>.pem with name as NAME_RE, regular files only."""
+    if not entry.name.endswith(".pem") or not entry.is_file(follow_symlinks=False):
+        return None
+    name = entry.name[:-4]
+    return name if NAME_RE.match(name) else None
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Export auto-ssl's P-256 certificates for holyWisp's WebTransport listener.")
+    ap.add_argument("--config", default=DEFAULT_CONFIG, help="root-only JSON: host, port, password, prefix")
+    ap.add_argument("--dir", default=DEFAULT_DIR)
+    ap.add_argument("--group", default=DEFAULT_GROUP)
+    ap.add_argument("--timeout", type=float, default=10.0)
+    ap.add_argument("--dry-run", action="store_true", help="print counts and names; write and remove nothing")
+    ap.add_argument("--openssl", action="store_true", help="check with openssl even when cryptography is there")
+    args = ap.parse_args()
+
+    try:
+        st = os.stat(args.config)
+        if stat.S_IMODE(st.st_mode) & 0o077:
+            raise Fail("%s is readable by others than its owner" % args.config)
+        with open(args.config, "rb") as f:
+            conf = json.load(f)
+        if not isinstance(conf, dict) or "host" not in conf or "port" not in conf:
+            raise Fail("%s: host and port are required" % args.config)
+    except OSError as e:
+        raise Fail("%s: %s" % (args.config, e.strerror)) from None
+    except ValueError:
+        raise Fail("%s is not JSON" % args.config) from None
+
+    gid = -1
+    if not args.dry_run:
+        try:
+            gid = grp.getgrnam(args.group).gr_gid
+        except KeyError:
+            raise Fail("no group %s" % args.group) from None
+    check = pick_checker(args.openssl)
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    prefix, values = read_store(conf, args.timeout)
+    # A store with no certificate at all is a wrong prefix or database, never the real state of
+    # the edges' store: removing every file for it would leave the listener with the default only.
+    if not values:
+        raise Fail("redis: no %s*%s keys; nothing changed" % (prefix.decode(), SUFFIX))
+
+    counts = dict(exported=0, unchanged=0, removed=0, skipped_rsa=0, skipped_invalid=0, skipped_expired=0)
+    wanted = {}  # name -> file bytes
+    for key, value in values.items():
+        name = key[len(prefix) : -len(SUFFIX)].decode("utf-8", "replace").lower()
+        if value is None or len(name) > NAME_MAX or not NAME_RE.match(name):
+            counts["skipped_invalid"] += 1
+            continue
+        verdict, data = entry_file(value, check, now)
+        if verdict == RSA:
+            counts["skipped_rsa"] += 1
+        elif verdict == EXPIRED:
+            counts["skipped_expired"] += 1
+        elif verdict != OK:
+            counts["skipped_invalid"] += 1
+        elif name in wanted:
+            # Two keys that differ only by case: the first, in key order, stays.
+            counts["skipped_invalid"] += 1
+        else:
+            wanted[name] = data
+
+    if args.dry_run:
+        try:
+            entries = list(os.scandir(args.dir))
+        except FileNotFoundError:
+            entries = []
+        present = {n: e for e in entries for n in [ours(e)] if n}
+        for name in sorted(wanted):
+            same = False
+            if name in present:
+                try:
+                    with open(present[name].path, "rb") as f:
+                        same = f.read() == wanted[name]
+                except OSError:
+                    pass
+            counts["unchanged" if same else "exported"] += 1
+            print("%s %s" % ("unchanged" if same else "would write", name))
+        for name in sorted(set(present) - set(wanted)):
+            counts["removed"] += 1
+            print("would remove %s" % name)
+        print("dry run: keys=%d %s" % (len(values), " ".join("%s=%d" % kv for kv in counts.items())))
+        return 0
+
+    try:
+        dfd = os.open(args.dir, os.O_RDONLY | os.O_DIRECTORY)
+    except OSError as e:
+        raise Fail("%s: %s" % (args.dir, e.strerror)) from None
+    try:
+        try:
+            fcntl.flock(dfd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            raise Fail("%s: another run holds the lock" % args.dir) from None
+        entries = list(os.scandir(args.dir))
+        for e in entries:
+            # Left by a run that died between mkstemp and rename.
+            if e.name.startswith(TMP_PREFIX) and e.name.endswith(TMP_SUFFIX) and e.is_file(follow_symlinks=False):
+                os.unlink(e.path)
+        present = {n for e in entries for n in [ours(e)] if n}
+        for name in sorted(wanted):
+            if current_file(os.path.join(args.dir, name + ".pem"), gid) == wanted[name]:
+                counts["unchanged"] += 1
+                continue
+            write_atomic(args.dir, name, wanted[name], gid)
+            counts["exported"] += 1
+        for name in sorted(present - set(wanted)):
+            os.unlink(os.path.join(args.dir, name + ".pem"))
+            counts["removed"] += 1
+        if counts["exported"] or counts["removed"]:
+            os.fsync(dfd)
+    finally:
+        os.close(dfd)
+    print("keys=%d %s" % (len(values), " ".join("%s=%d" % kv for kv in counts.items())))
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except Fail as e:
+        print("abulxt-wisp-wt-certs: %s" % e, file=sys.stderr)
+        sys.exit(1)
+    except OSError as e:
+        print("abulxt-wisp-wt-certs: %s: %s" % (e.filename or "", e.strerror or e), file=sys.stderr)
+        sys.exit(1)

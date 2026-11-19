@@ -1,0 +1,169 @@
+---
+# holywisp_webtransport_host_certs (defaults): the WebTransport listener picks its certificate by
+# SNI from holywisp_webtransport_host_cert_dir (webtransport-cert-dir), one <name>.pem per name,
+# filled from lua-resty-auto-ssl's certificates in the edges' shared Redis by
+# abulxt-wisp-wt-certs (a timer, every 60 s). A name with no file, or an SNI that is none of
+# them, gets webtransport-cert/-key (holywisp.fracit.al's certbot pair, tasks/acme.yml). Runs
+# before holywisp.conf is rendered, so the directory is full when the config first names it.
+
+- name: Host certificates are on (holywisp_webtransport and holywisp_webtransport_host_certs)
+  ansible.builtin.set_fact:
+    edge_wisp_wt_host_certs_on: "{{ holywisp_webtransport | bool and holywisp_webtransport_host_certs | bool }}"
+
+# The exporter only removes <name>.pem files, but a directory shared with the certbot pair, or
+# /etc/abulxt itself, is not one it should be writing into at all.
+- name: The host certificate directory is a directory of its own
+  ansible.builtin.assert:
+    that:
+      - holywisp_webtransport_host_cert_dir is match('^/.+[^/]$')
+      - holywisp_webtransport_host_cert_dir not in ['/etc', '/etc/abulxt', holywisp_webtransport_acme_dir]
+    fail_msg: >-
+      holywisp_webtransport_host_cert_dir must be an absolute path of its own, not /etc/abulxt or
+      holywisp_webtransport_acme_dir ({{ holywisp_webtransport_acme_dir }}).
+    quiet: true
+  when: edge_wisp_wt_host_certs_on | bool
+
+- name: Export auto-ssl's certificates for the WebTransport listener
+  when: edge_wisp_wt_host_certs_on | bool
+  block:
+    # The parent is the certbot pair's directory by default; created with its owner and mode, so
+    # tasks/acme.yml and this never disagree about it.
+    - name: Create the host certificate directory
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: "{{ edge_wisp_user }}"
+        mode: "0750"
+      loop: >-
+        {{ ([holywisp_webtransport_acme_dir] if (holywisp_webtransport_host_cert_dir | dirname) == holywisp_webtransport_acme_dir else [])
+           + [holywisp_webtransport_host_cert_dir] }}
+
+    # The Redis password, read by the exporter (root) only: not in argv, not in the unit.
+    - name: Render the exporter's Redis settings
+      ansible.builtin.copy:
+        dest: "{{ holywisp_webtransport_host_cert_config }}"
+        content: >-
+          {{ {'host': edge_redis_host, 'port': edge_redis_port | int, 'password': edge_redis_password,
+              'prefix': 'auto-ssl'} | to_nice_json }}
+        owner: root
+        group: root
+        mode: "0600"
+      # --diff would print the Redis password.
+      diff: false
+      no_log: true
+
+    - name: Install the exporter
+      ansible.builtin.template:
+        src: abulxt-wisp-wt-certs.py.j2
+        dest: /usr/local/sbin/abulxt-wisp-wt-certs
+        owner: root
+        group: root
+        mode: "0750"
+
+    - name: Install the exporter's units
+      ansible.builtin.template:
+        src: "{{ item }}.j2"
+        dest: "/etc/systemd/system/{{ item }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop: [abulxt-wisp-wt-certs.service, abulxt-wisp-wt-certs.timer]
+      register: edge_wisp_wt_cert_units
+
+    - name: Reload systemd for the exporter's units
+      ansible.builtin.systemd:
+        daemon_reload: true
+      when: edge_wisp_wt_cert_units.changed
+
+    # A first export now, so the config below names a full directory. systemctl start waits for
+    # the oneshot and fails when it does (a Redis error leaves the directory as it was).
+    - name: Run the exporter once
+      ansible.builtin.command:
+        argv: [systemctl, start, abulxt-wisp-wt-certs.service]
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Show the exporter's counts
+      ansible.builtin.command:
+        argv:
+          [
+            journalctl,
+            --unit,
+            abulxt-wisp-wt-certs.service,
+            --lines,
+            "1",
+            --output,
+            cat,
+            --no-pager,
+            --grep,
+            "^keys=",
+          ]
+      register: edge_wisp_wt_cert_log
+      changed_when: false
+      failed_when: false
+      when: not ansible_check_mode
+
+    - name: Exporter result
+      ansible.builtin.debug:
+        msg: "{{ edge_wisp_wt_cert_log.stdout | default('') }}"
+      when: not ansible_check_mode
+
+    # Paths and sizes only: find reads no contents.
+    - name: Look for exported certificates
+      ansible.builtin.find:
+        paths: "{{ holywisp_webtransport_host_cert_dir }}"
+        patterns: "*.pem"
+        file_type: file
+      register: edge_wisp_wt_host_files
+      when: not ansible_check_mode
+
+    # The store has had P-256 certificates since 2026-11-16 (edge_relay's ecdsa.sh), so none at all
+    # means the exporter is not reading what it should.
+    - name: The host certificate directory holds at least one certificate
+      ansible.builtin.assert:
+        that: edge_wisp_wt_host_files.matched | int > 0
+        fail_msg: >-
+          {{ holywisp_webtransport_host_cert_dir }} has no certificate after a run of
+          abulxt-wisp-wt-certs. `journalctl -u abulxt-wisp-wt-certs` on the box has the counts, and
+          `/usr/local/sbin/abulxt-wisp-wt-certs --dry-run` the names it would write.
+        quiet: true
+      when: not ansible_check_mode
+
+    - name: Enable and start the exporter's timer
+      ansible.builtin.systemd:
+        name: abulxt-wisp-wt-certs.timer
+        enabled: true
+        state: started
+      when: not ansible_check_mode
+
+# Off (or WebTransport off): the timer and what holds the Redis password go. The directory and its
+# files stay (root:{{ edge_wisp_user }} 0640, like the certbot pair); holywisp.conf no longer names it.
+- name: Remove the exporter (host certificates off)
+  when: not (edge_wisp_wt_host_certs_on | bool)
+  block:
+    - name: Stop and disable the exporter's timer
+      ansible.builtin.systemd:
+        name: abulxt-wisp-wt-certs.timer
+        state: stopped
+        enabled: false
+      register: edge_wisp_wt_cert_timer_off
+      failed_when: >-
+        edge_wisp_wt_cert_timer_off.failed | default(false)
+        and 'Could not find the requested service' not in (edge_wisp_wt_cert_timer_off.msg | default(''))
+
+    - name: Remove the exporter, its units and its Redis settings
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/systemd/system/abulxt-wisp-wt-certs.timer
+        - /etc/systemd/system/abulxt-wisp-wt-certs.service
+        - /usr/local/sbin/abulxt-wisp-wt-certs
+        - "{{ holywisp_webtransport_host_cert_config }}"
+      register: edge_wisp_wt_cert_removed
+
+    - name: Reload systemd after removing the exporter's units
+      ansible.builtin.systemd:
+        daemon_reload: true
+      when: edge_wisp_wt_cert_removed.changed

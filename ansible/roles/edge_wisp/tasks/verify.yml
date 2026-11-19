@@ -40,7 +40,8 @@
 
 # Every key this role renders must be one the binary knows: holyWisp parses --config before it
 # looks at --version, and an unknown key or a bad value exits 2 with the reason. Each host's own
-# config is rendered here, on the controller (no secrets in it), and checked with the exact binary
+# config is rendered here, on the controller (0600 in the build cache, no diff: it holds
+# proxy-client-key-secret and the relay keys of the webtransport-path lines), and checked with the exact binary
 # the hosts will get. The flags after it name keys the role relies on at their defaults
 # (client-recv-buffer, conn-queue-max, connections-limit-per-ip and friends): only the parse
 # matters, the values never reach a running server.
