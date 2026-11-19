@@ -126,7 +126,10 @@ holywisp_repo: https://github.com/Fracital/holyWisp.git
 # route to the gateway carries 1360, the kernel fragmented every 1452-byte QUIC packet, and
 # WebTransport ran at a tenth of a WebSocket's speed.
 # 2026-11-19 bumped to 0fadf81: a WebTransport session's end logs its congestion events at debug.
-holywisp_ref: 0fadf81b0a31be621e35ff54d425916977eaf8e0
+# 2026-11-19 bumped to c26e046: WebTransport's QUIC runs BBR (NewReno halved its window at each of
+# the path's ~0.3% random losses and ran at 4 Mbit/s against TCP's 30), and a GRO read no longer
+# reads past its control message (a worker segfault).
+holywisp_ref: c26e046668288862a68514f34d7b2bbcbeeb3bb1
 # Controller cache for both sources: built binaries, npm downloads, and the
 # per-host configs tasks/verify.yml checks.
 holywisp_build_dir: "{{ lookup('env', 'HOME') }}/.cache/abulxt/holywisp"
