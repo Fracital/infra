@@ -15,7 +15,8 @@ here. Changing either container needs the owner's go-ahead for the host, like an
 CT 208 is an unprivileged LXC at **172.16.5.208** on `vmbr1`, hostname `ci`, Proxmox tag `ci`. It
 runs **20** GitHub Actions runners, `ci-1` through `ci-20`, each a systemd service
 `actions.runner.Fracital.ci-N.service` running as the user `runner`. They are registered to the
-**Fracital** org in runner group `ci`, and powerMouse's `ci.yml` sends its jobs to that group.
+**Fracital** org in runner group `ci`. powerMouse's `ci.yml`, estrogen's Linux x64 and node jobs,
+and all of SystemYA's CI, build and STomp updater jobs send their jobs to that group.
 
 The jobs are pull request code from contributors, so the container is treated as hostile:
 
@@ -48,6 +49,10 @@ first-party runners under `/opt/actions-runner/<scope>`: `org-fracital`, `org-re
 the orgs' own repositories, and the deploy ones hold the position to deploy. The `vmbr1` bridge
 firewall lets 172.16.5.204 reach terp `:22` and chat `:22`, the stomp and estro deploy gates
 (`docs/divide-host.md` "table bridge divide_guests"). Its own `204.fw` admits nothing inbound.
+`fracital-deploy` (`divide-deploy`, labels `divide` and `deploy`) is in the Fracital runner group
+`deploy`, which admits only powerMouse's `deploy.yml` on `master` and SystemYA's `deploy.yml` on
+`main`. SystemYA's deploy reaches the edge by ProxyJump through root@91.199.82.174, as it did
+from GitHub's runners.
 
 Resources: cores 2, memory 8 GiB, swap 0, rootfs 64 GB. It is pinned to host threads **10, 26**
 (`docs/divide-host.md` "CPU pinning and memory").
@@ -67,16 +72,19 @@ every other guest (`docs/divide-host.md` "Guest firewalls"). `208.fw`:
 - OUT rules, in order: ICMP to the gateway 172.16.5.1 is allowed (ping); everything else to
   172.16.5.1 is dropped (divide's own ssh and `:80`); the private ranges `10.0.0.0/8`,
   `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10` and `169.254.0.0/16` are dropped;
-  91.199.82.174 and 37.9.34.169 (divide's two public addresses, which would hairpin to guests) are
-  dropped; divide's `vmbr9` addresses `5.188.124.1`, `.38`, `.39` are dropped; and `fc00::/7` is
+  TCP and UDP 443 to 91.199.82.174 are allowed (the edge's public HTTPS and Wisp, which
+  SystemYA's STomp smoke test opens through `holywisp.fracit.al`); the hairpin masquerades them
+  to 172.16.5.1, an address the edge trusts for nothing, so a job sees what any internet client
+  sees. Everything else to 91.199.82.174 and all of 37.9.34.169 (divide's two public addresses,
+  which would hairpin to guests) is dropped; divide's `vmbr9` addresses `5.188.124.1`, `.38`, `.39` are dropped; and `fc00::/7` is
   dropped. What is left is the public internet.
 
 The net effect: jobs fetch from GitHub and the public internet and nothing else. The `172.16.0.0/12`
 drop already covers terp, vault, the edge and every other guest, so there is no path from a PR job
 to a production service.
 
-Note: the header comment in `208.fw` still reads "8 instances". It is 20 now. Fix the comment the
-next time the file is edited (a comment-only change, no rule change).
+The 443 rule was added on 2026-11-20 (backup `/root/208.fw.bak-systemya-ci-20261120081509` on
+divide), and the header comment now reads 20 instances.
 
 ## How powerMouse uses it
 
