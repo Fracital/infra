@@ -34,10 +34,10 @@ allow-link-local = off
 enable-v2 = on
 enable-twisp = off
 password-required = off
-# CONTINUE window in packets (wispurr: 128). holyWisp caps what it advertises to
-# stream-queue-max / (max-message-size - 5), so with the two tuning values below the full 128
-# goes through. A refill CONTINUE may carry less: the per-client in-flight budget
-# (ws-write-high-water) is shared between that client's streams, never under 4 packets.
+# CONTINUE window in packets (wispurr: 128; the edge 1024, defaults/main.yml). holyWisp caps what it
+# advertises to stream-queue-max / (max-message-size - 5), so with the two tuning values below the
+# full window goes through. A refill CONTINUE may carry less: the per-client in-flight budget
+# (upload-window) is shared between that client's uploading streams, never under 4 packets.
 buffer-remaining = {{ holywisp_buffer_remaining }}
 
 # ---------------------------------------------------------------- who the client is
@@ -132,11 +132,15 @@ dns-order = {{ holywisp_dns_order }}
 # ---------------------------------------------------------------- tuning
 # max-message-size: largest WebSocket message accepted from a client = wispurr's maxPayloadSize
 # (256 KiB) plus the 5-byte Wisp header. Together with stream-queue-max it sets the advertised
-# CONTINUE window (see buffer-remaining): 64 MiB / 256 KiB = 256, so buffer-remaining (128) rules.
+# CONTINUE window (see buffer-remaining): 256 MiB / 256 KiB = 1024, buffer-remaining's value.
 max-message-size = {{ holywisp_max_message_size }}
-# stream-queue-max: bytes queued toward one remote before the stream is closed as THROTTLED =
-# wispurr's PendingQueueSize (64 MiB). A client that honours the CONTINUE window never reaches it.
+# stream-queue-max: bytes queued toward one remote before the stream is closed as THROTTLED
+# (wispurr's PendingQueueSize is 64 MiB). A client that honours the CONTINUE window never reaches it.
 stream-queue-max = {{ holywisp_stream_queue_max }}
+# server-queue-max: bytes queued across every connection, toward clients and remotes; -per-ip:
+# one client address's share. Past either, that connection pauses (never drops) until it drains.
+server-queue-max = {{ holywisp_server_queue_max }}
+server-queue-max-per-ip = {{ holywisp_server_queue_max_per_ip }}
 # ws-write-high-water: bytes queued toward one client before holyWisp pauses reading from that
 # client's remotes (resumes at a quarter). Back-pressure, not a close: 8 MiB by default, lower where
 # tcp_notsent_lowat keeps the kernel queue short (host_vars); wispurr had no equivalent (it dropped the WebSocket at 64 MiB, patch 0003 in
@@ -204,4 +208,8 @@ webtransport-path = {{ rule }}
 # A keepalive PING goes out after 20 s idle, inside a NAT's UDP timeout (divide's: about 30 s).
 webtransport-idle-timeout-s = {{ holywisp_webtransport_idle_timeout_s }}
 webtransport-congestion-control = {{ holywisp_webtransport_congestion_control }}
+# The stateless-reset key, kept across restarts (0600, made at first start): with a new key per
+# start a browser ignored the new process's resets and sat out its idle timeout after every deploy.
+# One file per edge, never copied between them.
+webtransport-reset-key-file = {{ edge_wisp_dir }}/data/webtransport-reset.key
 {% endif %}

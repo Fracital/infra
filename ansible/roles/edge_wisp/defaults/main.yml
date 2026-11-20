@@ -153,7 +153,11 @@ holywisp_repo: https://github.com/Fracital/holyWisp.git
 # microsecond timers (a burst was 2 ms of the rate, more than a browser's UDP receive buffer).
 # 2026-11-19 bumped to 15812f1: a QUIC packet with a stream fragment past the reassembly bound
 # (1024 gaps) is left unacknowledged and sent again, where it closed the session (heavy loss).
-holywisp_ref: c9fe022a9ff5b974f346dd77f16501e0f368f648
+# 2026-11-20 bumped to 2df38da: the sweep (upload credit 0xE4, stream limit 0xE3, server-queue-max,
+# lookups and handshakes per IP, --check-config, /stats additions, the reset-key file, stop closes
+# WebTransport sessions, AES-128-GCM on AES-NI, PMTU black-hole detection, relay pipes given back),
+# and the macOS, Windows and tidy fixes after it.
+holywisp_ref: 2df38da644adaf6192b3d012d943c782338d266e
 # Controller cache for both sources: built binaries, npm downloads, and the
 # per-host configs tasks/verify.yml checks.
 holywisp_build_dir: "{{ lookup('env', 'HOME') }}/.cache/abulxt/holywisp"
@@ -443,8 +447,18 @@ holywisp_flood_protection: false
 holywisp_log_level: warn
 # Flow control, wispurr parity. templates/holywisp.conf.j2 explains each number.
 holywisp_max_message_size: 262149
-holywisp_stream_queue_max: 67108864
-holywisp_buffer_remaining: 128
+# 1024 packets and 256 MiB (2026-11-19): with 128 a stream's upload was 128 of the client's packets in
+# flight, 2 MiB at epoxy's 16 KiB, about 370 Mbit/s at 45 ms; 1024 is 16 MiB, a gigabit at 130 ms.
+# The queue grows with it so that a full window of 256 KiB packets still fits (no 0x49 for a
+# client inside its window); conn-queue-max (256 MiB, holyWisp's default) bounds a connection and
+# server-queue-max below the whole box.
+holywisp_stream_queue_max: 268435456
+holywisp_buffer_remaining: 1024
+# Bytes queued toward clients and remotes across every connection, and one client address's
+# share of that (holyWisp server-queue-max, -per-ip): past it the connection pauses, never drops.
+# The edge has 8 GB: holyWisp's 4 GiB / 1 GiB defaults are halved.
+holywisp_server_queue_max: 2147483648
+holywisp_server_queue_max_per_ip: 536870912
 holywisp_ws_write_high_water: 8388608
 # holyWisp `upload-window`: bytes one client may have in flight toward its remotes, shared by its
 # streams (the refill CONTINUE budget). 0 = ws_write_high_water.

@@ -111,6 +111,17 @@
        and not (holywisp_webtransport | bool and holywisp_webtransport_paths | bool
                 and holywisp_webtransport_path_rules | length > 0) }}
 
+# The restart waits for the handlers, at the end of the play: before it, the binary just installed
+# checks the config just rendered the way a start would (holywisp --check-config: validation, the
+# proxy's name, the WebTransport certificate and key), here, where those files are. A config that
+# fails stops the play with both in place and the old server still running, instead of a restart
+# loop on every edge at once. It prints no secret.
+- name: Check the installed holyWisp accepts this host's config (--check-config)
+  ansible.builtin.command:
+    argv: ["{{ edge_wisp_dir }}/holywisp", --config, /etc/abulxt/holywisp.conf, --check-config]
+  changed_when: false
+  check_mode: false
+
 # Kernel-mode WARP: the router would mark clean dials for tunnels that don't exist (its
 # probes would fail and every clean stream go direct). The warp tag sets them up first.
 - name: Kernel-mode WARP tunnels exist before the router is pointed at them
