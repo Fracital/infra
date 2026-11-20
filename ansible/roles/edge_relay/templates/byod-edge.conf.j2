@@ -249,6 +249,15 @@ server {
     }
 {% endif %}
 
+    # Source map backstop (crack docs/HANDOFF.md "Source maps"). crack strips
+    # every sourceMappingURL and writes no .map into the served tree; this
+    # refuses any .map a build ships by accident, before location / proxies it
+    # to amph or ngx.exec hands it to a @link_<site> target. A regex location
+    # beats the location / prefix, so this wins for every site this block serves.
+    location ~* \.map$ {
+        return 403;
+    }
+
     location / {
 {% if link_routes_on | bool %}
         # Link routing: every request leaves for its site's @link_<site> location below

@@ -158,6 +158,15 @@ server {
         return 302 https://rev.iq/$host/ads.txt;
     }
 
+    # Source map backstop (crack docs/HANDOFF.md "Source maps"). crack strips
+    # every sourceMappingURL and writes no .map into the served tree; this
+    # refuses any .map a build ships by accident, before the asset regex or
+    # location / passes it to terp. Comes before the asset regex so nginx tests
+    # it first: regex locations match in order, and the first match wins.
+    location ~* \.map$ {
+        return 403;
+    }
+
     # Content-hashed bundles, cached here (see fracital_cache_* in group_vars/all/fracital.yml).
     # terp is asked for identity encoding so one stored copy fits every client; this edge gzips
     # on the way out and answers 304s and ranges from the cache. The query string is not part of

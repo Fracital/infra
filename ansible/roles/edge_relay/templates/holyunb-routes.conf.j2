@@ -103,6 +103,14 @@ server {
         return 403 "Forbidden";
     }
 
+    # Source map backstop (crack docs/HANDOFF.md "Source maps"). crack strips
+    # every sourceMappingURL and writes no .map into the served tree; this
+    # refuses any .map the build ships by accident, before location / proxies it
+    # to holy. A regex location beats the location / prefix, so this wins.
+    location ~* \.map$ {
+        return 403;
+    }
+
     location / {
         proxy_pass http://holyunb_origin;
         proxy_http_version 1.1;
