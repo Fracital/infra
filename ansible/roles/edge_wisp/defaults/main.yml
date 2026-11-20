@@ -157,7 +157,11 @@ holywisp_repo: https://github.com/Fracital/holyWisp.git
 # lookups and handshakes per IP, --check-config, /stats additions, the reset-key file, stop closes
 # WebTransport sessions, AES-128-GCM on AES-NI, PMTU black-hole detection, relay pipes given back),
 # and the macOS, Windows and tidy fixes after it.
-holywisp_ref: 2df38da644adaf6192b3d012d943c782338d266e
+# 2026-11-20 bumped to 6137454: a malformed dns-server stops the start, --check-config loads
+# policy-file, plain-HTTP paths take a query string, a second server on a held port fails, Twisp
+# counts against the connect rate, client-recv-buffer applies under ProcSubset=pid (asked of the
+# kernel, not /proc/sys), tier rises are logged.
+holywisp_ref: 6137454a27143a48e5f3ca93e89b0f57c8712dc3
 # Controller cache for both sources: built binaries, npm downloads, and the
 # per-host configs tasks/verify.yml checks.
 holywisp_build_dir: "{{ lookup('env', 'HOME') }}/.cache/abulxt/holywisp"
