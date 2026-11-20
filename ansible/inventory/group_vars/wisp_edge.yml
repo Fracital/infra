@@ -423,12 +423,34 @@ edge_warp_bypass_hosts:
   - google.cat
   - "*.google.cat"
   # Reddit: the site, images and video (i., v., preview.redd.it), thumbnails, static assets.
+  # 2026-11-20, the user's choice: every name Reddit's web app uses, collected from page loads
+  # (home, a subreddit, image, video and comment posts, login, old.) and its CSP, so that none of
+  # them, TCP or the h3 its media hosts advertise, leaves through WARP. Third-party names Reddit
+  # loads (Google's reCAPTCHA, sign-in, ads) and shared CNAME targets (app.link, Webflow, HubSpot,
+  # Zendesk, Fastly, Cloudflare) stay off: they would move other sites.
   - reddit.com
   - "*.reddit.com"
   - redd.it
   - "*.redd.it"
-  - "*.redditmedia.com"
   - "*.redditstatic.com"
+  - redditmedia.com
+  - "*.redditmedia.com"
+  - "*.reddituploads.com"
+  - "*.redditspace.com"
+  - "*.devvit.net"
+  - "*.snooguts.net"
+  - redditinc.com
+  - "*.redditinc.com"
+  - reddithelp.com
+  - "*.reddithelp.com"
+  - redditblog.com
+  - "*.redditblog.com"
+  - redditstatus.com
+  - "*.redditstatus.com"
+  - redditmail.com
+  - "*.redditmail.com"
+  - reddit.app.link
+  - reddit-alternate.app.link
   # kits4beats.com (2026-11-16, the user's request).
   - kits4beats.com
   - "*.kits4beats.com"
