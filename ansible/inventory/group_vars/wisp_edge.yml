@@ -427,7 +427,7 @@ edge_warp_bypass_hosts:
   # (home, a subreddit, image, video and comment posts, login, old.) and its CSP, so that none of
   # them, TCP or the h3 its media hosts advertise, leaves through WARP. Third-party names Reddit
   # loads (Google's reCAPTCHA, sign-in, ads) and shared CNAME targets (app.link, Webflow, HubSpot,
-  # Zendesk, Fastly, Cloudflare) stay off: they would move other sites.
+  # Zendesk) stay off: they would move other sites. Fastly and Cloudflare are in the CDN group.
   - reddit.com
   - "*.reddit.com"
   - redd.it
@@ -568,6 +568,87 @@ edge_warp_bypass_hosts:
   # developers., cdnjs., ...). Other sites' cdnjs.cloudflare.com fetches move with it.
   - cloudflare.com
   - "*.cloudflare.com"
+  # 2026-11-20, the user's request: the major CDNs and object storage off WARP.
+  # Script and font CDNs: jsDelivr (cdn., fastly., gcore., testingcf.), unpkg, esm.sh, Skypack,
+  # jspm, Statically, jQuery's, BootstrapCDN, Microsoft's Ajax CDN, AMP, Adobe Fonts, Font Awesome,
+  # Bunny Fonts, Cloudflare's analytics beacon and Images.
+  - jsdelivr.net
+  - "*.jsdelivr.net"
+  - unpkg.com
+  - "*.unpkg.com"
+  - esm.sh
+  - "*.esm.sh"
+  - skypack.dev
+  - "*.skypack.dev"
+  - jspm.io
+  - "*.jspm.io"
+  - statically.io
+  - "*.statically.io"
+  - code.jquery.com
+  - bootstrapcdn.com
+  - "*.bootstrapcdn.com"
+  - "*.aspnetcdn.com"
+  - ampproject.org
+  - "*.ampproject.org"
+  - "*.typekit.net"
+  - "*.fontawesome.com"
+  - fonts.bunny.net
+  - "*.cloudflareinsights.com"
+  - imagedelivery.net
+  # CDN providers' own delivery names (what a page names directly; a site's own name CNAMEd to them
+  # is matched as that site): Fastly, Akamai, CloudFront, Azure CDN and Front Door, Gcore, Bunny,
+  # Edgio/Edgecast, Limelight, StackPath and MaxCDN, KeyCDN, CDN77, Cloudinary, imgix.
+  - fastly.net
+  - "*.fastly.net"
+  - "*.fastlylb.net"
+  - "*.akamaized.net"
+  - "*.akamaihd.net"
+  - "*.akamai.net"
+  - "*.akamaiedge.net"
+  - "*.edgekey.net"
+  - "*.edgesuite.net"
+  - "*.cloudfront.net"
+  - "*.azureedge.net"
+  - "*.azurefd.net"
+  - "*.msecnd.net"
+  - gcore.com
+  - "*.gcore.com"
+  - gcdn.co
+  - "*.gcdn.co"
+  - "*.b-cdn.net"
+  - "*.bunnycdn.com"
+  - "*.edgecastcdn.net"
+  - "*.systemcdn.net"
+  - "*.edgio.net"
+  - "*.llnwd.net"
+  - "*.llnw.net"
+  - "*.stackpathcdn.com"
+  - "*.stackpathdns.com"
+  - "*.netdna-cdn.com"
+  - "*.netdna-ssl.com"
+  - "*.kxcdn.com"
+  - "*.cdn77.org"
+  - cloudinary.com
+  - "*.cloudinary.com"
+  - "*.imgix.net"
+  # Object storage (buckets): all of AWS (S3 has a name per region, which a suffix rule cannot pick
+  # out, so *.amazonaws.com, which also takes AWS's APIs and load balancers), Azure Blob and static
+  # sites, Cloudflare R2, Backblaze B2, DigitalOcean Spaces, Wasabi, Linode, Vultr, Hetzner, Alibaba
+  # OSS (all of aliyuncs.com), Tencent COS. Google Cloud Storage is in googleapis.com above.
+  - amazonaws.com
+  - "*.amazonaws.com"
+  - "*.blob.core.windows.net"
+  - "*.web.core.windows.net"
+  - "*.r2.dev"
+  - "*.r2.cloudflarestorage.com"
+  - "*.backblazeb2.com"
+  - "*.digitaloceanspaces.com"
+  - "*.wasabisys.com"
+  - "*.linodeobjects.com"
+  - "*.vultrobjects.com"
+  - "*.your-objectstorage.com"
+  - "*.aliyuncs.com"
+  - "*.myqcloud.com"
 # Clean TCP dialled by holyWisp itself, marked for the router's WARP tunnel; only names the
 # gate sends to the relay (shady, adult) go through edge-router.py (roles/edge_wisp/defaults
 # holywisp_tcp_direct). On since 2026-11-16, at the user's request.
