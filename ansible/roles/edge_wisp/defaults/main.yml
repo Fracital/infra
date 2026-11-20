@@ -161,7 +161,9 @@ holywisp_repo: https://github.com/Fracital/holyWisp.git
 # policy-file, plain-HTTP paths take a query string, a second server on a held port fails, Twisp
 # counts against the connect rate, client-recv-buffer applies under ProcSubset=pid (asked of the
 # kernel, not /proc/sys), tier rises are logged.
-holywisp_ref: 6137454a27143a48e5f3ca93e89b0f57c8712dc3
+# 5ca1aa4: keepalive armed by the worker sweep instead of at open (churn +6% streams/s),
+# a refill CONTINUE waits behind its own stream's queued data (echo +5%), Windows poll fix.
+holywisp_ref: 5ca1aa411b15d4a821ab03802facecf402f075eb
 # Controller cache for both sources: built binaries, npm downloads, and the
 # per-host configs tasks/verify.yml checks.
 holywisp_build_dir: "{{ lookup('env', 'HOME') }}/.cache/abulxt/holywisp"
