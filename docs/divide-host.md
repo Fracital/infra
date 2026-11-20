@@ -42,22 +42,24 @@ authorization, like any other live host (AGENTS.md "Servers").
 
 ## Guests on vmbr1
 
-| Address      | Guest                 | What                                                             |
-| ------------ | --------------------- | ---------------------------------------------------------------- |
-| 172.16.5.1   | divide                | gateway, NAT, its own ACME client (`divide.eli.gift`)            |
-| 172.16.5.3   | amph (CT 213)         | abulxt origin (`[origin]`), was VM 113                           |
-| 172.16.5.10  | edge (CT 201)         | the only abulxt edge (`[wisp_edge]`, `host_vars/edge.yml`)       |
-| 172.16.5.11  | wg                    | WireGuard, udp 51820                                             |
-| 172.16.5.37  | sm                    |                                                                  |
-| 172.16.5.47  | kru                   | KrunkNative central node (krunk.io origin)                       |
-| 172.16.5.48  | blockshooter (CT 202) | blockshooter relay (`[bs_ct_divide]`)                            |
-| 172.16.5.62  | terp (CT 216)         | Fracital origin, was VM 116 (moved from meal 2026-11-16)         |
-| 172.16.5.64  | chat                  | estro.help backend (`host_vars/amph.yml` `estro_upstream`)       |
-| 172.16.5.78  | giftshop (VM 111)     | powered off 2026-11-17 (see "giftshop: retired" below)           |
-| 172.16.5.79  | holy (CT 205)         | holyunb.locker site (website2 :8080), was VM 127                 |
-| 172.16.5.94  | kn (CT 203)           | KrunkNative game servers (`[kn_ct_divide]`)                      |
-| 172.16.5.206 | fg (CT 206)           | Flying Gorilla game API (fg-api :8787), from giftshop 2026-11-17 |
-| (tap101i0)   | mull (VM 101)         | may only talk to chat and sm (bridge firewall below)             |
+| Address      | Guest                 | What                                                                                |
+| ------------ | --------------------- | ----------------------------------------------------------------------------------- |
+| 172.16.5.1   | divide                | gateway, NAT, its own ACME client (`divide.eli.gift`)                               |
+| 172.16.5.3   | amph (CT 213)         | abulxt origin (`[origin]`), was VM 113                                              |
+| 172.16.5.10  | edge (CT 201)         | the only abulxt edge (`[wisp_edge]`, `host_vars/edge.yml`)                          |
+| 172.16.5.11  | wg                    | WireGuard, udp 51820                                                                |
+| 172.16.5.37  | sm                    |                                                                                     |
+| 172.16.5.47  | kru                   | KrunkNative central node (krunk.io origin)                                          |
+| 172.16.5.48  | blockshooter (CT 202) | blockshooter relay (`[bs_ct_divide]`)                                               |
+| 172.16.5.62  | terp (CT 216)         | Fracital origin, was VM 116 (moved from meal 2026-11-16)                            |
+| 172.16.5.64  | chat                  | estro.help backend (`host_vars/amph.yml` `estro_upstream`)                          |
+| 172.16.5.78  | giftshop (VM 111)     | powered off 2026-11-17 (see "giftshop: retired" below)                              |
+| 172.16.5.79  | holy (CT 205)         | holyunb.locker site (website2 :8080), was VM 127                                    |
+| 172.16.5.94  | kn (CT 203)           | KrunkNative game servers (`[kn_ct_divide]`)                                         |
+| 172.16.5.204 | runner (CT 204)       | trusted GitHub Actions runners, reach the deploy gates (`docs/divide-ci-runner.md`) |
+| 172.16.5.206 | fg (CT 206)           | Flying Gorilla game API (fg-api :8787), from giftshop 2026-11-17                    |
+| 172.16.5.208 | ci (CT 208)           | untrusted powerMouse PR CI, 20 runners, isolated (`docs/divide-ci-runner.md`)       |
+| (tap101i0)   | mull (VM 101)         | may only talk to chat and sm (bridge firewall below)                                |
 
 Ansible reaches the guests with `ProxyJump root@91.199.82.174` (`group_vars/divide_guests.yml`).
 
@@ -116,19 +118,20 @@ divide is a Ryzen 9 7950X: CCD0 is threads 0-7 and 16-23, CCD1 is 8-15 and 24-31
 are pinned with `lxc.cgroup2.cpuset.cpus` in `/etc/pve/lxc/<id>.conf` (which stops pvestatd
 rebalancing them), VMs with `qm set --affinity`.
 
-| Threads      | Guests                                                      |
-| ------------ | ----------------------------------------------------------- |
-| 0-2, 16-18   | edge (CT 201), exclusive (since 2026-11-18; was 0-3, 16-19) |
-| 3, 6, 19, 22 | amph (CT 213)                                               |
-| 4-5, 20-21   | kn (CT 203)                                                 |
-| 7            | vault (100), wg (CT 200)                                    |
-| 23           | chat (106), fg (CT 206)                                     |
-| 0-7, 16-23   | every VM except mac                                         |
-| 8-9, 24-25   | mac (VM 126)                                                |
-| 10, 26       | runner (204)                                                |
-| 11           | kru (120), guca (117)                                       |
-| 27           | terp (CT 216), holy (205), blockshooter (CT 202)            |
-| 12-15, 28-31 | wispdev (122), exclusive                                    |
+| Threads      | Guests                                                            |
+| ------------ | ----------------------------------------------------------------- |
+| 0-2, 16-18   | edge (CT 201), exclusive (since 2026-11-18; was 0-3, 16-19)       |
+| 3, 6, 19, 22 | amph (CT 213)                                                     |
+| 4-5, 20-21   | kn (CT 203)                                                       |
+| 7            | vault (100), wg (CT 200)                                          |
+| 23           | chat (106), fg (CT 206)                                           |
+| 0-7, 16-23   | every VM except mac                                               |
+| 8-9, 24-25   | mac (VM 126)                                                      |
+| 10, 26       | runner (204)                                                      |
+| 11           | kru (120), guca (117)                                             |
+| 27           | terp (CT 216), holy (205), blockshooter (CT 202)                  |
+| 12-15, 28-31 | wispdev (122), exclusive                                          |
+| (none)       | ci (CT 208), unpinned; pin prepared in `docs/divide-ci-runner.md` |
 
 Re-pinned 2026-11-18 (about 23:23 UTC) after guests were resized: a raw
 `lxc.cgroup2.cpuset.cpus` overrides `cores` entirely (pvestatd skips the container and lxcfs
