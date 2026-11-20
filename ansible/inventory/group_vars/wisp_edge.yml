@@ -564,6 +564,10 @@ edge_warp_bypass_hosts:
   - "*.speedtestcustom.com"
   - cdnst.net
   - "*.cdnst.net"
+  # cloudflare.com (2026-11-20, the user's request): the site and its subdomains (dash., www.,
+  # developers., cdnjs., ...). Other sites' cdnjs.cloudflare.com fetches move with it.
+  - cloudflare.com
+  - "*.cloudflare.com"
 # Clean TCP dialled by holyWisp itself, marked for the router's WARP tunnel; only names the
 # gate sends to the relay (shady, adult) go through edge-router.py (roles/edge_wisp/defaults
 # holywisp_tcp_direct). On since 2026-11-16, at the user's request.
