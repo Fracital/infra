@@ -110,6 +110,15 @@ server {
     }
 }
 
+# Krunker Box Office's Discord link (KrunkNative services/brain/discord.c, kn_brain_discord_*) uses the
+# Meal app, whose redirect list is abulxt's and editable only in its owner's Developer Portal, so it
+# borrows abstracteducation.loan's registered callback. The brain prefixes its state with kbo-; such a
+# callback goes on to the coordinator with its query unchanged. Every other callback is abulxt's, as before.
+map "$host$uri|$arg_state" $kn_discord_bounce {
+    default 0;
+    "~^abstracteducation\.loan/api/account/discord/callback\|kbo-" 1;
+}
+
 # HTTPS: on-demand TLS (shared Redis storage) + reverse-proxy to amph.
 server {
     # reuseport: a listener per worker. With one shared listener, one of four workers held 225 of
@@ -133,6 +142,8 @@ server {
     limit_req zone=edge_guard_ip   burst={{ edge_flood_guard_burst }} nodelay;
     limit_req zone=edge_guard_post burst={{ edge_flood_guard_post_burst }} nodelay;
 {% endif %}
+    # The Box Office Discord callback (the map above): a server-level return, before link routing.
+    if ($kn_discord_bounce) { return 302 https://coordinator.krunk.io/discord/callback?$args; }
 
     ssl_certificate_by_lua_block {
         auto_ssl_instance:ssl_certificate()
