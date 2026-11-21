@@ -47,8 +47,31 @@
     - "{{ openresty_conf_dir }}/conf.d"
     - "{{ openresty_conf_dir }}/snippets"
     - "{{ openresty_conf_dir }}/lua"
-    - "{{ openresty_prefix }}/nginx/logs"
     - "{{ edge_placeholder_dir }}"
+
+# OpenResty workers need these trees for proxy temp files, request-body spooling, caches and
+# auto-SSL state (openresty_worker_paths). A restart-only chown (roles/openresty
+# restart_isolated.yml) is not enough: a *_temp level directory left owned by `nobody` made
+# the workers truncate large proxied downloads. So every apply re-owns, like the restart does
+# (owner, no access for others), only what differs: not the file module's recurse, which
+# stats every file of the multi-GB proxy caches in Python each run and fails when nginx removes
+# a temp or cache file mid-walk. A path that does not exist is skipped (defaults/main.yml), not
+# created. letsencrypt/conf.d's files stay root's (the ecdsa.sh task below; dehydrated sources them).
+- name: Ensure OpenResty worker paths belong to the worker
+  ansible.builtin.shell: |
+    set -eu
+    for p in {{ openresty_worker_paths | map('quote') | join(' ') }}; do
+      [ -d "$p" ] || continue
+      find "$p" -ignore_readdir_race -path {{ (openresty_auto_ssl_dir ~ '/letsencrypt/conf.d') | quote }}/'*' -prune -o \( \
+        \( \( ! -user {{ openresty_user | quote }} -o ! -group {{ openresty_group | quote }} \) \
+           {% if not ansible_check_mode %}-exec chown -h {{ openresty_user | quote }}:{{ openresty_group | quote }} {} \; {% endif %}-printf 'owner %p\n' \) , \
+        \( ! -type l -perm /o=rwx {% if not ansible_check_mode %}-exec chmod o-rwx {} \; {% endif %}-printf 'mode %p\n' \) \)
+    done
+  args:
+    executable: /bin/bash
+  check_mode: false  # find only lists in check mode (the template drops the -exec)
+  register: edge_openresty_worker_paths
+  changed_when: edge_openresty_worker_paths.stdout | length > 0
 
 # Legacy per-edge catch-alls (from deploy/openresty-ashburn) declare their own
 # :80/:443 default servers and conflict with the unified 00-edge-relay.conf.
