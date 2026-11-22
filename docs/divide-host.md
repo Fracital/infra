@@ -17,6 +17,7 @@ the WARP tunnels and the name gate's Gateway DoH (so `gateway_dns_extra_networks
 **2a03:90c0:32:1::49f/64** (static), default route by router advertisement (the RA also
 announces 2a03:90c0:32::/48 on-link). One flow from divide measured 686 MB/s to Hetzner Ashburn
 over it, against 440 MB/s over the VLAN's IPv4. The edge alone uses it, NATed, as IPv4 is:
+
 - the edge CT's `net0` has `ip6=fd42:172:16:5::10/64,gw6=fd42:172:16:5::1` (`vmbr1` holds
   fd42:172:16:5::1/64), which also puts the ULA in Proxmox's `ipfilter` for that NIC;
 - `/etc/sysctl.d/90-divide-forward.conf`: `net.ipv6.conf.bond0.accept_ra = 2` and then
@@ -53,12 +54,13 @@ authorization, like any other live host (AGENTS.md "Servers").
 | 172.16.5.48  | blockshooter (CT 202) | blockshooter relay (`[bs_ct_divide]`)                                               |
 | 172.16.5.62  | terp (CT 216)         | Fracital origin, was VM 116 (moved from meal 2026-11-16)                            |
 | 172.16.5.64  | chat                  | estro.help backend (`host_vars/amph.yml` `estro_upstream`)                          |
-| 172.16.5.78  | giftshop (VM 111)     | powered off 2026-11-17 (see "giftshop: retired" below)                              |
+| 172.16.5.78  | giftshop (VM 111)     | destroyed 2026-11-18 (see "giftshop: retired" below)                                |
 | 172.16.5.79  | holy (CT 205)         | holyunb.locker site (website2 :8080), was VM 127                                    |
 | 172.16.5.94  | kn (CT 203)           | KrunkNative game servers (`[kn_ct_divide]`)                                         |
 | 172.16.5.204 | runner (CT 204)       | trusted GitHub Actions runners, reach the deploy gates (`docs/divide-ci-runner.md`) |
 | 172.16.5.206 | fg (CT 206)           | Flying Gorilla game API (fg-api :8787), from giftshop 2026-11-17                    |
 | 172.16.5.208 | ci (CT 208)           | untrusted powerMouse PR CI, 20 runners, isolated (`docs/divide-ci-runner.md`)       |
+| 172.16.5.217 | devbox (CT 218)       | development container; XRDP :3389 from vmbr1 only, no port forward                  |
 | (tap101i0)   | mull (VM 101)         | may only talk to chat and sm (bridge firewall below)                                |
 
 Ansible reaches the guests with `ProxyJump root@91.199.82.174` (`group_vars/divide_guests.yml`).
@@ -77,7 +79,8 @@ Every guest's Proxmox tags follow one scheme, in this order (the UI shows them i
    below).
 4. **How it gets out**, when not plain NAT: `out-mullvad` (may use mull), `out-warp` (the edge's
    WARP tunnels).
-5. `legacy` for the two stopped Windows desktops that keep a meal address on `vmbr9`.
+5. `legacy` for a stopped guest kept only for an old address. The two Windows desktops it was
+   for, fun (105) and fum (110) on `vmbr9`, were destroyed on 2026-11-22, so no guest has it now.
 
 The software a guest runs is its name and the table above, not a tag.
 
@@ -86,12 +89,7 @@ The software a guest runs is its name and the table above, not a tag.
 | vault (100)            | `app` `eli-gift` `in-edge`                |
 | mull (101)             | `gateway` `in-dnat`                       |
 | eagler (104)           | `game` `eaglercraft` `in-edge` `in-dnat`  |
-| fun (105)              | `desktop` `legacy`                        |
 | chat (106)             | `app` `estro` `in-edge` `out-mullvad`     |
-| fum (110)              | `desktop` `legacy` `out-mullvad`          |
-| giftshop (111)         | `app` `eli-gift` (powered off 2026-11-17) |
-| amph (213)             | `origin` `abulxt` `in-edge` `out-mullvad` |
-| terp (216)             | `origin` `fracital` `in-edge` `in-dnat`   |
 | guca (117)             | `app` `eli-gift` `in-edge`                |
 | kru (120)              | `origin` `krunk` `in-edge` `in-dnat`      |
 | wispdev (122)          | `dev` `wisp-baby`                         |
@@ -103,7 +101,15 @@ The software a guest runs is its name and the table above, not a tag.
 | runner (204)           | `ci`                                      |
 | holy (205)             | `origin` `holyunb` `in-edge`              |
 | fg (206)               | `game` `eli-gift` `in-edge`               |
+| ci (208)               | `ci`                                      |
+| amph (213)             | `origin` `abulxt` `in-edge` `out-mullvad` |
+| terp (216)             | `origin` `fracital` `in-edge` `in-dnat`   |
+| devbox (218)           | `dev` (since 2026-11-22)                  |
 | templates (9000, 9001) | `template`                                |
+
+Checked against divide on 2026-11-22 (`pvesh get /cluster/resources --type vm`): every guest has
+tags. fun (105), fum (110) and giftshop (111) are gone (destroyed 2026-11-22, 2026-11-22 and
+2026-11-18).
 
 A guest that gains or loses a port forward, a tunnel or an edge route gets its `in-` tags changed
 in the same change (`pct set <id> --tags "a;b"`, `qm set` for VMs).
@@ -380,7 +386,8 @@ anyone, and mull forwards to `wg0-mullvad` from the LAN.
 Every guest NIC on `vmbr1` has `firewall=1` since 2026-11-17 (22:10 to 22:24 UTC), filtered by
 Proxmox's legacy `pve-firewall` (iptables and ipsets). Proxmox plugs such a NIC into its own bridge
 `fwbr<id>i<n>`, joined to `vmbr1` by the veth pair `fwln<id>i<n>` and `fwpr<id>p<n>`, and filters
-on that bridge. Not filtered: giftshop (VM 111, retired) and fum (VM 110, stopped).
+on that bridge. The two that were not, giftshop (VM 111) and fum (VM 110), have been destroyed
+(2026-11-18 and 2026-11-22); only the templates (9000, 9001) have a NIC without it.
 
 Earlier that day the guests filtered themselves (an nft table `inet guestfw` in 7 CTs, and a
 narrowed ufw on eagler). That is all removed, and `divide/guestfw/` with it: guest rules belong in
@@ -975,7 +982,12 @@ Redis. Everything moved as above; it was shut down cleanly at 22:27:30 UTC on 20
   sets. The two tunnels are already deleted (with the others, "Cloudflare Tunnel" above), which
   retired the token that was in plain text in the token-mode unit.
 
-Rollback: `qm start 111` (and "Rollback" under fg above for the game). pages.eli.gift's old
+**Destroyed 2026-11-18** (`qmdestroy 111` in divide's task log); the vzdump is gone too. Still on
+divide as of 2026-11-22: `tap111i0` in both `divide_guests` sets (`/etc/nftables.conf`), and fun and
+fum's `vmbr9` shim (the bridge in `/etc/network/interfaces`, its forward and masquerade rules),
+although fun and fum were destroyed that day.
+
+Rollback (no longer possible, kept for the record): `qm start 111` (and "Rollback" under fg above for the game). pages.eli.gift's old
 tunnel is gone, so serving it from giftshop again needs a new one (or an edge route to
 172.16.5.78:80).
 
