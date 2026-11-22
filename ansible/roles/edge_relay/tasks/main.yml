@@ -296,8 +296,14 @@
         dest: /etc/systemd/system/openresty.service.d/60-front-socket.conf
         content: |
           # Managed by Ansible (edge_relay role, edge_front_*): the internal front's vhost socket.
+          # /run is a tmpfs: the directory must exist before the unit's own `nginx -t`, which
+          # binds the socket. A drop-in's ExecStartPre runs after the unit's, so the list is
+          # reset and the test repeated after the directory (2026-11-22: a reboot left the
+          # edge down because the test ran first and failed).
           [Service]
+          ExecStartPre=
           ExecStartPre=/usr/bin/install -d -m 0750 -o root -g {{ openresty_group }} {{ edge_front_socket_dir }}
+          ExecStartPre={{ openresty_prefix }}/nginx/sbin/nginx -t -q -g 'daemon on; master_process on;'
         owner: root
         group: root
         mode: "0644"
