@@ -308,10 +308,9 @@ On terp.db, `terpdb-backup.timer` (03:15 UTC) runs `/usr/local/sbin/terpdb-backu
 
 Off the box, divide's `terpdb-pull.timer` (04:30 UTC) runs `/usr/local/sbin/terpdb-pull.sh`, which
 pulls `postgres/`, `redis/` and `mariadb/` into `divide:/var/backups/terp-db/` with rsync and keeps
-21 days (`mariadb/` added 2026-11-18, backup `divide:/root/terpdb-pull.sh.bak-mariadb-*`).
+21 days (`mariadb/` added 2026-11-18).
 Half-written dumps (`*.partial`) are excluded before the includes, because rsync takes the first
-rule that matches (they came after them until 2026-11-18 and never applied; backup
-`/usr/local/sbin/terpdb-pull.sh.bak-filter-*`).
+rule that matches (they came after them until 2026-11-18 and never applied).
 It never deletes to match terp.db, so a wiped terp.db cannot empty divide's copy. The key
 (`divide:/root/.ssh/terpdb-pull_ed25519`, host key pinned in `/root/.ssh/terpdb_known_hosts`) is
 limited on terp.db to `restrict,from="91.199.82.174",command="/usr/bin/rrsync -ro /var/backups"`:

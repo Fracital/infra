@@ -14,7 +14,7 @@ public 91.199.82.174), with its guests behind NAT on 172.16.5.0/24:
 | divide                       | NAT, guest firewall, ACME                                                                                | by hand, `docs/divide-host.md`                                    |
 
 `ansible/README.md` is the reference for every role, `ansible/RUNBOOK.md` has the
-procedures, and `infra.js` is the G-Core address plan (`node infra.js`).
+procedures, and `infra.js` is divide's address plan (`node infra.js`).
 
 ## Running it locally
 

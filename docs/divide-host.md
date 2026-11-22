@@ -49,7 +49,6 @@ authorization, like any other live host (AGENTS.md "Servers").
 | 172.16.5.3   | amph (CT 213)         | abulxt origin (`[origin]`), was VM 113                                              |
 | 172.16.5.10  | edge (CT 201)         | the only abulxt edge (`[wisp_edge]`, `host_vars/edge.yml`)                          |
 | 172.16.5.11  | wg                    | WireGuard, udp 51820                                                                |
-| 172.16.5.37  | sm                    |                                                                                     |
 | 172.16.5.47  | kru                   | KrunkNative central node (krunk.io origin)                                          |
 | 172.16.5.48  | blockshooter (CT 202) | blockshooter relay (`[bs_ct_divide]`)                                               |
 | 172.16.5.62  | terp (CT 216)         | Fracital origin, was VM 116 (moved from meal 2026-11-16)                            |
@@ -61,7 +60,7 @@ authorization, like any other live host (AGENTS.md "Servers").
 | 172.16.5.206 | fg (CT 206)           | Flying Gorilla game API (fg-api :8787), from giftshop 2026-11-17                    |
 | 172.16.5.208 | ci (CT 208)           | untrusted powerMouse PR CI, 20 runners, isolated (`docs/divide-ci-runner.md`)       |
 | 172.16.5.217 | devbox (CT 218)       | development container; XRDP :3389 from vmbr1 only, no port forward                  |
-| (tap101i0)   | mull (VM 101)         | may only talk to chat and sm (bridge firewall below)                                |
+| (tap101i0)   | mull (VM 101)         | may only talk to chat and amph (bridge firewall below)                              |
 
 Ansible reaches the guests with `ProxyJump root@91.199.82.174` (`group_vars/divide_guests.yml`).
 
@@ -79,8 +78,6 @@ Every guest's Proxmox tags follow one scheme, in this order (the UI shows them i
    below).
 4. **How it gets out**, when not plain NAT: `out-mullvad` (may use mull), `out-warp` (the edge's
    WARP tunnels).
-5. `legacy` for a stopped guest kept only for an old address. The two Windows desktops it was
-   for, fun (105) and fum (110) on `vmbr9`, were destroyed on 2026-11-22, so no guest has it now.
 
 The software a guest runs is its name and the table above, not a tag.
 
@@ -109,7 +106,27 @@ The software a guest runs is its name and the table above, not a tag.
 
 Checked against divide on 2026-11-22 (`pvesh get /cluster/resources --type vm`): every guest has
 tags. fun (105), fum (110) and giftshop (111) are gone (destroyed 2026-11-22, 2026-11-22 and
-2026-11-18).
+2026-11-18), and so is the `legacy` tag fun and fum carried (out of the colour map since
+2026-11-22).
+
+## Cleanup (2026-11-22)
+
+What the destroyed guests (giftshop 111, fun 105, fum 110, sm CT 112, devbox VM 217, and the old
+VMs 113, 116 and 127) left on divide was removed on 2026-11-22, at the owner's request:
+
+- `/etc/nftables.conf`: `tap111i0` (giftshop) and `tap110i1` (fum) out of both `divide_guests`
+  sets, fum's 172.16.5.39 out of the mull rule, and the `vmbr9` forward and masquerade rules.
+- `/etc/network/interfaces`: the `vmbr9` bridge (5.188.124.1/32 and the routes to fun and fum's
+  5.188.124.38 and .39) is gone, and the bridge is down.
+- `208.fw` (ci) no longer drops the three `vmbr9` addresses; `cluster.fw`'s `mgmt` comment names
+  devbox as CT 218.
+- `/root`: every migration backup, `.bak` copy and one-off script from 2026-11-16 to 2026-11-22
+  (56 GB, chat's pre-fsck disk image and the holy and terp VM copies among them), and the
+  `/etc/nftables.conf.bak-*` copies. Kept: `/root/.ssh`, `126.conf.bak-skylake` (mac's config
+  points to it), `nginx_signing.key`, the pve-fake-subscription package, `devbox-cutover/`, and
+  `/root/tidy-20261122/` (the nftables, interfaces and firewall files from before this cleanup).
+
+A rollback path below that names a file in `divide:/root` from before 2026-11-22 no longer exists.
 
 A guest that gains or loses a port forward, a tunnel or an edge route gets its `in-` tags changed
 in the same change (`pct set <id> --tags "a;b"`, `qm set` for VMs).
@@ -117,8 +134,8 @@ in the same change (`pct set <id> --tags "a;b"`, `qm set` for VMs).
 ## CPU pinning and memory (2026-11-17)
 
 Set by hand on 2026-11-17 (about 05:10 to 05:22 UTC) from the holyWisp session, with the
-owner's approval. Backups of every guest config from before the change, and chat's pre-repair
-disk image (43 GB), are in `divide:/root/alloc-backup-20261117T051000/`.
+owner's approval. The config backups from before the change and chat's pre-repair disk image
+(43 GB) were deleted on 2026-11-22 ("Cleanup" below).
 
 divide is a Ryzen 9 7950X: CCD0 is threads 0-7 and 16-23, CCD1 is 8-15 and 24-31. Containers
 are pinned with `lxc.cgroup2.cpuset.cpus` in `/etc/pve/lxc/<id>.conf` (which stops pvestatd
@@ -145,8 +162,8 @@ reports the pin's size as `nproc`), so each pin now has exactly `cores` threads 
 container's `cores` alone does nothing. Resize by editing the pin too, and apply it live with
 `echo <cpus> > /sys/fs/cgroup/lxc/<id>/cpuset.cpus`. VMs: `qm set <id> --affinity` takes effect at
 the next start; `taskset -a -pc <cpus> $(cat /var/run/qemu-server/<id>.pid)` applies it now.
-mac and runner no longer share threads. Config backups from before the re-pin are in
-`divide:/root/alloc-backup-20261118T232333/`.
+mac and runner no longer share threads. The config backups from before the re-pin were deleted on
+2026-11-22.
 
 Allocation changes (total allocated memory 104.5 of 125 GiB, was 122.5; every other guest
 unchanged):
@@ -261,7 +278,7 @@ The stateless equivalent of Proxmox's per-NIC `ipfilter`, on the `vmbr1` bridge:
   - IPv6 other than tcp/udp (neighbour discovery)
   - ICMP
   - the WireGuard port (udp 51820, to and from wg 172.16.5.11), both ways
-  - mull (`tap101i0`): in and out only to and from chat 172.16.5.64 and sm 172.16.5.37
+  - mull (`tap101i0`): in and out only to and from chat 172.16.5.64 and amph 172.16.5.3
   - The rules that name a port list both names, the plain one and the firewall one:
     `{ "veth200i0", "fwpr200p0" }` for wg and `{ "tap101i0", "fwpr101p0" }` for mull.
   - tcp without a lone SYN (it is stateless: established flows pass, new connections need a rule
@@ -434,13 +451,14 @@ Changing it:
 
 - Edit the `.fw` file. `pve-firewall` applies it within about 10 s; `pve-firewall compile` prints
   the iptables it would load.
-- `divide/pvefw/fwnic.sh <id> <n> <0|1>` (in `/root` on divide) sets `firewall=` on `net<n>`, a
+- `divide/pvefw/fwnic.sh <id> <n> <0|1>` (copy it to `/root` on divide first) sets `firewall=` on `net<n>`, a
   live replug. Arm the undo first, `systemd-run --on-active=150 /root/fwnic.sh <id> <n> 0`, check
   with `divide/pvefw/fwcheck.sh <id> <ip>`, then stop the timer. wg carries the operator's VPN, so
   its switch ran detached (`systemd-run`) and went last.
 - Turn it all off: `systemctl stop pve-firewall`, `enable: 0` in `cluster.fw`, and
   `sysctl -w net.bridge.bridge-nf-call-iptables=0`. The NICs can stay on their `fwbr`: with no
-  rules it just bridges. The configs from before are in `/root/pvefw-bak/` on divide.
+  rules it just bridges. The configs from before were in `/root/pvefw-bak/` on divide until
+  2026-11-22.
 
 Things learned on the way:
 
@@ -771,10 +789,9 @@ filesystem was tarred with `--numeric-owner --xattrs --acls` and created as the 
 - **Unchanged**: website2 under `pm2-holy` on :8080, PostgreSQL 17 (local database `holy`) and
   the token-file `cloudflared` tunnel (disabled later that evening: holy.eli.gift now comes through
   the edge's tunnel, see "Cloudflare Tunnel" below).
-- **Backups** (on divide): `/var/lib/vz/dump/vzdump-qemu-127-2026_11_17-21_26_03.vma.zst` (the
-  stopped VM), and `/root/holy-ct-20261117T212522/` (the rootfs tarball, the VM config, the old
-  `nftables.conf` and holy's SSH host keys).
-- **VM 127** is kept stopped with `onboot: 0`, disk intact, until it is deleted.
+- **VM 127** was destroyed later; its vzdump and `/root/holy-ct-20261117T212522/` (the rootfs
+  tarball, the VM config, the old `nftables.conf` and holy's SSH host keys) are gone too (deleted
+  2026-11-22).
 
 Rollback: `pct stop 205; pct set 205 --onboot 0`, put `tap127i1` back in place of `veth205i0` in
 both `divide_guests` sets in `/etc/nftables.conf` (`nft -c -f`, then `nft -f`), then
@@ -822,13 +839,11 @@ the `terp.db` line in `/etc/hosts`), the `deploy` user with its gates, `/etc/sud
   certificate verified against DATABASE_CA)". `fracital-deploy-gate` refused a test
   command with its usual message, and the runner reaches sshd as `deploy` and sees the same host
   key. `fstrim.timer` skips itself in a container.
-- **Backups** (on divide): `/var/lib/vz/dump/vzdump-qemu-116-2026_11_17-22_46_38.vma.zst` (the
-  stopped VM, 9 GB), and `/root/terp-ct-20261117T223829/` (the rootfs tarball, the VM and CT
-  configs, `216.fw`, the cutover scripts and logs, the old fstab, and terp's SSH host keys). The
-  `nftables.conf` from before is `/root/nftables.conf.bak-terp-ct-20261117T224333`.
-- **VM 116** is kept stopped with `onboot: 0`, disk intact, until it is deleted.
+- **VM 116** was destroyed later; its vzdump, `/root/terp-ct-20261117T223829/` (the rootfs
+  tarball, the VM and CT configs, `216.fw`, the cutover scripts and logs, the old fstab, terp's SSH
+  host keys) and the `nftables.conf` backup are gone too (deleted 2026-11-22).
 
-Rollback: `pct stop 216; pct set 216 --onboot 0`, put `tap116i0` back in place of `veth216i0` in
+Rollback (no longer possible, VM 116 is gone; kept for the record): `pct stop 216; pct set 216 --onboot 0`, put `tap116i0` back in place of `veth216i0` in
 both `divide_guests` sets in `/etc/nftables.conf` (under `flock /root/.nftables-edit.lock`,
 `nft -c -f`, then `nft -f`), then `qm set 116 --onboot 1; qm start 116`. Deploys since the
 cutover exist only in the CT.
@@ -882,13 +897,11 @@ Unprivileged is enough because nothing on amph needs a kernel feature a containe
   and file capabilities land shifted by 100000. The final pass, with the services stopped, took
   18 s; then the VM was shut down and a fixup script made the copy a container root.
 - **divide**: `veth213i0` . 172.16.5.3 replaced `tap113i2` in both `divide_guests` sets.
-- **Backups** (on divide): `/var/lib/vz/dump/vzdump-qemu-113-2026_11_17-22_38_13.vma.zst` (live,
-  before) and `vzdump-qemu-113-2026_11_17-22_47_44.vma.zst` (the stopped VM), plus
-  `/root/amph-ct-20261117T223813/` (VM and CT configs, both `.fw` files, `nftables.conf` before
-  each edit, the cutover script and logs).
-- **VM 113** is kept stopped with `onboot: 0`, disk intact, until it is deleted.
+- **VM 113** was destroyed later; its two vzdumps and `/root/amph-ct-20261117T223813/` (VM and CT
+  configs, both `.fw` files, `nftables.conf` before each edit, the cutover script and logs) are
+  gone too (deleted 2026-11-22).
 
-Rollback: `pct stop 213; pct set 213 --onboot 0`, put `tap113i2` back in place of `veth213i0` in
+Rollback (no longer possible, VM 113 is gone; kept for the record): `pct stop 213; pct set 213 --onboot 0`, put `tap113i2` back in place of `veth213i0` in
 both `divide_guests` sets (under `flock /root/.nftables-edit.lock`, `nft -c -f`, then `nft -f`),
 then `qm set 113 --onboot 1; qm start 113`. Redis, holt-lab's and the music data written in the
 CT since the cutover stay in the CT unless copied back.
@@ -928,7 +941,7 @@ edge (below).
 - **Not moved**: `fg-api-beta`, the retired `/fg/beta/` leftover (an older binary on the same
   database, no client). The edge answers `/fg/beta/` with 404, as giftshop did.
 
-Rollback (while giftshop's disk exists): `systemctl disable --now fg-api` on fg; start VM 111,
+Rollback (no longer possible, giftshop was destroyed on 2026-11-18; kept for the record): `systemctl disable --now fg-api` on fg; start VM 111,
 set `/etc/postgresql/17/main/start.conf` back to `auto`, enable and start `postgresql@17-main`,
 `redis-server` and `fg-api`; set host_vars `pages_fg_api_pass` and `pages_fg_socket_pass` back to
 `"http://172.16.5.78"`, add `ip daddr 172.16.5.78 tcp dport 80 accept` to `from_edge` and apply
@@ -982,10 +995,8 @@ Redis. Everything moved as above; it was shut down cleanly at 22:27:30 UTC on 20
   sets. The two tunnels are already deleted (with the others, "Cloudflare Tunnel" above), which
   retired the token that was in plain text in the token-mode unit.
 
-**Destroyed 2026-11-18** (`qmdestroy 111` in divide's task log); the vzdump is gone too. Still on
-divide as of 2026-11-22: `tap111i0` in both `divide_guests` sets (`/etc/nftables.conf`), and fun and
-fum's `vmbr9` shim (the bridge in `/etc/network/interfaces`, its forward and masquerade rules),
-although fun and fum were destroyed that day.
+**Destroyed 2026-11-18** (`qmdestroy 111` in divide's task log); the vzdump is gone too, and
+`tap111i0` left the `divide_guests` sets on 2026-11-22 ("Cleanup" above).
 
 Rollback (no longer possible, kept for the record): `qm start 111` (and "Rollback" under fg above for the game). pages.eli.gift's old
 tunnel is gone, so serving it from giftshop again needs a new one (or an edge route to
@@ -1038,8 +1049,7 @@ not to the shared one. The local servers are stopped and disabled, their data ke
 - amph (213): its `redis-server` (6379, the edge's certificates until 2026-11-17, then only
   wisp.baby's stats) is stopped and disabled since 2026-11-18 00:47 UTC; the stats moved to the
   shared instance (`docs/terp-db.md` "Shared Redis (6380)"), and 6379 left `from_edge` above and
-  `213.fw` (backups `/root/nftables.conf.bak-wispredis-20261118004827`,
-  `/root/213.fw.bak-wispredis-20261118004827`).
+  `213.fw`.
 - chat (106): `redis-server` stopped and disabled since 2026-11-18 01:10 UTC, data in
   `/var/lib/redis`. `labelsupplier-gateway` was rebuilt the same day with `REDIS_USERNAME` and
   `REDIS_PASSWORD` (it could not send `AUTH` before) and reads them from `/opt/labelsupplier/.env`

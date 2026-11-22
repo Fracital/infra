@@ -234,7 +234,7 @@ template or a variable it reads, render it for a real host without connecting
 | `blockshooter/`            | blockshooter.io: the mirror of blockshooter.club's frontend (`site/`), its crawler, and how the edge serves it.                                                                   |
 | `fail2ban/`                | The superseded hand-run fail2ban installer; `roles/fail2ban` replaced it.                                                                                                         |
 | `docs/`                    | Hosts no role manages (`divide-host.md`).                                                                                                                                         |
-| `infra.js`                 | The G-Core address plan: every public IPv4 pool and which guest holds which address. `node infra.js` prints it and warns on a double assignment.                                  |
+| `infra.js`                 | divide's address plan: its public addresses and every guest's vmbr1 address. `node infra.js` prints it and fails on a reused address or VMID.                                     |
 | `scripts/`                 | CI and secret tooling: prose and leak checks, vars-file writer, secret sync, `github-setup.sh` (the repository's GitHub settings, environment and secrets).                       |
 | `package.json`             | Prettier, pinned (`npm run format`, `npm run format:check`); `.prettierrc.json` and `.prettierignore` next to it.                                                                 |
 | `LICENSE`                  | ISC, copyright 2026 David Reed.                                                                                                                                                   |
