@@ -43,24 +43,24 @@ authorization, like any other live host (AGENTS.md "Servers").
 
 ## Guests on vmbr1
 
-| Address      | Guest                 | What                                                                                |
-| ------------ | --------------------- | ----------------------------------------------------------------------------------- |
-| 172.16.5.1   | divide                | gateway, NAT, its own ACME client (`divide.eli.gift`)                               |
-| 172.16.5.3   | amph (CT 213)         | abulxt origin (`[origin]`), was VM 113                                              |
-| 172.16.5.10  | edge (CT 201)         | the only abulxt edge (`[wisp_edge]`, `host_vars/edge.yml`)                          |
-| 172.16.5.11  | wg                    | WireGuard, udp 51820                                                                |
-| 172.16.5.47  | kru                   | KrunkNative central node (krunk.io origin)                                          |
-| 172.16.5.48  | blockshooter (CT 202) | blockshooter relay (`[bs_ct_divide]`)                                               |
-| 172.16.5.62  | terp (CT 216)         | Fracital origin, was VM 116 (moved from meal 2026-11-16)                            |
-| 172.16.5.64  | chat                  | estro.help backend (`host_vars/amph.yml` `estro_upstream`)                          |
-| 172.16.5.78  | giftshop (VM 111)     | destroyed 2026-11-18 (see "giftshop: retired" below)                                |
-| 172.16.5.79  | holy (CT 205)         | holyunb.locker site (website2 :8080), was VM 127                                    |
-| 172.16.5.94  | kn (CT 203)           | KrunkNative game servers (`[kn_ct_divide]`)                                         |
-| 172.16.5.204 | runner (CT 204)       | trusted GitHub Actions runners, reach the deploy gates (`docs/divide-ci-runner.md`) |
-| 172.16.5.206 | fg (CT 206)           | Flying Gorilla game API (fg-api :8787), from giftshop 2026-11-17                    |
-| 172.16.5.208 | ci (CT 208)           | untrusted powerMouse PR CI, 20 runners, isolated (`docs/divide-ci-runner.md`)       |
-| 172.16.5.217 | devbox (CT 218)       | development container; XRDP :3389 from vmbr1 only, no port forward                  |
-| (tap101i0)   | mull (VM 101)         | may only talk to chat and amph (bridge firewall below)                              |
+| Address      | Guest                 | What                                                                                                 |
+| ------------ | --------------------- | ---------------------------------------------------------------------------------------------------- |
+| 172.16.5.1   | divide                | gateway, NAT, its own ACME client (`divide.eli.gift`)                                                |
+| 172.16.5.3   | amph (CT 213)         | abulxt origin (`[origin]`), was VM 113                                                               |
+| 172.16.5.10  | edge (CT 201)         | the only abulxt edge (`[wisp_edge]`, `host_vars/edge.yml`)                                           |
+| 172.16.5.11  | wg                    | WireGuard, udp 51820                                                                                 |
+| 172.16.5.47  | kru                   | KrunkNative central node (krunk.io origin)                                                           |
+| 172.16.5.48  | blockshooter (CT 202) | blockshooter relay (`[bs_ct_divide]`)                                                                |
+| 172.16.5.62  | terp (CT 216)         | Fracital origin, was VM 116 (moved from meal 2026-11-16)                                             |
+| 172.16.5.64  | chat                  | estro.help backend (`host_vars/amph.yml` `estro_upstream`)                                           |
+| 172.16.5.78  | giftshop (VM 111)     | destroyed 2026-11-18 (see "giftshop: retired" below)                                                 |
+| 172.16.5.79  | holy (CT 205)         | holyunb.locker site (website2 :8080), was VM 127                                                     |
+| 172.16.5.94  | kn (CT 203)           | KrunkNative game servers (`[kn_ct_divide]`)                                                          |
+| 172.16.5.204 | runner (CT 204)       | trusted GitHub Actions runners, reach the deploy gates (`docs/divide-ci-runner.md`)                  |
+| 172.16.5.206 | fg (CT 206)           | Flying Gorilla game API (fg-api :8787), from giftshop 2026-11-17                                     |
+| 172.16.5.208 | ci (CT 208)           | untrusted powerMouse PR CI, 20 runners, isolated (`docs/divide-ci-runner.md`)                        |
+| 172.16.5.217 | devbox (CT 218)       | development container; XRDP :3389 from vmbr1 only, no port forward; tcp 8317 to chat's cli-proxy-api |
+| (tap101i0)   | mull (VM 101)         | may only talk to chat and amph (bridge firewall below)                                               |
 
 Ansible reaches the guests with `ProxyJump root@91.199.82.174` (`group_vars/divide_guests.yml`).
 
@@ -299,18 +299,21 @@ The stateless equivalent of Proxmox's per-NIC `ipfilter`, on the `vmbr1` bridge:
 
   - other guest-to-guest paths:
 
-    | From                | To                 | Ports                                    | Why                                                                                                     |
-    | ------------------- | ------------------ | ---------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-    | runner 172.16.5.204 | terp 172.16.5.62   | tcp 22                                   | CI deploys (stomp deploy gate)                                                                          |
-    | runner 172.16.5.204 | chat 172.16.5.64   | tcp 22                                   | CI deploys (estro deploy gate)                                                                          |
-    | kru 172.16.5.47     | kn 172.16.5.94     | tcp + udp 21015-21017, 21115             | kn-bridge (tcp) and kn-rtc (udp) to game servers                                                        |
-    | kn 172.16.5.94      | kru 172.16.5.47    | udp from source ports 21015-21017, 21115 | the game servers' udp replies (stateless chain)                                                         |
-    | amph 172.16.5.3     | chat 172.16.5.64   | tcp 80                                   | estro.help origin behind amph :9080                                                                     |
-    | amph 172.16.5.3     | eagler 172.16.5.76 | tcp 443, 8080, 25565                     | mc, mcpanel, mcnode relay (25-mc-relay.conf)                                                            |
-    | amph 172.16.5.3     | holy 172.16.5.79   | tcp 8080                                 | abulxt `/cdn/` (theatre) via `abulxt_cdn_backend`; added 2026-11-17, it had been dropped since the move |
-    | amph 172.16.5.3     | edge 172.16.5.10   | tcp 443                                  | pages.eli.gift through the hairpin (abulxt `/cdn/html5/fg`, Flying Gorilla), 2026-11-17                 |
-    | holy 172.16.5.79    | edge 172.16.5.10   | tcp 443                                  | the same for website2's `/cdn/html5/fg`                                                                 |
-    | kn 172.16.5.94      | edge 172.16.5.10   | tcp 443                                  | edge-served names (krunk.io and the rest) through the hairpin, 2026-11-17                               |
+    | From                | To                  | Ports                                    | Why                                                                                                     |
+    | ------------------- | ------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+    | runner 172.16.5.204 | terp 172.16.5.62    | tcp 22                                   | CI deploys (stomp deploy gate)                                                                          |
+    | runner 172.16.5.204 | chat 172.16.5.64    | tcp 22                                   | CI deploys (estro deploy gate)                                                                          |
+    | kru 172.16.5.47     | kn 172.16.5.94      | tcp + udp 21015-21017, 21115             | kn-bridge (tcp) and kn-rtc (udp) to game servers                                                        |
+    | kn 172.16.5.94      | kru 172.16.5.47     | udp from source ports 21015-21017, 21115 | the game servers' udp replies (stateless chain)                                                         |
+    | amph 172.16.5.3     | chat 172.16.5.64    | tcp 80                                   | estro.help origin behind amph :9080                                                                     |
+    | amph 172.16.5.3     | eagler 172.16.5.76  | tcp 443, 8080, 25565                     | mc, mcpanel, mcnode relay (25-mc-relay.conf)                                                            |
+    | amph 172.16.5.3     | holy 172.16.5.79    | tcp 8080                                 | abulxt `/cdn/` (theatre) via `abulxt_cdn_backend`; added 2026-11-17, it had been dropped since the move |
+    | amph 172.16.5.3     | edge 172.16.5.10    | tcp 443                                  | pages.eli.gift through the hairpin (abulxt `/cdn/html5/fg`, Flying Gorilla), 2026-11-17                 |
+    | holy 172.16.5.79    | edge 172.16.5.10    | tcp 443                                  | the same for website2's `/cdn/html5/fg`                                                                 |
+    | kn 172.16.5.94      | edge 172.16.5.10    | tcp 443                                  | edge-served names (krunk.io and the rest) through the hairpin, 2026-11-17                               |
+    | devbox 172.16.5.217 | 172.16.5.0/24       | tcp 22                                   | SSH to the managed guests                                                                               |
+    | devbox 172.16.5.217 | chat 172.16.5.64    | tcp 8317                                 | cli-proxy-api for the Claude desktop app's custom models, 2026-11-23                                    |
+    | guca, edge          | devbox 172.16.5.217 | tcp 3389                                 | XRDP to devbox                                                                                          |
 
   Traffic between a guest and divide (its gateway, DNS, the NAT) is not bridged and does not
   pass this chain.
@@ -422,25 +425,25 @@ blockshooter's `inet bsfilter`, eagler's original ufw. amph's `abulxt-firewall.s
   (drops go to `/var/log/pve-firewall.log`), `ipfilter: 1` (the NIC may only send from its
   configured address; a VM lists it in an `ipfilter-net<n>` ipset), `GROUP base`, and then:
 
-| Guest         | Also accepts                                                                                             |
-| ------------- | -------------------------------------------------------------------------------------------------------- |
-| vault (100)   | tcp 80 from the edge (cloudflared)                                                                       |
-| mull (101)    | anything from 172.16.5.0/24 (the gateway: guest rules also see what it forwards); udp 51820              |
-| eagler (104)  | tcp 443, 8080, 25565 from amph; tcp 2022, 25565, 25566 and udp 25565, 25566                              |
-| chat (106)    | tcp 80 from amph and the edge; 8317, 8318 from wg; 5900, 8088 from `mgmt`; 22 from the runner; udp 33190 |
-| amph (213)    | tcp 80, 443, 1082, 8822, 9080 from the edge                                                              |
-| terp (216)    | tcp 443, 8443 from the edge; tcp 8443 (the DNAT); tcp 22 from the runner                                 |
-| guca (117)    | tcp 80 from the edge (cloudflared)                                                                       |
-| kru (120)     | tcp 80, 443 from the edge; udp 21100                                                                     |
-| wispdev (122) | nothing                                                                                                  |
-| mac (126)     | tcp 5900 from `mgmt`                                                                                     |
-| wg (200)      | udp 51820                                                                                                |
-| edge (201)    | tcp 53, 80, 443, 8080 and udp 53, 443                                                                    |
-| bs (202)      | tcp 80, 8080 from the edge; udp 4433, 8443; tcp 7778 from `bs_game`                                      |
-| kn (203)      | tcp and udp 21015-21017, 21115                                                                           |
-| runner (204)  | nothing                                                                                                  |
-| holy (205)    | tcp 8080 from the edge and amph                                                                          |
-| fg (206)      | tcp 8787 from the edge                                                                                   |
+| Guest         | Also accepts                                                                                                                        |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| vault (100)   | tcp 80 from the edge (cloudflared)                                                                                                  |
+| mull (101)    | anything from 172.16.5.0/24 (the gateway: guest rules also see what it forwards); udp 51820                                         |
+| eagler (104)  | tcp 443, 8080, 25565 from amph; tcp 2022, 25565, 25566 and udp 25565, 25566                                                         |
+| chat (106)    | tcp 80 from amph and the edge; 8317 from amph and devbox; 8317, 8318 from wg; 5900, 8088 from `mgmt`; 22 from the runner; udp 33190 |
+| amph (213)    | tcp 80, 443, 1082, 8822, 9080 from the edge                                                                                         |
+| terp (216)    | tcp 443, 8443 from the edge; tcp 8443 (the DNAT); tcp 22 from the runner                                                            |
+| guca (117)    | tcp 80 from the edge (cloudflared)                                                                                                  |
+| kru (120)     | tcp 80, 443 from the edge; udp 21100                                                                                                |
+| wispdev (122) | nothing                                                                                                                             |
+| mac (126)     | tcp 5900 from `mgmt`                                                                                                                |
+| wg (200)      | udp 51820                                                                                                                           |
+| edge (201)    | tcp 53, 80, 443, 8080 and udp 53, 443                                                                                               |
+| bs (202)      | tcp 80, 8080 from the edge; udp 4433, 8443; tcp 7778 from `bs_game`                                                                 |
+| kn (203)      | tcp and udp 21015-21017, 21115                                                                                                      |
+| runner (204)  | nothing                                                                                                                             |
+| holy (205)    | tcp 8080 from the edge and amph                                                                                                     |
+| fg (206)      | tcp 8787 from the edge                                                                                                              |
 
 A port with no source listed admits anyone: the port forwards keep the internet source, and the
 hairpin arrives from 172.16.5.1. mull and wg have `ipfilter: 0` because they forward traffic that
@@ -1082,6 +1085,14 @@ is `chat:/root/eli.gift.conf.bak-v0-v8-cli-proxy-20261122`, and the shutdown-era
 The same day amph got tcp 8317 to chat (`from_amph` and `106.fw`): abulxt's AI provider uses
 cli-proxy-api at `172.16.5.64:8317` over vmbr1, which the guest firewall had dropped since 22:10
 UTC on 2026-11-17.
+
+On 2026-11-23 at 22:35 devbox got tcp 8317 to chat the same way: the Claude desktop app on devbox
+lists its custom models from cli-proxy-api at `http://172.16.5.64:8317`, and both layers dropped
+it (SSH to chat worked). `inet divide forward` gained `ip saddr 172.16.5.217 ip daddr 172.16.5.64
+tcp dport 8317 accept` after devbox's SSH line, and `106.fw` gained `IN ACCEPT -source
+172.16.5.217 -p tcp -dport 8317`. `/v1/models` from devbox now answers 401 (no API key) instead of
+timing out. Backups: `divide:/root/nftables.conf.bak-20261123-223519` and
+`divide:/root/106.fw.bak-20261123-223519`.
 
 On terp.db the `labelsupplier` database is kept but closed (`lsupplier` NOLOGIN, its `pg_hba`
 line commented out, a final dump `/var/backups/migrate/labelsupplier-shutdown-*.dump`), and
