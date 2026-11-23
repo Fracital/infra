@@ -1065,8 +1065,19 @@ Both are off for good, at the owner's request. On chat (CT 106), `goldenticket`,
 `labelsupplier-scraper` are stopped and disabled. Their files stay in `/opt/goldenticket*`,
 `/opt/labelsupplier` and `/srv/git`. chat.eli.gift lost the `/queue`, `/shop/heroin`, the API
 prefixes (`/v1`, `/claude`, `/codex` and the rest) and the labelsupplier snippet; it keeps the SPA,
-the Stripe webhook and `/cpa/`, `/cpa2/` (cli-proxy-api). nginx backup
-`chat:/root/eli.gift.conf.bak-shutdown-*`. `106.fw` no longer opens 8088.
+the Stripe webhook and `/cpa/`, `/cpa2/` (cli-proxy-api). On 2026-11-22 the active nginx config
+also gained `/v0/` and `/v8/` aliases to the primary cli-proxy-api listener (`127.0.0.1:8317`).
+Those two versioned management API prefixes are preserved upstream (`/v0/management` and
+`/v8/management/...`), unlike `/cpa/`, which intentionally strips its public prefix; `/v0` and
+`/v8` redirect to their slash forms. Both locations pass Cloudflare's `CF-Connecting-IP` as
+`X-Real-IP` and `X-Forwarded-For`; the primary CLIProxyAPI's `server.trusted-proxies` includes
+`127.0.0.1`, so management rate limits use the visitor address rather than Nginx's loopback.
+`/cpa2/` remains on the second listener (`127.0.0.1:8318`). The live nginx backup is
+`chat:/root/eli.gift.conf.bak-v0-v8-forward-client-ip-20261122`; the prefix-only backup is
+`chat:/root/eli.gift.conf.bak-v0-v8-preserve-upstream-prefix-20261122`, the earlier alias backup
+is `chat:/root/eli.gift.conf.bak-v0-v8-cli-proxy-20261122`, and the shutdown-era backup remains
+`chat:/root/eli.gift.conf.bak-shutdown-*`. The CLIProxyAPI config backup is
+`chat:/root/cliproxyapi-config.bak-trusted-proxy-nginx-20261122`. `106.fw` no longer opens 8088.
 
 The same day amph got tcp 8317 to chat (`from_amph` and `106.fw`): abulxt's AI provider uses
 cli-proxy-api at `172.16.5.64:8317` over vmbr1, which the guest firewall had dropped since 22:10
