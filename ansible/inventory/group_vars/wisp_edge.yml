@@ -454,12 +454,6 @@ edge_warp_bypass_hosts:
   # kits4beats.com (2026-11-16, the user's request).
   - kits4beats.com
   - "*.kits4beats.com"
-  # Brave: the site, Search (search., its cdn. and the imgs. proxy), support.brave.app (2026-11-17,
-  # the user's request).
-  - brave.com
-  - "*.brave.com"
-  - brave.app
-  - "*.brave.app"
   # fast.com (2026-11-18, the user's request): the page, its API (api.fast.com picks the test
   # servers from the address that asks, so it and the servers must see the same one), the Netflix
   # Open Connect servers it measures against (ipv4-cNNN-xxx-ix.1.oca.nflxvideo.net, which also
