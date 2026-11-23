@@ -182,9 +182,9 @@ again, decide on health checks before adding addresses to the Cloudflare records
   KrunkNative), so a new public port also goes in the abulxt entry of
   `edge_firewall_dropins` (`inventory/group_vars/edge.yml`), and in divide's DNAT
   (`docs/divide-host.md`).
-- fail2ban runs on the edge and amph through the vendored `roles/fail2ban`
-  (fail2ban-contract v1): this repo owns the base on its hosts, KrunkNative on kru.
-  Bans go to nftables `inet f2b-table`. `fail2ban/` is the superseded hand-run
+- fail2ban runs on amph only, through the vendored `roles/fail2ban` (fail2ban-contract
+  v1). The edge (`host_vars/edge.yml`) and KrunkNative's kru and kn skip it since
+  2026-11-17: divide's pve-firewall filters them. Bans go to nftables `inet f2b-table`. `fail2ban/` is the superseded hand-run
   installer.
 - Some addresses are only routable from their own provider subnet: reach them from
   amph, not from the edge (the Eaglercraft backend `5.188.124.125`, for one).
