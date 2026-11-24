@@ -1,9 +1,9 @@
 # divide CI runner: CT 208
 
-CT 208 (`ci`) is divide's single running GitHub Actions runner container. It carries both the
-untrusted PR CI runners and the trusted build and deploy runners. CT 204 (`runner`), which used to
-hold the trusted runners, is stopped with `onboot: 0` and kept only as a rollback copy. The five
-trusted runner registrations moved to CT 208 on 2026-11-24 at the owner's request.
+CT 208 (`ci`) is divide's only GitHub Actions runner container. It carries both the untrusted PR CI
+runners and the trusted build and deploy runners. The five trusted runner registrations moved from
+CT 204 to CT 208 on 2026-11-24 at the owner's request. CT 204 was destroyed after the move was
+verified.
 
 No workflow routing changed: the moved runners keep their names, registrations and labels, so
 `[divide, ci]`, `[divide, deploy]` and the org build runners still select the same jobs. No role in
@@ -56,7 +56,7 @@ Proxmox's legacy `pve-firewall` filters the NIC on its own bridge `fwbr208i0`, t
 every other guest (`docs/divide-host.md` "Guest firewalls"). `/etc/pve/firewall/208.fw` has
 `policy_in: DROP`, `policy_out: ACCEPT`, `ipfilter: 1` and no logging.
 
-Before the private-range drops, three OUT accepts carry the deploys formerly handled by CT 204:
+Before the private-range drops, three OUT accepts carry the deploy jobs:
 
 | Destination      | Port   | Why                                             |
 | ---------------- | ------ | ----------------------------------------------- |
@@ -89,27 +89,18 @@ Config lives in `/etc/pve/lxc/208.conf`; the firewall in `/etc/pve/firewall/208.
 installs are under `/home/runner` and trusted installs under `/opt/actions-runner/<scope>`. All
 commands run on divide (`ssh root@91.199.82.174`).
 
-- State: `pct status 208`; CT 204 should remain `stopped`.
+- State: `pct status 208`.
 - Start or stop CT 208: `pct start 208` / `pct stop 208`. Stopping it pauses all CI and deploys.
 - List the runners: `pct exec 208 -- systemctl list-units 'actions.runner.*'`.
 - One runner's log: `pct exec 208 -- journalctl -u actions.runner.Fracital.ci-5`.
 - Restart one runner: `pct exec 208 -- systemctl restart actions.runner.Fracital.ci-5.service`.
-- The five moved units must be enabled and active on CT 208 and disabled on CT 204. Never run both
-  copies of a registration at once.
+- All 31 units should be enabled and active on CT 208.
 
-### Roll back to CT 204
+### CT 204 removal
 
-CT 204's disk and `/opt/actions-runner` are intact, but its five units are disabled and `onboot` is 0. Backups from the migration are:
-
-- `/root/nftables.conf.bak-runner-consolidate-20261124002039`
-- `/root/208.fw.bak-runner-consolidate-20261124002039`
-- `/root/106.fw.bak-runner-consolidate-20261124002438`
-- `/root/216.fw.bak-runner-consolidate-20261124002438`
-
-To roll back, stop and disable the five moved units on CT 208, restore those four files, run
-`nft -c -f /etc/nftables.conf && nft -f /etc/nftables.conf`, then `pve-firewall compile` and
-`pve-firewall restart`. Start CT 204, enable and start its five units, and set its `onboot` back to
-1 only after they are listening. Do not leave the CT 208 copies running.
+CT 204 was destroyed on 2026-11-24 after all 31 runners were active on CT 208 and the three deploy
+SSH routes passed. Its disk, Proxmox config, `204.fw`, nftables guest set entries,
+`/var/lib/lxc/204` directory and migration backups were removed. There is no CT 204 rollback copy.
 
 ## CPU pin for CT 208 (prepared 2026-11-19, not applied)
 

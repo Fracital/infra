@@ -56,7 +56,6 @@ authorization, like any other live host (AGENTS.md "Servers").
 | 172.16.5.78  | giftshop (VM 111)     | destroyed 2026-11-18 (see "giftshop: retired" below)                                                 |
 | 172.16.5.79  | holy (CT 205)         | holyunb.locker site (website2 :8080), was VM 127                                                     |
 | 172.16.5.94  | kn (CT 203)           | KrunkNative game servers (`[kn_ct_divide]`)                                                          |
-| 172.16.5.204 | runner (CT 204)       | stopped 2026-11-24; rollback copy after its runners moved to CT 208 (`docs/divide-ci-runner.md`)     |
 | 172.16.5.206 | fg (CT 206)           | Flying Gorilla game API (fg-api :8787), from giftshop 2026-11-17                                     |
 | 172.16.5.208 | ci (CT 208)           | all GitHub Actions runners: PR CI, builds and deploys (`docs/divide-ci-runner.md`)                   |
 | 172.16.5.217 | devbox (CT 218)       | development container; XRDP :3389 from vmbr1 only, no port forward; tcp 8317 to chat's cli-proxy-api |
@@ -95,7 +94,6 @@ The software a guest runs is its name and the table above, not a tag.
 | edge (201)             | `edge` `in-dnat` `in-tunnel` `out-warp`   |
 | blockshooter (202)     | `game` `blockshooter` `in-edge` `in-dnat` |
 | kn (203)               | `game` `krunk` `in-dnat`                  |
-| runner (204)           | `ci`                                      |
 | holy (205)             | `origin` `holyunb` `in-edge`              |
 | fg (206)               | `game` `eli-gift` `in-edge`               |
 | ci (208)               | `ci`                                      |
@@ -129,10 +127,11 @@ VMs 113, 116 and 127) left on divide was removed on 2026-11-22, at the owner's r
 A rollback path below that names a file in `divide:/root` from before 2026-11-22 no longer exists.
 
 On 2026-11-24 the five trusted build and deploy runners moved from CT 204 to CT 208, joining the
-20 Fracital CI and six KrunkNative CI runners already there. CT 204 is stopped with `onboot: 0` and
-kept intact for rollback. The `divide`, `ci` and `deploy` labels did not change. The deploy SSH
-rules in `inet divide forward`, `208.fw`, `106.fw` and `216.fw` now name 172.16.5.208 instead of
-172.16.5.204. See `docs/divide-ci-runner.md` for the units, firewall exceptions and rollback files.
+20 Fracital CI and six KrunkNative CI runners already there. The `divide`, `ci` and `deploy` labels
+did not change. The deploy SSH rules in `inet divide forward`, `208.fw`, `106.fw` and `216.fw` now
+name 172.16.5.208. CT 204 was then destroyed after verification; its firewall file, nftables guest
+set entries, `/var/lib/lxc/204` directory and migration backups were removed too. See
+`docs/divide-ci-runner.md`.
 
 A guest that gains or loses a port forward, a tunnel or an edge route gets its `in-` tags changed
 in the same change (`pct set <id> --tags "a;b"`, `qm set` for VMs).
@@ -156,7 +155,6 @@ rebalancing them), VMs with `qm set --affinity`.
 | 23           | chat (106), fg (CT 206)                                           |
 | 0-7, 16-23   | every VM except mac                                               |
 | 8-9, 24-25   | mac (VM 126)                                                      |
-| 10, 26       | runner (204), stopped since 2026-11-24                            |
 | 11           | kru (120), guca (117)                                             |
 | 27           | terp (CT 216), holy (205), blockshooter (CT 202)                  |
 | 12-15, 28-31 | wispdev (122), exclusive                                          |
@@ -447,7 +445,6 @@ blockshooter's `inet bsfilter`, eagler's original ufw. amph's `abulxt-firewall.s
 | edge (201)    | tcp 53, 80, 443, 8080 and udp 53, 443                                                                                             |
 | bs (202)      | tcp 80, 8080 from the edge; udp 4433, 8443; tcp 7778 from `bs_game`                                                               |
 | kn (203)      | tcp and udp 21015-21017, 21115                                                                                                    |
-| runner (204)  | nothing                                                                                                                           |
 | holy (205)    | tcp 8080 from the edge and amph                                                                                                   |
 | fg (206)      | tcp 8787 from the edge                                                                                                            |
 
