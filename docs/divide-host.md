@@ -1085,6 +1085,21 @@ is `chat:/root/eli.gift.conf.bak-v0-v8-cli-proxy-20261122`, and the shutdown-era
 `chat:/root/eli.gift.conf.bak-shutdown-*`. The CLIProxyAPI config backup is
 `chat:/root/cliproxyapi-config.bak-trusted-proxy-nginx-20261122`. `106.fw` no longer opens 8088.
 
+On 2026-11-24 `/cpa2/` was pinned to its own process, `cliproxyapi2.service` (config
+`/etc/cliproxyapi2/config.yaml`, auth dir `/var/lib/cliproxy/.cli-proxy-api-2`). The management
+panel calls the origin (`/v0`, `/v8`, `/v1`), not the prefix it was opened under, so
+`/cpa2/management.html` injects `/etc/nginx/snippets/cpa2-storage-prefix.html`: that script
+prefixes `localStorage` with `cpa2.` and rewrites same-site `/v0`, `/v8` and `/v1` requests,
+including `wss`, onto `/cpa2/` before they are sent. `/cpa2/` strips that prefix and is the only
+public path to port 8318, and it forwards `CF-Connecting-IP` the same way `/v0/` does. Root
+`/v0/` and `/v8/` stay on 8317; a Referer under `/cpa2/` is 404 there, so a missed rewrite cannot
+edit the primary. Root `/v1/` answers only when the Referer is under `/cpa/` (the primary panel's
+API tester); every other caller, including `/cpa2/`, gets 404, and the second panel uses
+`/cpa2/v1/`. Backups: `chat:/root/eli.gift.conf.bak-cpa2-own-instance-20261124-053142` and
+`chat:/root/cpa2-storage-prefix.html.bak-cpa2-own-instance-20261124-053142`. That replaced a
+same-day Referer split (`chat:/root/eli.gift.conf.bak-cpa2-split-20261124`) which sent root
+`/v0/` and `/v8/` to whichever instance the Referer named.
+
 The same day amph got tcp 8317 to chat (`from_amph` and `106.fw`): abulxt's AI provider uses
 cli-proxy-api at `172.16.5.64:8317` over vmbr1, which the guest firewall had dropped since 22:10
 UTC on 2026-11-17.
