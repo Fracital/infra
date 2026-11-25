@@ -447,6 +447,7 @@ blockshooter's `inet bsfilter`, eagler's original ufw. amph's `abulxt-firewall.s
 | kn (203)      | tcp and udp 21015-21017, 21115                                                                                                    |
 | holy (205)    | tcp 8080 from the edge and amph                                                                                                   |
 | fg (206)      | tcp 8787 from the edge                                                                                                            |
+| devbox (218)  | tcp 3389, 47984, 47989, 47990, 48010 and udp 47998-48000 from 172.16.5.0/24 (XRDP; Sunshine for Moonlight over wg, 2026-11-25)    |
 
 A port with no source listed admits anyone: the port forwards keep the internet source, and the
 hairpin arrives from 172.16.5.1. mull and wg have `ipfilter: 0` because they forward traffic that
