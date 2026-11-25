@@ -88,7 +88,6 @@ The software a guest runs is its name and the table above, not a tag.
 | chat (106)             | `app` `estro` `in-edge` `out-mullvad`     |
 | guca (117)             | `app` `eli-gift` `in-edge`                |
 | kru (120)              | `origin` `krunk` `in-edge` `in-dnat`      |
-| wispdev (122)          | `dev` `wisp-baby`                         |
 | mac (126)              | `ci`                                      |
 | wg (200)               | `vpn` `in-dnat`                           |
 | edge (201)             | `edge` `in-dnat` `in-tunnel` `out-warp`   |
@@ -133,6 +132,16 @@ name 172.16.5.208. CT 204 was then destroyed after verification; its firewall fi
 set entries, `/var/lib/lxc/204` directory and migration backups were removed too. See
 `docs/divide-ci-runner.md`.
 
+On 2026-11-25 wispdev (CT 122, the holyWisp benchmark box: 8 cores pinned to threads 12-15 and
+28-31, 16 GiB, 32 GB rootfs on `local`) was merged into devbox and destroyed. Its `/root`, minus
+`.rustup`, `.cargo` and `go` (341,073 files, 7.7G; pruned to 2.6G the same day, keeping the results and the rival server sources), and its `/etc` are on devbox under
+`/home/dev/archive/wispdev-2026-11-25/`. devbox took its 16 GiB (`memory` 73728 to 90112), so
+total allocated memory did not change. `pct destroy 122 --purge 1` removed its config, disk and
+`122.fw`. `veth122i0` left the `bridge divide_guests` `ports` and `ipfilter` sets, both live
+(`nft delete element`) and in `/etc/nftables.conf`. Backups of the three files are in
+`divide:/root/{nftables.conf,122.conf,122.fw}.bak-20261125-030755`. holyWisp benchmarks now run
+on devbox, which is not isolated: keep paired, rotated rounds and record the load.
+
 A guest that gains or loses a port forward, a tunnel or an edge route gets its `in-` tags changed
 in the same change (`pct set <id> --tags "a;b"`, `qm set` for VMs).
 
@@ -157,7 +166,7 @@ rebalancing them), VMs with `qm set --affinity`.
 | 8-9, 24-25   | mac (VM 126)                                                      |
 | 11           | kru (120), guca (117)                                             |
 | 27           | terp (CT 216), holy (205), blockshooter (CT 202)                  |
-| 12-15, 28-31 | wispdev (122), exclusive                                          |
+| 12-15, 28-31 | free since wispdev (CT 122) was destroyed on 2026-11-25           |
 | (none)       | ci (CT 208), unpinned; pin prepared in `docs/divide-ci-runner.md` |
 
 Re-pinned 2026-11-18 (about 23:23 UTC) after guests were resized: a raw
@@ -437,25 +446,24 @@ blockshooter's `inet bsfilter`, eagler's original ufw. amph's `abulxt-firewall.s
   (drops go to `/var/log/pve-firewall.log`), `ipfilter: 1` (the NIC may only send from its
   configured address; a VM lists it in an `ipfilter-net<n>` ipset), `GROUP base`, and then:
 
-| Guest         | Also accepts                                                                                                                      |
-| ------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| vault (100)   | tcp 80 from the edge (cloudflared)                                                                                                |
-| mull (101)    | anything from 172.16.5.0/24 (the gateway: guest rules also see what it forwards); udp 51820                                       |
-| eagler (104)  | tcp 443, 8080, 25565 from amph; tcp 2022, 25565, 25566 and udp 25565, 25566                                                       |
-| chat (106)    | tcp 80 from amph and the edge; 8317 from amph and devbox; 8317, 8318 from wg; 5900, 8088 from `mgmt`; 22 from ci (208); udp 33190 |
-| amph (213)    | tcp 80, 443, 1082, 8822, 9080 from the edge                                                                                       |
-| terp (216)    | tcp 443, 8443 from the edge; tcp 8443 (the DNAT); tcp 22 from ci (208)                                                            |
-| guca (117)    | tcp 80 from the edge (cloudflared)                                                                                                |
-| kru (120)     | tcp 80, 443 from the edge; udp 21100                                                                                              |
-| wispdev (122) | nothing                                                                                                                           |
-| mac (126)     | tcp 5900 from `mgmt`                                                                                                              |
-| wg (200)      | udp 51820                                                                                                                         |
-| edge (201)    | tcp 53, 80, 443, 8080 and udp 53, 443                                                                                             |
-| bs (202)      | tcp 80, 8080 from the edge; udp 4433, 8443; tcp 7778 from `bs_game`                                                               |
-| kn (203)      | tcp and udp 21015-21017, 21115                                                                                                    |
-| holy (205)    | tcp 8080 from the edge and amph                                                                                                   |
-| fg (206)      | tcp 8787 from the edge                                                                                                            |
-| devbox (218)  | tcp 3389, 47984, 47989, 47990, 48010 and udp 47998-48000 from 172.16.5.0/24 (XRDP; Sunshine for Moonlight over wg, 2026-11-25)    |
+| Guest        | Also accepts                                                                                                                      |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| vault (100)  | tcp 80 from the edge (cloudflared)                                                                                                |
+| mull (101)   | anything from 172.16.5.0/24 (the gateway: guest rules also see what it forwards); udp 51820                                       |
+| eagler (104) | tcp 443, 8080, 25565 from amph; tcp 2022, 25565, 25566 and udp 25565, 25566                                                       |
+| chat (106)   | tcp 80 from amph and the edge; 8317 from amph and devbox; 8317, 8318 from wg; 5900, 8088 from `mgmt`; 22 from ci (208); udp 33190 |
+| amph (213)   | tcp 80, 443, 1082, 8822, 9080 from the edge                                                                                       |
+| terp (216)   | tcp 443, 8443 from the edge; tcp 8443 (the DNAT); tcp 22 from ci (208)                                                            |
+| guca (117)   | tcp 80 from the edge (cloudflared)                                                                                                |
+| kru (120)    | tcp 80, 443 from the edge; udp 21100                                                                                              |
+| mac (126)    | tcp 5900 from `mgmt`                                                                                                              |
+| wg (200)     | udp 51820                                                                                                                         |
+| edge (201)   | tcp 53, 80, 443, 8080 and udp 53, 443                                                                                             |
+| bs (202)     | tcp 80, 8080 from the edge; udp 4433, 8443; tcp 7778 from `bs_game`                                                               |
+| kn (203)     | tcp and udp 21015-21017, 21115                                                                                                    |
+| holy (205)   | tcp 8080 from the edge and amph                                                                                                   |
+| fg (206)     | tcp 8787 from the edge                                                                                                            |
+| devbox (218) | tcp 3389, 47984, 47989, 47990, 48010 and udp 47998-48000 from 172.16.5.0/24 (XRDP; Sunshine for Moonlight over wg, 2026-11-25)    |
 
 A port with no source listed admits anyone: the port forwards keep the internet source, and the
 hairpin arrives from 172.16.5.1. mull and wg have `ipfilter: 0` because they forward traffic that
@@ -1031,7 +1039,7 @@ with the data in place as the rollback:
 | holy (205) | `postgresql@17-main` (`holy`)                     | website2 (`pm2-holy`)                                  |
 
 guca and kru got `/etc/ssl/terp-db/ca.crt` and `80.93.219.21 terp.db` in `/etc/hosts` (outside the
-PVE block). Both leave through divide's NAT without a host route. The other guests (vault, wispdev,
+PVE block). Both leave through divide's NAT without a host route. The other guests (vault,
 wg, edge, bs, kn, runner, fg, mull, mac) run no database server.
 
 eagler (VM 104): the Pterodactyl panel's MariaDB database `panel` moved on 2026-11-18 (00:43 UTC,
