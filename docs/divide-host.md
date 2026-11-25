@@ -354,18 +354,26 @@ has none since 2026-11-18).
 divide's `/root/.ssh/authorized_keys` carries the CI keys that only jump through it, each as
 `restrict,port-forwarding,command="/bin/false",permitopen="<guest>:22"`. `restrict` alone still lets
 a key run commands; the forced `/bin/false` is what blocks them. Back the file up before editing it.
-On divide it is a regular file, not the usual Proxmox symlink to `/etc/pve/priv/authorized_keys`;
-sshd reads only `/root/.ssh/authorized_keys`, so a key added to the pve copy alone is refused.
+Since the 2026-11-22 20:18 reboot it is the usual Proxmox symlink to `/etc/pve/priv/authorized_keys`
+(it was a regular file before), so edit the pve copy. Proxmox merged the old file into it then and
+left the November 17 key block ahead of the current one. sshd uses the first line that matches a
+key, so `infra-ci@Fracital/infra` kept its old line without `172.16.5.62:22` until 2026-11-25, when
+that line and the exact duplicates were removed (backup:
+`/root/.ssh/authorized_keys.bak-dedupe-20261125T173907Z`). After any `pvecm updatecerts` or reboot,
+check that each key appears once: a stale earlier line silently wins.
 
-| Key                                   | May forward to                     | Logs in on the guest as                                                   |
-| ------------------------------------- | ---------------------------------- | ------------------------------------------------------------------------- |
-| `infra-ci@Fracital/infra`             | `172.16.5.3:22`, `172.16.5.10:22`  | root (Ansible)                                                            |
-| `abulxt-ci-vps@y9x/abulxt`            | `172.16.5.3:22`                    | `deploy` on amph, `abulxt-deploy-gate`                                    |
-| `abulxt-ci-singlefile@y9x/abulxt`     | `172.16.5.3:22`                    | `deploy` on amph, `abulxt-deploy-gate`                                    |
-| `abulxt-cloaks-ci@y9x/cloaks`         | `172.16.5.3:22`                    | `deploy` on amph, `abulxt-deploy-gate`                                    |
-| `holt-ci@y9x/holt`                    | `172.16.5.3:22`                    | `deploy` on amph, `holt-deploy-gate`                                      |
-| `krunknative-ci@rebel10n/KrunkNative` | `172.16.5.47:22`, `172.16.5.94:22` | root on kru and kn (KrunkNative deploys)                                  |
-| `systemya-ci@edge`                    | `172.16.5.10:22`                   | `systemya` on the edge, rrsync of `/var/www/systemya` (roles/edge_static) |
+| Key                                   | May forward to                                      | Logs in on the guest as                                                   |
+| ------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------- |
+| `infra-ci@Fracital/infra`             | `172.16.5.3:22`, `172.16.5.10:22`, `172.16.5.62:22` | root (Ansible)                                                            |
+| `abulxt-ci-vps@y9x/abulxt`            | `172.16.5.3:22`                                     | `deploy` on amph, `abulxt-deploy-gate`                                    |
+| `abulxt-ci-singlefile@y9x/abulxt`     | `172.16.5.3:22`                                     | `deploy` on amph, `abulxt-deploy-gate`                                    |
+| `abulxt-cloaks-ci@y9x/cloaks`         | `172.16.5.3:22`                                     | `deploy` on amph, `abulxt-deploy-gate`                                    |
+| `holt-ci@y9x/holt`                    | `172.16.5.3:22`                                     | `deploy` on amph, `holt-deploy-gate`                                      |
+| `krunknative-ci@rebel10n/KrunkNative` | `172.16.5.47:22`, `172.16.5.94:22`                  | root on kru and kn (KrunkNative deploys)                                  |
+| `systemya-ci@edge`                    | `172.16.5.10:22`                                    | `systemya` on the edge, rrsync of `/var/www/systemya` (roles/edge_static) |
+| `terp-fracital-ci@github-actions`     | `172.16.5.62:22`                                    | `deploy` on terp, `fracital-deploy-gate`                                  |
+| `terp-cloaks-ci@github-actions`       | `172.16.5.62:22`                                    | `deploy` on terp (cloaks deploy)                                          |
+| `holy-website2-ci@github-actions`     | `172.16.5.79:22`                                    | root on holy, forced `website2-deploy-gate` (website2 deploys)            |
 
 ## fail2ban
 
