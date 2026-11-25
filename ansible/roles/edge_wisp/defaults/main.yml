@@ -163,7 +163,11 @@ holywisp_repo: https://github.com/Fracital/holyWisp.git
 # kernel, not /proc/sys), tier rises are logged.
 # 5ca1aa4: keepalive armed by the worker sweep instead of at open (churn +6% streams/s),
 # a refill CONTINUE waits behind its own stream's queued data (echo +5%), Windows poll fix.
-holywisp_ref: 5ca1aa411b15d4a821ab03802facecf402f075eb
+# 2026-11-25 bumped to 4e7c1d4: per-worker liveness, crash reports and a drain on SIGTERM
+# (drain-timeout-s, 0 here: stops at once as before), VAES AES-128-GCM for WebTransport, UDP
+# connections packed two to a worker, a relay pipe refilled while its frames are queued, uploads
+# batched per stream across streams (10 streams +9% on the bench hosts), and the Windows timer fix.
+holywisp_ref: 4e7c1d4ff2e7b6a58489c0f4b9118b6cbc190e16
 # Controller cache for both sources: built binaries, npm downloads, and the
 # per-host configs tasks/verify.yml checks.
 holywisp_build_dir: "{{ lookup('env', 'HOME') }}/.cache/abulxt/holywisp"
