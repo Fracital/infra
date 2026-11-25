@@ -106,9 +106,14 @@ edge_worker_rlimit_nofile: 65535
 #   and edge_flood_guard_post_rate for POSTs. One address is often a whole school NAT, so these
 #   stay generous; the flood sent 130 to 580 req/s per address.
 # Blocked and rate-limited (429) requests are kept out of access.log (the flood wrote 3 MB/s).
+# fracit.al since the 2026-11-25 flood (19:37 to 19:44Z, 448,345 requests from 1,713 addresses):
+# 152,525 were POST / with neither Referer nor Origin, and 28 addresses above 5 req/s sent 178,958;
+# the busiest sent 21,313 in one minute. Its real traffic peaked at 79 requests per address per
+# minute that evening, far under the 30r/s limit.
 edge_flood_guard_hosts:
   - abstracteducation.loan
   - beta.abstracteducation.loan
+  - fracit.al
 edge_flood_guard_block_bare_post: true
 # POSTs to these paths on a guarded host get 403: the sites only GET them (abstracteducation.loan's
 # bundle fetches /api/updates once per page load; the 2026-11-18 flood POSTed it with an Origin).

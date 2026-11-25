@@ -49,6 +49,8 @@ fracital_origin_apps:
 # through divide (hosts.ini [divide_guests]).
 fracital_origin_ip: 172.16.5.62
 fracital_origin_port: 443
+# Idle keepalive connections to terp per edge OpenResty worker (fracital-routes.conf.j2 says why).
+fracital_origin_keepalive: 512
 # SAN of the pinned self-signed cert (roles/edge_relay/files/fracital-origin.crt).
 fracital_origin_sni: fracital-origin
 # Sources terp's ufw admits on fracital_edge_ports: each edge's edge_origin_source when it reaches

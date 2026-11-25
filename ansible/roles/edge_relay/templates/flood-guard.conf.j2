@@ -41,7 +41,9 @@ map "$host|$request_method" $edge_guard_post_key {
 limit_req_zone $edge_guard_key      zone=edge_guard_ip:20m   rate={{ edge_flood_guard_rate }};
 limit_req_zone $edge_guard_post_key zone=edge_guard_post:20m rate={{ edge_flood_guard_post_rate }};
 limit_req_status 429;
-limit_req_log_level info;
+# warn: error_log is at warn, so at info a rejection never reached error.log and a flood was
+# visible only as missing access.log lines.
+limit_req_log_level warn;
 
 # Blocked and rate-limited requests stay out of access.log.
 map "$edge_guard_block:$status" $edge_loggable {

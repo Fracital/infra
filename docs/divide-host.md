@@ -512,6 +512,19 @@ divide carries the rest:
   ```
 - `/etc/modules-load.d/bbr.conf`: `tcp_bbr`. Without it, the edge's `tcp_congestion_control = bbr`
   fails.
+- `/etc/sysctl.d/90-divide-conntrack.conf` (2026-11-25):
+  ```
+  net.netfilter.nf_conntrack_max = 1048576
+  net.netfilter.nf_conntrack_tcp_timeout_established = 86400
+  ```
+  The table is global: every guest's flows share it, the edge's included. The fracit.al flood of
+  2026-11-25 filled the old 262144 entries from 19:37 to 19:39Z, and new flows to every guest were
+  dropped. An entry is about 300 bytes, so the full table is about 320 MB. The established timeout
+  is 1 day instead of the kernel's 5. `nf_conntrack_buckets` stays 262144 (4 entries per bucket at
+  the maximum). `/etc/modules-load.d/nf_conntrack.conf` loads `nf_conntrack` before
+  systemd-sysctl; without it these keys do not exist yet at boot and the file is skipped. The
+  edge's own half of that fix (keepalive to terp, local port range, fracit.al in the flood guard)
+  is in `roles/edge_relay` and `host_vars/edge.yml`.
 - The `wireguard` module must be loaded on divide for the edge's WARP tunnels (`roles/edge_warp`).
 
 ## Guests that hold the public address themselves

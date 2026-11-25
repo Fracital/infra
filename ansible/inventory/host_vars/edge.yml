@@ -57,6 +57,15 @@ edge_tcp_sysctl:
   # request on another stream of that connection waited 230 to 416 ms behind it, at 14 to 28 ms
   # ping. Paired with holywisp_ws_write_high_water below, or the queue only moves into holyWisp.
   net.ipv4.tcp_notsent_lowat: 131072
+  # Local ports for the edge's own connections to its origins: 10240-65535 (55,296), not the
+  # default 32768-60999 (28,232), which ran out to terp:443 in the 2026-11-25 fracit.al flood
+  # ("Cannot assign requested address", 155,469 times). The edge's listeners above 10240
+  # (20241) are reserved so an outgoing connection never holds one across a restart.
+  net.ipv4.ip_local_port_range: "10240 65535"
+  net.ipv4.ip_local_reserved_ports: "20241"
+  # 1: outgoing connections may reuse a TIME_WAIT port (TCP timestamps keep it safe); the
+  # default 2 allows that only on loopback.
+  net.ipv4.tcp_tw_reuse: 1
 edge_network_load_bbr: false
 # Bytes queued toward one client before holyWisp pauses that client's remotes: 2 MiB, not the
 # 8 MiB default, so what tcp_notsent_lowat keeps out of the kernel does not queue here instead.

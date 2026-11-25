@@ -24,9 +24,16 @@
 #   that address, so every Fracital server here lists those addresses too; the abulxt catch-all
 #   (00-edge-relay.conf, wildcard default_server) stays the default on the abstract addresses.
 
+# keepalive 512 per worker: with 32, the 2026-11-25 flood on fracit.al (163,843 requests in its peak
+# minute) opened a new TLS connection to terp for almost every request and ran out of local ports
+# ("Cannot assign requested address", 155,469 times in 19:37 to 19:44Z). The timeout and request
+# count stay at or under terp's own (keepalive_timeout 65, keepalive_requests 10000), so terp never
+# closes an idle connection the edge is about to reuse (proxy_next_upstream is off: that race is a 502).
 upstream fracital_origin {
     server {{ fracital_origin_ip }}:{{ fracital_origin_port }};
-    keepalive 32;
+    keepalive {{ fracital_origin_keepalive }};
+    keepalive_timeout 60s;
+    keepalive_requests 10000;
 }
 
 # Keepalive to terp needs an empty Connection header except for a WebSocket upgrade.
